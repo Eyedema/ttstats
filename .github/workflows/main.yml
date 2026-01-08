@@ -1,0 +1,23 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches: [ "master" ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            set -e
+            cd ${{ secrets.WORK_DIR }}
+            git pull
+            docker compose -f compose.prod.yml up -d --build
+            docker compose -f compose.prod.yml exec -T web python manage.py migrate
+            docker compose -f compose.prod.yml exec -T web python manage.py collectstatic --noinput
