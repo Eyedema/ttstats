@@ -1,0 +1,1 @@
+[![Deploy to VPS](https://github.com/Eyedema/ttstats/actions/workflows/main.yml/badge.svg)](https://github.com/Eyedema/ttstats/actions/workflows/main.yml)
