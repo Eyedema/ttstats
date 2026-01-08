@@ -92,8 +92,7 @@
 <body class="bg-background text-foreground">
     <div class="flex min-h-screen">
         <!-- Sidebar -->
-        <aside class="hidden lg:flex lg:flex-col lg:w-64 border-r bg-white">
-            <!-- Logo/Title -->
+        <aside class="hidden lg:flex lg:flex-col lg:w-64 lg:fixed lg:inset-y-0 lg:left-0 border-r bg-white lg:overflow-y-auto">            <!-- Logo/Title -->
             <div class="p-6 border-b">
                 <h1 class="text-2xl font-bold flex items-center gap-2">
                     <span class="text-3xl">🏓</span>
@@ -283,7 +282,7 @@
         </div>
 
         <!-- Main content -->
-        <main class="flex-1 lg:ml-0 bg-muted/30 mt-16 lg:mt-0">
+        <main class="flex-1 lg:ml-64 bg-muted/30 mt-16 lg:mt-0">
             <div class="p-6">
                 <!-- Messages -->
                 {% if messages %}
