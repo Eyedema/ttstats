@@ -7,7 +7,7 @@
 <div class="max-w-7xl mx-auto space-y-6">
     <!-- Back button -->
     <div>
-        <a href="{% url 'pingpong:match_list' %}" class="inline-flex items-center gap-2 text-sm font-medium hover:underline">
+        <a href="{% url 'pingpong:match_list' %}" class="inline-flex items-center gap-2 text-sm font-medium hover:underline min-h-[44px]">
             <img src="{% static 'pingpong/icons/arrow-left.svg' %}" class="w-4 h-4" alt="">
             Back to Matches
         </a>
@@ -15,40 +15,40 @@
 
     <!-- Match Header -->
     <div class="rounded-lg border bg-gradient-to-r from-primary to-primary/90 text-primary-foreground overflow-hidden">
-        <div class="p-6">
-            <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+        <div class="p-4 md:p-6">
+            <div class="flex flex-col gap-4">
                 <div>
-                    <p class="text-sm opacity-80 mb-2">
+                    <p class="text-xs md:text-sm opacity-80 mb-2">
                         {{ match.date_played|date:"F d, Y" }} at {{ match.date_played|date:"H:i" }}
                         {% if match.location %} • {{ match.location }}{% endif %}
                     </p>
-                    <h1 class="text-3xl font-bold mb-2">
+                    <h1 class="text-xl md:text-3xl font-bold mb-2">
                         {{ match.player1 }} vs {{ match.player2 }}
                     </h1>
                     <div class="flex gap-2 flex-wrap">
                         {% if match.match_type == 'tournament' %}
-                        <span class="inline-flex items-center rounded-md bg-white/20 px-3 py-1 text-sm font-medium">Tournament</span>
+                        <span class="inline-flex items-center rounded-md bg-white/20 px-2 md:px-3 py-1 text-xs md:text-sm font-medium">Tournament</span>
                         {% elif match.match_type == 'practice' %}
-                        <span class="inline-flex items-center rounded-md bg-white/20 px-3 py-1 text-sm font-medium">Practice</span>
+                        <span class="inline-flex items-center rounded-md bg-white/20 px-2 md:px-3 py-1 text-xs md:text-sm font-medium">Practice</span>
                         {% else %}
-                        <span class="inline-flex items-center rounded-md bg-white/20 px-3 py-1 text-sm font-medium">Casual</span>
+                        <span class="inline-flex items-center rounded-md bg-white/20 px-2 md:px-3 py-1 text-xs md:text-sm font-medium">Casual</span>
                         {% endif %}
-                        <span class="inline-flex items-center rounded-md bg-white/20 px-3 py-1 text-sm font-medium">Best of {{ match.best_of }}</span>
+                        <span class="inline-flex items-center rounded-md bg-white/20 px-2 md:px-3 py-1 text-xs md:text-sm font-medium">Best of {{ match.best_of }}</span>
                     </div>
                 </div>
-                <div class="flex gap-3">
+                <div class="flex flex-col sm:flex-row gap-2">
                     {% if not match.winner %}
-                    <a href="{% url 'pingpong:game_add' match.pk %}" class="inline-flex items-center justify-center gap-2 rounded-md bg-white text-primary px-4 py-2 text-sm font-medium hover:bg-white/90 transition-colors">
+                    <a href="{% url 'pingpong:game_add' match.pk %}" class="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 rounded-md bg-white text-primary px-4 py-2.5 text-sm font-medium hover:bg-white/90 transition-colors min-h-[44px]">
                         <img src="{% static 'pingpong/icons/plus.svg' %}" class="w-4 h-4" alt="">
                         Add Game Score
                     </a>
                     {% else %}
-                    <span class="inline-flex items-center justify-center gap-2 rounded-md bg-white/50 text-primary/50 px-4 py-2 text-sm font-medium cursor-not-allowed">
+                    <span class="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 rounded-md bg-white/50 text-primary/50 px-4 py-2.5 text-sm font-medium cursor-not-allowed">
                         <img src="{% static 'pingpong/icons/award.svg' %}" class="w-4 h-4" alt="">
                         Match Complete
                     </span>
                     {% endif %}
-                    <a href="{% url 'pingpong:match_edit' match.pk %}" class="inline-flex items-center justify-center gap-2 rounded-md border-2 border-white/30 bg-white/10 px-4 py-2 text-sm font-medium hover:bg-white/20 transition-colors">
+                    <a href="{% url 'pingpong:match_edit' match.pk %}" class="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 rounded-md border-2 border-white/30 bg-white/10 px-4 py-2.5 text-sm font-medium hover:bg-white/20 transition-colors min-h-[44px]">
                         <img src="{% static 'pingpong/icons/pencil.svg' %}" class="w-4 h-4 invert" alt="">
                         Edit Match
                     </a>
@@ -58,79 +58,154 @@
     </div>
 
     <!-- Score Card -->
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <!-- Player 1 -->
-        <div class="rounded-lg border bg-white p-6">
-            <div class="flex items-center gap-3 mb-4">
-                <div class="w-12 h-12 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-semibold">
-                    {{ match.player1.name|slice:":1"|upper }}
+    <div class="grid grid-cols-1 gap-4">
+        <!-- Desktop Layout (3 columns) -->
+        <div class="hidden md:grid md:grid-cols-3 gap-6">
+            <!-- Player 1 -->
+            <div class="rounded-lg border bg-white p-6">
+                <div class="flex items-center gap-3 mb-4">
+                    <div class="w-12 h-12 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-semibold">
+                        {{ match.player1.name|slice:":1"|upper }}
+                    </div>
+                    <div>
+                        <a href="{% url 'pingpong:player_detail' match.player1.pk %}" class="font-semibold hover:underline">
+                            {{ match.player1 }}
+                        </a>
+                        {% if match.winner == match.player1 %}
+                        <div class="flex items-center gap-1 text-xs text-success">
+                            <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-3 h-3" alt="">
+                            Winner
+                        </div>
+                        {% endif %}
+                    </div>
                 </div>
-                <div>
-                    <a href="{% url 'pingpong:player_detail' match.player1.pk %}" class="font-semibold hover:underline">
-                        {{ match.player1 }}
-                    </a>
-                    {% if match.winner == match.player1 %}
-                    <div class="flex items-center gap-1 text-xs text-success">
-                        <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-3 h-3" alt="">
-                        Winner
+                <div class="text-5xl font-bold">{{ match.player1_score }}</div>
+                <p class="text-sm text-muted-foreground mt-1">Games won</p>
+            </div>
+
+            <!-- VS -->
+            <div class="rounded-lg border bg-muted/30 flex items-center justify-center p-6">
+                <div class="text-center">
+                    <div class="text-6xl font-bold text-muted-foreground opacity-30">VS</div>
+                    {% if match.winner %}
+                    <div class="mt-4">
+                        <span class="inline-flex items-center rounded-md bg-success/10 px-3 py-1 text-sm font-medium text-success">Match Complete</span>
+                    </div>
+                    {% else %}
+                    <div class="mt-4">
+                        <span class="inline-flex items-center rounded-md bg-warning/10 px-3 py-1 text-sm font-medium text-warning">In Progress</span>
                     </div>
                     {% endif %}
                 </div>
             </div>
-            <div class="text-5xl font-bold">{{ match.player1_score }}</div>
-            <p class="text-sm text-muted-foreground mt-1">Games won</p>
+
+            <!-- Player 2 -->
+            <div class="rounded-lg border bg-white p-6">
+                <div class="flex items-center gap-3 mb-4">
+                    <div class="w-12 h-12 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-semibold">
+                        {{ match.player2.name|slice:":1"|upper }}
+                    </div>
+                    <div>
+                        <a href="{% url 'pingpong:player_detail' match.player2.pk %}" class="font-semibold hover:underline">
+                            {{ match.player2 }}
+                        </a>
+                        {% if match.winner == match.player2 %}
+                        <div class="flex items-center gap-1 text-xs text-success">
+                            <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-3 h-3" alt="">
+                            Winner
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+                <div class="text-5xl font-bold">{{ match.player2_score }}</div>
+                <p class="text-sm text-muted-foreground mt-1">Games won</p>
+            </div>
         </div>
 
-        <!-- VS -->
-        <div class="rounded-lg border bg-muted/30 flex items-center justify-center p-6">
-            <div class="text-center">
-                <div class="text-6xl font-bold text-muted-foreground opacity-30">VS</div>
+        <!-- Mobile Layout (Stacked) -->
+        <div class="md:hidden space-y-4">
+            <!-- Player 1 Card -->
+            <div class="rounded-lg border bg-white p-4 {% if match.winner == match.player1 %}ring-2 ring-success{% endif %}">
+                <div class="flex items-center justify-between mb-2">
+                    <div class="flex items-center gap-3">
+                        <div class="w-10 h-10 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-semibold">
+                            {{ match.player1.name|slice:":1"|upper }}
+                        </div>
+                        <div>
+                            <a href="{% url 'pingpong:player_detail' match.player1.pk %}" class="font-semibold hover:underline">
+                                {{ match.player1 }}
+                            </a>
+                            {% if match.winner == match.player1 %}
+                            <div class="flex items-center gap-1 text-xs text-success font-bold">
+                                <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-3 h-3" alt="">
+                                WINNER
+                            </div>
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="text-4xl font-bold {% if match.winner == match.player1 %}text-success{% endif %}">
+                        {{ match.player1_score }}
+                    </div>
+                </div>
+            </div>
+
+            <!-- VS Divider -->
+            <div class="text-center py-2">
+                <div class="inline-flex items-center gap-2">
+                    <div class="h-px w-12 bg-border"></div>
+                    <span class="text-2xl font-bold text-muted-foreground opacity-30">VS</span>
+                    <div class="h-px w-12 bg-border"></div>
+                </div>
                 {% if match.winner %}
-                <div class="mt-4">
-                    <span class="inline-flex items-center rounded-md bg-success/10 px-3 py-1 text-sm font-medium text-success">Match Complete</span>
+                <div class="mt-2">
+                    <span class="inline-flex items-center rounded-md bg-success/10 px-3 py-1 text-xs font-medium text-success">Match Complete</span>
                 </div>
                 {% else %}
-                <div class="mt-4">
-                    <span class="inline-flex items-center rounded-md bg-warning/10 px-3 py-1 text-sm font-medium text-warning">In Progress</span>
+                <div class="mt-2">
+                    <span class="inline-flex items-center rounded-md bg-warning/10 px-3 py-1 text-xs font-medium text-warning">In Progress</span>
                 </div>
                 {% endif %}
             </div>
-        </div>
 
-        <!-- Player 2 -->
-        <div class="rounded-lg border bg-white p-6">
-            <div class="flex items-center gap-3 mb-4">
-                <div class="w-12 h-12 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-semibold">
-                    {{ match.player2.name|slice:":1"|upper }}
-                </div>
-                <div>
-                    <a href="{% url 'pingpong:player_detail' match.player2.pk %}" class="font-semibold hover:underline">
-                        {{ match.player2 }}
-                    </a>
-                    {% if match.winner == match.player2 %}
-                    <div class="flex items-center gap-1 text-xs text-success">
-                        <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-3 h-3" alt="">
-                        Winner
+            <!-- Player 2 Card -->
+            <div class="rounded-lg border bg-white p-4 {% if match.winner == match.player2 %}ring-2 ring-success{% endif %}">
+                <div class="flex items-center justify-between mb-2">
+                    <div class="flex items-center gap-3">
+                        <div class="w-10 h-10 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-semibold">
+                            {{ match.player2.name|slice:":1"|upper }}
+                        </div>
+                        <div>
+                            <a href="{% url 'pingpong:player_detail' match.player2.pk %}" class="font-semibold hover:underline">
+                                {{ match.player2 }}
+                            </a>
+                            {% if match.winner == match.player2 %}
+                            <div class="flex items-center gap-1 text-xs text-success font-bold">
+                                <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-3 h-3" alt="">
+                                WINNER
+                            </div>
+                            {% endif %}
+                        </div>
                     </div>
-                    {% endif %}
+                    <div class="text-4xl font-bold {% if match.winner == match.player2 %}text-success{% endif %}">
+                        {{ match.player2_score }}
+                    </div>
                 </div>
             </div>
-            <div class="text-5xl font-bold">{{ match.player2_score }}</div>
-            <p class="text-sm text-muted-foreground mt-1">Games won</p>
         </div>
     </div>
 
     <!-- Game Scores -->
     <div class="rounded-lg border bg-white">
-        <div class="p-6 border-b">
-            <h3 class="text-xl font-semibold flex items-center gap-2">
+        <div class="p-4 md:p-6 border-b">
+            <h3 class="text-lg md:text-xl font-semibold flex items-center gap-2">
                 <img src="{% static 'pingpong/icons/list.svg' %}" class="w-5 h-5" alt="">
                 Game Scores
             </h3>
         </div>
 
         {% if match.games.all %}
-        <div class="overflow-x-auto">
+        <!-- Desktop Table -->
+        <div class="hidden md:block overflow-x-auto">
             <table class="w-full">
                 <thead class="border-b bg-muted/50">
                     <tr>
@@ -179,13 +254,52 @@
                 </tbody>
             </table>
         </div>
+
+        <!-- Mobile Game Cards -->
+        <div class="md:hidden divide-y">
+            {% for game in match.games.all %}
+            <div class="p-4">
+                <div class="flex items-center justify-between mb-3">
+                    <span class="font-semibold text-sm">Game {{ game.game_number }}</span>
+                    {% if game.duration_minutes %}
+                    <span class="text-xs text-muted-foreground">{{ game.duration_minutes }} min</span>
+                    {% endif %}
+                </div>
+                
+                <!-- Score Display -->
+                <div class="grid grid-cols-3 gap-2 items-center mb-2">
+                    <div class="text-center">
+                        <div class="text-xs text-muted-foreground mb-1 truncate">{{ match.player1.name|truncatechars:12 }}</div>
+                        <span class="inline-flex items-center justify-center rounded-md px-3 py-2 text-2xl font-bold w-full {% if game.winner == match.player1 %}bg-success/10 text-success{% else %}bg-muted{% endif %}">
+                            {{ game.player1_score }}
+                        </span>
+                    </div>
+                    <div class="text-center text-muted-foreground font-bold">-</div>
+                    <div class="text-center">
+                        <div class="text-xs text-muted-foreground mb-1 truncate">{{ match.player2.name|truncatechars:12 }}</div>
+                        <span class="inline-flex items-center justify-center rounded-md px-3 py-2 text-2xl font-bold w-full {% if game.winner == match.player2 %}bg-success/10 text-success{% else %}bg-muted{% endif %}">
+                            {{ game.player2_score }}
+                        </span>
+                    </div>
+                </div>
+
+                <!-- Winner Badge -->
+                {% if game.winner %}
+                <div class="flex items-center justify-center gap-1 text-xs">
+                    <img src="{% static 'pingpong/icons/award.svg' %}" class="w-3 h-3 text-success" alt="">
+                    <span class="font-medium text-success">{{ game.winner }} won</span>
+                </div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
         {% else %}
-        <div class="p-12 text-center">
+        <div class="p-8 md:p-12 text-center">
             <img src="{% static 'pingpong/icons/clipboard-list.svg' %}" class="w-16 h-16 mx-auto text-muted-foreground mb-4 opacity-30" alt="">
-            <h4 class="text-lg font-semibold mb-2">No Game Scores Yet</h4>
-            <p class="text-muted-foreground mb-6">Start recording individual game scores for this match</p>
+            <h4 class="text-base md:text-lg font-semibold mb-2">No Game Scores Yet</h4>
+            <p class="text-muted-foreground mb-6 text-sm md:text-base">Start recording individual game scores for this match</p>
             {% if not match.winner %}
-            <a href="{% url 'pingpong:game_add' match.pk %}" class="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors">
+            <a href="{% url 'pingpong:game_add' match.pk %}" class="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors min-h-[44px]">
                 <img src="{% static 'pingpong/icons/plus.svg' %}" class="w-4 h-4 invert" alt="">
                 Add First Game Score
             </a>
@@ -196,12 +310,12 @@
 
     <!-- Match Notes -->
     {% if match.notes %}
-    <div class="rounded-lg border bg-white p-6">
-        <h3 class="text-lg font-semibold mb-3 flex items-center gap-2">
+    <div class="rounded-lg border bg-white p-4 md:p-6">
+        <h3 class="text-base md:text-lg font-semibold mb-3 flex items-center gap-2">
             <img src="{% static 'pingpong/icons/file-text.svg' %}" class="w-5 h-5" alt="">
             Match Notes
         </h3>
-        <p class="text-muted-foreground">{{ match.notes }}</p>
+        <p class="text-muted-foreground text-sm md:text-base">{{ match.notes }}</p>
     </div>
     {% endif %}
 </div>
