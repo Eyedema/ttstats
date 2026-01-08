@@ -12,7 +12,7 @@ db.sqlite3
 
 # Environment
 .env
-.env.dev
+#.env.dev
 .env.prod
 
 # Docker
