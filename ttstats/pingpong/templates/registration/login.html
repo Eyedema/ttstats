@@ -1,0 +1,92 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - Table Tennis Tracker</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: { DEFAULT: '#2563eb', foreground: '#ffffff' },
+                        secondary: { DEFAULT: '#f3f4f6', foreground: '#111827' },
+                        muted: { DEFAULT: '#f3f4f6', foreground: '#6b7280' },
+                        destructive: { DEFAULT: '#ef4444', foreground: '#ffffff' },
+                        success: { DEFAULT: '#10b981', foreground: '#ffffff' },
+                        warning: { DEFAULT: '#f59e0b', foreground: '#ffffff' },
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-gray-50">
+    <div class="min-h-screen flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
+        <div class="max-w-md w-full space-y-8">
+            <div class="text-center">
+                <h2 class="text-3xl font-bold text-gray-900">Table Tennis Tracker 🏓</h2>
+                <p class="mt-2 text-sm text-gray-600">Sign in to your account</p>
+            </div>
+            
+            <div class="rounded-lg border bg-white p-8 shadow">
+                {% if form.errors %}
+                <div class="rounded-lg border border-destructive bg-destructive/10 p-4 mb-6">
+                    <div class="flex items-center gap-2 text-destructive">
+                        <span class="font-medium">Invalid username or password</span>
+                    </div>
+                </div>
+                {% endif %}
+
+                <form method="post" class="space-y-6">
+                    {% csrf_token %}
+                    
+                    <div>
+                        <label for="id_username" class="block text-sm font-medium text-gray-700">
+                            Username
+                        </label>
+                        <input 
+                            type="text" 
+                            name="username" 
+                            id="id_username"
+                            required
+                            autofocus
+                            class="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary"
+                        />
+                    </div>
+
+                    <div>
+                        <label for="id_password" class="block text-sm font-medium text-gray-700">
+                            Password
+                        </label>
+                        <input 
+                            type="password" 
+                            name="password" 
+                            id="id_password"
+                            required
+                            class="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary"
+                        />
+                    </div>
+
+                    <input type="hidden" name="next" value="{{ next }}">
+
+                    <button 
+                        type="submit"
+                        class="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary"
+                    >
+                        Sign in
+                    </button>
+                </form>
+
+                <div class="mt-6 text-center">
+                    <p class="text-sm text-gray-600">
+                        Demo: Run <code class="bg-gray-100 px-2 py-1 rounded">python manage.py createsuperuser</code> to create an account
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

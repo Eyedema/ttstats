@@ -1,0 +1,171 @@
+{% extends "pingpong/base.html" %}
+{% load static %}
+
+{% block title %}{% if object %}Edit {{ object }}{% else %}Add New Player{% endif %} - Table Tennis Tracker{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto space-y-6">
+    <!-- Back button -->
+    <div>
+        <a href="{% url 'pingpong:player_list' %}" class="inline-flex items-center gap-2 text-sm font-medium hover:underline">
+            <img src="{% static 'pingpong/icons/arrow-left.svg' %}" class="w-4 h-4" alt="">
+            Back to Players
+        </a>
+    </div>
+
+    <!-- Form Card -->
+    <div class="rounded-lg border bg-white">
+        <div class="p-6">
+            <!-- Header -->
+            <div class="flex items-center gap-4 mb-6 pb-6 border-b">
+                <div class="w-14 h-14 rounded-full bg-primary text-primary-foreground flex items-center justify-center">
+                    {% if object %}
+                    <img src="{% static 'pingpong/icons/pencil.svg' %}" class="w-6 h-6 invert" alt="">
+                    {% else %}
+                    <img src="{% static 'pingpong/icons/user-plus.svg' %}" class="w-6 h-6 invert" alt="">
+                    {% endif %}
+                </div>
+                <div>
+                    <h2 class="text-2xl font-bold">
+                        {% if object %}Edit Player{% else %}Add New Player{% endif %}
+                    </h2>
+                    <p class="text-sm text-muted-foreground">
+                        {% if object %}Update {{ object.name }}'s information{% else %}Register a new table tennis player{% endif %}
+                    </p>
+                </div>
+            </div>
+
+            <!-- Display form errors if any -->
+            {% if form.non_field_errors %}
+            <div class="rounded-lg border border-destructive bg-destructive/10 p-4 mb-6">
+                <div class="flex items-center gap-2 text-destructive">
+                    <img src="{% static 'pingpong/icons/alert-circle.svg' %}" class="w-5 h-5" alt="">
+                    <span class="font-medium">{{ form.non_field_errors }}</span>
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- Form -->
+            <form method="post" class="space-y-6">
+                {% csrf_token %}
+
+                <!-- Name Field -->
+                <div class="space-y-2">
+                    <label class="text-sm font-medium leading-none" for="id_name">
+                        Full Name <span class="text-destructive">*</span>
+                    </label>
+                    <input 
+                        type="text" 
+                        name="name" 
+                        id="id_name"
+                        value="{{ form.name.value|default:'' }}"
+                        placeholder="e.g., John Doe" 
+                        class="flex h-10 w-full rounded-md border border-input bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.name.errors %}border-destructive{% endif %}" 
+                        required
+                    />
+                    {% if form.name.errors %}
+                    <p class="text-sm text-destructive">{{ form.name.errors.0 }}</p>
+                    {% else %}
+                    <p class="text-sm text-muted-foreground">The player's full legal name</p>
+                    {% endif %}
+                </div>
+
+                <!-- Nickname Field -->
+                <div class="space-y-2">
+                    <div class="flex items-center justify-between">
+                        <label class="text-sm font-medium leading-none" for="id_nickname">Nickname</label>
+                        <span class="text-xs text-muted-foreground">Optional</span>
+                    </div>
+                    <input 
+                        type="text" 
+                        name="nickname" 
+                        id="id_nickname"
+                        value="{{ form.nickname.value|default:'' }}"
+                        placeholder="e.g., The Paddle Master" 
+                        class="flex h-10 w-full rounded-md border border-input bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.nickname.errors %}border-destructive{% endif %}" 
+                    />
+                    {% if form.nickname.errors %}
+                    <p class="text-sm text-destructive">{{ form.nickname.errors.0 }}</p>
+                    {% else %}
+                    <p class="text-sm text-muted-foreground">How they prefer to be called (used in displays)</p>
+                    {% endif %}
+                </div>
+
+                <!-- Playing Style Field -->
+                <div class="space-y-2">
+                    <label class="text-sm font-medium leading-none" for="id_playing_style">Playing Style</label>
+                    <select 
+                        name="playing_style" 
+                        id="id_playing_style"
+                        class="flex h-10 w-full rounded-md border border-input bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.playing_style.errors %}border-destructive{% endif %}"
+                    >
+                        <option value="normal" {% if form.playing_style.value == 'normal' or not form.playing_style.value %}selected{% endif %}>
+                            Normal
+                        </option>
+                        <option value="hard_rubber" {% if form.playing_style.value == 'hard_rubber' %}selected{% endif %}>
+                            Hard Rubber
+                        </option>
+                        <option value="unknown" {% if form.playing_style.value == 'unknown' %}selected{% endif %}>
+                            Unknown
+                        </option>
+                    </select>
+                    {% if form.playing_style.errors %}
+                    <p class="text-sm text-destructive">{{ form.playing_style.errors.0 }}</p>
+                    {% else %}
+                    <p class="text-sm text-muted-foreground">Select the player's primary playing style</p>
+                    {% endif %}
+                </div>
+
+                <!-- Notes Field -->
+                <div class="space-y-2">
+                    <div class="flex items-center justify-between">
+                        <label class="text-sm font-medium leading-none" for="id_notes">Notes</label>
+                        <span class="text-xs text-muted-foreground">Optional</span>
+                    </div>
+                    <textarea 
+                        name="notes" 
+                        id="id_notes"
+                        rows="5"
+                        class="flex w-full rounded-md border border-input bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.notes.errors %}border-destructive{% endif %}" 
+                        placeholder="Strengths: Strong forehand, quick reflexes&#10;Weaknesses: Struggles with backhand loops&#10;Strategy: Attack their backhand early"
+                    >{{ form.notes.value|default:'' }}</textarea>
+                    {% if form.notes.errors %}
+                    <p class="text-sm text-destructive">{{ form.notes.errors.0 }}</p>
+                    {% else %}
+                    <p class="text-sm text-muted-foreground">Add any observations about strengths, weaknesses, or strategies</p>
+                    {% endif %}
+                </div>
+
+                <div class="border-t pt-6"></div>
+
+                <!-- Form Actions -->
+                <div class="flex gap-3 justify-end">
+                    <a href="{% url 'pingpong:player_list' %}" class="inline-flex items-center justify-center gap-2 rounded-md border bg-white px-4 py-2 text-sm font-medium hover:bg-secondary transition-colors">
+                        <img src="{% static 'pingpong/icons/x.svg' %}" class="w-4 h-4" alt="">
+                        Cancel
+                    </a>
+                    <button type="submit" class="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors">
+                        <img src="{% static 'pingpong/icons/check.svg' %}" class="w-4 h-4 invert" alt="">
+                        {% if object %}Update Player{% else %}Create Player{% endif %}
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Help Card -->
+    <div class="rounded-lg border border-primary/20 bg-primary/5 p-4">
+        <div class="flex gap-3">
+            <img src="{% static 'pingpong/icons/info.svg' %}" class="w-5 h-5 text-primary flex-shrink-0" alt="">
+            <div>
+                <h3 class="font-semibold text-sm mb-1">Quick Tips</h3>
+                <ul class="text-sm text-muted-foreground space-y-1 list-disc list-inside">
+                    <li>The full name is required and will be used for official records</li>
+                    <li>Nickname is displayed in match listings for easier recognition</li>
+                    <li>Use the notes field to track playing patterns and strategies</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

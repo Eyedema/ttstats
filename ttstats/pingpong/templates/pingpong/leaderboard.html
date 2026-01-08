@@ -1,0 +1,110 @@
+{% extends "pingpong/base.html" %}
+{% load static %}
+
+{% block title %}Leaderboard - Table Tennis Tracker{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto space-y-6">
+    <!-- Header -->
+    <div>
+        <h2 class="text-3xl font-bold tracking-tight">Leaderboard</h2>
+        <p class="text-muted-foreground mt-1">Player rankings and statistics</p>
+    </div>
+
+    <!-- Leaderboard Table -->
+    {% if player_stats %}
+    <div class="rounded-lg border bg-white overflow-hidden">
+        <div class="overflow-x-auto">
+            <table class="w-full">
+                <thead class="border-b bg-muted/50">
+                    <tr>
+                        <th class="px-6 py-4 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Rank</th>
+                        <th class="px-6 py-4 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Player</th>
+                        <th class="px-6 py-4 text-center text-xs font-medium text-muted-foreground uppercase tracking-wider">Matches</th>
+                        <th class="px-6 py-4 text-center text-xs font-medium text-muted-foreground uppercase tracking-wider">Games</th>
+                        <th class="px-6 py-4 text-center text-xs font-medium text-muted-foreground uppercase tracking-wider">Wins</th>
+                        <th class="px-6 py-4 text-center text-xs font-medium text-muted-foreground uppercase tracking-wider">Losses</th>
+                        <th class="px-6 py-4 text-center text-xs font-medium text-muted-foreground uppercase tracking-wider">Win Rate</th>
+                        <th class="px-6 py-4 text-right text-xs font-medium text-muted-foreground uppercase tracking-wider">Actions</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y">
+                    {% for stat in player_stats %}
+                    <tr class="hover:bg-muted/50">
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <div class="flex items-center">
+                                {% if forloop.counter == 1 %}
+                                <span class="text-2xl font-bold text-warning">🥇</span>
+                                {% elif forloop.counter == 2 %}
+                                <span class="text-2xl font-bold" style="filter: grayscale(0.3);">🥈</span>
+                                {% elif forloop.counter == 3 %}
+                                <span class="text-2xl font-bold" style="filter: brightness(0.8);">🥉</span>
+                                {% else %}
+                                <span class="text-lg font-semibold text-muted-foreground ml-2">{{ forloop.counter }}</span>
+                                {% endif %}
+                            </div>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <div class="flex items-center gap-3">
+                                <div class="w-10 h-10 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-semibold">
+                                    {{ stat.player.name|slice:":1"|upper }}
+                                </div>
+                                <div>
+                                    <a href="{% url 'pingpong:player_detail' stat.player.pk %}" class="font-medium hover:underline">
+                                        {{ stat.player }}
+                                    </a>
+                                    {% if stat.player.playing_style != 'unknown' %}
+                                    <div class="text-xs text-muted-foreground">{{ stat.player.get_playing_style_display }}</div>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-center">
+                            <span class="font-semibold">{{ stat.total_matches }}</span>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-center">
+                            <span class="text-sm text-muted-foreground">{{ stat.total_games }}</span>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-center">
+                            <span class="inline-flex items-center rounded-md bg-success/10 px-2.5 py-1 text-sm font-semibold text-success">
+                                {{ stat.wins }}
+                            </span>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-center">
+                            <span class="inline-flex items-center rounded-md bg-destructive/10 px-2.5 py-1 text-sm font-semibold text-destructive">
+                                {{ stat.losses }}
+                            </span>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-center">
+                            <div class="flex flex-col items-center gap-1">
+                                <span class="text-lg font-bold">{{ stat.win_rate|floatformat:1 }}%</span>
+                                <div class="w-24 bg-secondary rounded-full h-2">
+                                    <div class="{% if stat.win_rate >= 70 %}bg-success{% elif stat.win_rate >= 50 %}bg-warning{% else %}bg-primary{% endif %} h-2 rounded-full transition-all" style="width: {{ stat.win_rate }}%"></div>
+                                </div>
+                            </div>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-right">
+                            <a href="{% url 'pingpong:player_detail' stat.player.pk %}" class="inline-flex items-center gap-1 text-sm font-medium hover:underline">
+                                View Profile
+                                <img src="{% static 'pingpong/icons/arrow-right.svg' %}" class="w-4 h-4" alt="">
+                            </a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% else %}
+    <div class="rounded-lg border bg-white p-12 text-center">
+        <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-16 h-16 mx-auto text-muted-foreground mb-4 opacity-30" alt="">
+        <h3 class="text-xl font-semibold mb-2">No Rankings Yet</h3>
+        <p class="text-muted-foreground mb-6">Start adding players and recording matches to see the leaderboard</p>
+        <a href="{% url 'pingpong:player_add' %}" class="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors">
+            <img src="{% static 'pingpong/icons/user-plus.svg' %}" class="w-4 h-4 invert" alt="">
+            Add First Player
+        </a>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

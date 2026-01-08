@@ -1,0 +1,403 @@
+{% extends "pingpong/base.html" %}
+{% load static %}
+
+{% block title %}Head to Head Statistics - Table Tennis Tracker{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto space-y-6">
+    <!-- Header -->
+    <div>
+        <h2 class="text-3xl font-bold tracking-tight">Head to Head Statistics</h2>
+        <p class="text-muted-foreground mt-1">Compare performance between two players</p>
+    </div>
+
+    <!-- Player Selection -->
+    <div class="rounded-lg border bg-white p-6">
+        <form method="get" class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div class="space-y-2">
+                <label class="text-sm font-medium" for="player1">Player 1</label>
+                <select name="player1" id="player1" class="flex h-10 w-full rounded-md border border-input bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring">
+                    <option value="">Select Player 1...</option>
+                    {% for player in all_players %}
+                    <option value="{{ player.pk }}" {% if request.GET.player1 == player.pk|stringformat:"s" %}selected{% endif %}>
+                        {{ player }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="space-y-2">
+                <label class="text-sm font-medium" for="player2">Player 2</label>
+                <select name="player2" id="player2" class="flex h-10 w-full rounded-md border border-input bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring">
+                    <option value="">Select Player 2...</option>
+                    {% for player in all_players %}
+                    <option value="{{ player.pk }}" {% if request.GET.player2 == player.pk|stringformat:"s" %}selected{% endif %}>
+                        {{ player }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="flex items-end">
+                <button type="submit" class="w-full inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors">
+                    <img src="{% static 'pingpong/icons/chart-spline.svg' %}" class="w-4 h-4 invert" alt="">
+                    Compare
+                </button>
+            </div>
+        </form>
+    </div>
+
+    {% if player1 and player2 %}
+        {% if has_data %}
+        <!-- Head to Head Header -->
+        <div class="rounded-lg border bg-gradient-to-r from-primary to-primary/90 text-primary-foreground p-6">
+            <div class="grid grid-cols-3 gap-4 items-center">
+                <div class="text-center">
+                    <div class="w-20 h-20 rounded-full bg-white/20 flex items-center justify-center mx-auto mb-2">
+                        <span class="text-3xl font-bold">{{ player1.name|slice:":1"|upper }}</span>
+                    </div>
+                    <h3 class="text-2xl font-bold">{{ player1 }}</h3>
+                </div>
+                <div class="text-center">
+                    <div class="text-5xl font-bold mb-2">VS</div>
+                    <div class="text-lg opacity-90">{{ total_matches }} Match{{ total_matches|pluralize:"es" }}</div>
+                </div>
+                <div class="text-center">
+                    <div class="w-20 h-20 rounded-full bg-white/20 flex items-center justify-center mx-auto mb-2">
+                        <span class="text-3xl font-bold">{{ player2.name|slice:":1"|upper }}</span>
+                    </div>
+                    <h3 class="text-2xl font-bold">{{ player2 }}</h3>
+                </div>
+            </div>
+        </div>
+
+        <!-- Match Record -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div class="rounded-lg border bg-white p-6">
+                <h3 class="text-lg font-semibold mb-4 flex items-center gap-2">
+                    <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-5 h-5" alt="">
+                    Match Record
+                </h3>
+                <div class="space-y-4">
+                    <div class="flex items-center justify-between">
+                        <span class="font-medium">{{ player1.name }}</span>
+                        <div class="flex items-center gap-3">
+                            <span class="text-3xl font-bold">{{ player1_match_wins }}</span>
+                            <div class="w-32 bg-secondary rounded-full h-3">
+                                <div class="bg-primary h-3 rounded-full" style="width: {{ player1_match_win_rate }}%"></div>
+                            </div>
+                            <span class="text-sm text-muted-foreground">{{ player1_match_win_rate|floatformat:1 }}%</span>
+                        </div>
+                    </div>
+                    <div class="flex items-center justify-between">
+                        <span class="font-medium">{{ player2.name }}</span>
+                        <div class="flex items-center gap-3">
+                            <span class="text-3xl font-bold">{{ player2_match_wins }}</span>
+                            <div class="w-32 bg-secondary rounded-full h-3">
+                                <div class="bg-primary h-3 rounded-full" style="width: {{ player2_match_win_rate }}%"></div>
+                            </div>
+                            <span class="text-sm text-muted-foreground">{{ player2_match_win_rate|floatformat:1 }}%</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="rounded-lg border bg-white p-6">
+                <h3 class="text-lg font-semibold mb-4 flex items-center gap-2">
+                    <img src="{% static 'pingpong/icons/hash.svg' %}" class="w-5 h-5" alt="">
+                    Game Record
+                </h3>
+                <div class="space-y-4">
+                    <div class="flex items-center justify-between">
+                        <span class="font-medium">{{ player1.name }}</span>
+                        <div class="flex items-center gap-3">
+                            <span class="text-3xl font-bold">{{ player1_game_wins }}</span>
+                            <div class="w-32 bg-secondary rounded-full h-3">
+                                <div class="bg-success h-3 rounded-full" style="width: {{ player1_game_win_rate }}%"></div>
+                            </div>
+                            <span class="text-sm text-muted-foreground">{{ player1_game_win_rate|floatformat:1 }}%</span>
+                        </div>
+                    </div>
+                    <div class="flex items-center justify-between">
+                        <span class="font-medium">{{ player2.name }}</span>
+                        <div class="flex items-center gap-3">
+                            <span class="text-3xl font-bold">{{ player2_game_wins }}</span>
+                            <div class="w-32 bg-secondary rounded-full h-3">
+                                <div class="bg-success h-3 rounded-full" style="width: {{ player2_game_win_rate }}%"></div>
+                            </div>
+                            <span class="text-sm text-muted-foreground">{{ player2_game_win_rate|floatformat:1 }}%</span>
+                        </div>
+                    </div>
+                </div>
+                <p class="text-xs text-muted-foreground mt-4">Total: {{ total_games }} game{{ total_games|pluralize }} played</p>
+            </div>
+        </div>
+
+        <!-- Stats Grid -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div class="rounded-lg border bg-white p-6">
+                <h4 class="text-sm font-medium text-muted-foreground mb-2">Close Games</h4>
+                <div class="text-3xl font-bold">{{ close_games }}</div>
+                <p class="text-xs text-muted-foreground mt-1">Won by ≤2 points</p>
+            </div>
+
+            <div class="rounded-lg border bg-white p-6">
+                <h4 class="text-sm font-medium text-muted-foreground mb-2">{{ player1.name }} Dominant</h4>
+                <div class="text-3xl font-bold text-success">{{ player1_dominant }}</div>
+                <p class="text-xs text-muted-foreground mt-1">Won by ≥5 points</p>
+            </div>
+
+            <div class="rounded-lg border bg-white p-6">
+                <h4 class="text-sm font-medium text-muted-foreground mb-2">{{ player2.name }} Dominant</h4>
+                <div class="text-3xl font-bold text-success">{{ player2_dominant }}</div>
+                <p class="text-xs text-muted-foreground mt-1">Won by ≥5 points</p>
+            </div>
+
+            <div class="rounded-lg border bg-white p-6">
+                <h4 class="text-sm font-medium text-muted-foreground mb-2">Avg Point Diff</h4>
+                <div class="text-3xl font-bold">{{ avg_point_diff|floatformat:1 }}</div>
+                <p class="text-xs text-muted-foreground mt-1">Points per game</p>
+            </div>
+        </div>
+
+        <!-- Recent Form -->
+        <div class="rounded-lg border bg-white p-6">
+            <h3 class="text-lg font-semibold mb-4 flex items-center gap-2">
+                <img src="{% static 'pingpong/icons/activity.svg' %}" class="w-5 h-5" alt="">
+                Recent Form (Last {{ recent_total }} Matches)
+            </h3>
+            <div class="grid grid-cols-2 gap-4">
+                <div class="text-center p-4 rounded-lg {% if player1_recent_wins > player2_recent_wins %}bg-success/10{% else %}bg-muted{% endif %}">
+                    <div class="text-4xl font-bold {% if player1_recent_wins > player2_recent_wins %}text-success{% endif %}">{{ player1_recent_wins }}</div>
+                    <div class="text-sm text-muted-foreground mt-1">{{ player1.name }}</div>
+                </div>
+                <div class="text-center p-4 rounded-lg {% if player2_recent_wins > player1_recent_wins %}bg-success/10{% else %}bg-muted{% endif %}">
+                    <div class="text-4xl font-bold {% if player2_recent_wins > player1_recent_wins %}text-success{% endif %}">{{ player2_recent_wins }}</div>
+                    <div class="text-sm text-muted-foreground mt-1">{{ player2.name }}</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Point Difference Chart -->
+        <div class="rounded-lg border bg-white p-6">
+            <h3 class="text-lg font-semibold mb-4 flex items-center gap-2">
+                <img src="{% static 'pingpong/icons/trending-up.svg' %}" class="w-5 h-5" alt="">
+                Point Differences Per Game
+            </h3>
+            <div class="w-full overflow-x-auto">
+                <canvas id="pointDiffChart" class="w-full" style="max-height: 400px;"></canvas>
+            </div>
+            <div class="mt-4 grid grid-cols-2 gap-4 text-sm">
+                <div>
+                    <span class="font-semibold">{{ player1.name }} Biggest Win:</span>
+                    <span class="ml-2 text-success font-bold">+{{ player1_max_margin }}</span>
+                </div>
+                <div>
+                    <span class="font-semibold">{{ player2.name }} Biggest Win:</span>
+                    <span class="ml-2 text-destructive font-bold">+{{ player2_max_margin }}</span>
+                </div>
+                <div>
+                    <span class="font-semibold">{{ player1.name }} Avg Score:</span>
+                    <span class="ml-2">{{ avg_p1_score|floatformat:1 }}</span>
+                </div>
+                <div>
+                    <span class="font-semibold">{{ player2.name }} Avg Score:</span>
+                    <span class="ml-2">{{ avg_p2_score|floatformat:1 }}</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Match History -->
+        <div class="rounded-lg border bg-white">
+            <div class="p-6 border-b">
+                <h3 class="text-lg font-semibold flex items-center gap-2">
+                    <img src="{% static 'pingpong/icons/history.svg' %}" class="w-5 h-5" alt="">
+                    Match History
+                </h3>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="w-full">
+                    <thead class="border-b bg-muted/50">
+                        <tr>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase">Date</th>
+                            <th class="px-6 py-3 text-center text-xs font-medium text-muted-foreground uppercase">Score</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase">Winner</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase">Type</th>
+                            <th class="px-6 py-3 text-right text-xs font-medium text-muted-foreground uppercase">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y">
+                        {% for match in matches %}
+                        <tr class="hover:bg-muted/50">
+                            <td class="px-6 py-4 whitespace-nowrap text-sm">
+                                {{ match.date_played|date:"M d, Y" }}
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap text-center">
+                                <span class="font-bold">
+                                    {% if match.player1 == player1 %}
+                                    {{ match.player1_score }} - {{ match.player2_score }}
+                                    {% else %}
+                                    {{ match.player2_score }} - {{ match.player1_score }}
+                                    {% endif %}
+                                </span>
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                {% if match.winner %}
+                                <span class="inline-flex items-center gap-1 text-sm font-medium {% if match.winner == player1 %}text-success{% else %}text-primary{% endif %}">
+                                    <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-4 h-4" alt="">
+                                    {{ match.winner }}
+                                </span>
+                                {% endif %}
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                <span class="inline-flex items-center rounded-md bg-muted px-2 py-1 text-xs font-medium">
+                                    {{ match.get_match_type_display }}
+                                </span>
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap text-right">
+                                <a href="{% url 'pingpong:match_detail' match.pk %}" class="text-sm font-medium hover:underline">
+                                    View Details
+                                </a>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        {% else %}
+        <!-- No Data -->
+        <div class="rounded-lg border bg-white p-12 text-center">
+            <img src="{% static 'pingpong/icons/bar-chart.svg' %}" class="w-16 h-16 mx-auto text-muted-foreground mb-4 opacity-30" alt="">
+            <h3 class="text-xl font-semibold mb-2">No Matches Found</h3>
+            <p class="text-muted-foreground mb-6">{{ player1 }} and {{ player2 }} haven't played each other yet.</p>
+            <a href="{% url 'pingpong:match_add' %}" class="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors">
+                <img src="{% static 'pingpong/icons/plus.svg' %}" class="w-4 h-4 invert" alt="">
+                Record First Match
+            </a>
+        </div>
+        {% endif %}
+    {% endif %}
+</div>
+
+<!-- Chart.js -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
+{% if has_data %}
+<script>
+    const ctx = document.getElementById('pointDiffChart');
+    
+    const pointDiffs = JSON.parse('{{ point_differences_json|escapejs }}');
+    const matchMargins = JSON.parse('{{ match_margins_json|escapejs }}');
+    const cumulativeAvg = JSON.parse('{{ cumulative_avg_json|escapejs }}');
+    
+    // Prepare data
+    const gameNumbers = pointDiffs.map((d, i) => i + 1);
+    const differences = pointDiffs.map(d => d.difference);
+    
+    // Calculate average
+    const avgDiff = differences.length > 0 ? differences.reduce((a, b) => a + b, 0) / differences.length : 0;
+    
+    // Find max margin for each player
+    const player1Diffs = differences.filter(d => d > 0);
+    const player2Diffs = differences.filter(d => d < 0);
+    const maxPlayer1 = Math.max(...player1Diffs, 0);
+    const maxPlayer2 = Math.min(...player2Diffs, 0);
+    
+    new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: gameNumbers,
+            datasets: [
+                {
+                    label: 'Point Difference ({{ player1.name }} perspective)',
+                    data: differences,
+                    borderColor: 'rgb(59, 130, 246)',
+                    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                    borderWidth: 2,
+                    pointRadius: 4,
+                    pointHoverRadius: 6,
+                    tension: 0,
+                    fill: true,
+                },
+                {
+                    label: 'Average Difference',
+                    data: Array(gameNumbers.length).fill(avgDiff),
+                    borderColor: 'rgb(156, 163, 175)',
+                    borderWidth: 2,
+                    borderDash: [5, 5],
+                    pointRadius: 0,
+                    fill: false,
+                },
+                {
+                    label: 'Zero Line',
+                    data: Array(gameNumbers.length).fill(0),
+                    borderColor: 'rgb(0, 0, 0)',
+                    borderWidth: 1,
+                    borderDash: [2, 2],
+                    pointRadius: 0,
+                    fill: false,
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: true,
+            plugins: {
+                legend: {
+                    display: true,
+                    position: 'top',
+                },
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            const diff = context.parsed.y;
+                            if (context.datasetIndex === 0) {
+                                const game = pointDiffs[context.dataIndex];
+                                const winner = diff > 0 ? '{{ player1.name }}' : '{{ player2.name }}';
+                                return `${winner} won by ${Math.abs(diff)} (${game.p1_score}-${game.p2_score})`;
+                            } else if (context.datasetIndex === 1) {
+                                return `Average: ${diff.toFixed(2)}`;
+                            }
+                            return '';
+                        }
+                    }
+                }
+            },
+            scales: {
+                y: {
+                    title: {
+                        display: true,
+                        text: 'Point Difference ({{ player1.name }} - {{ player2.name }})'
+                    },
+                    grid: {
+                        color: function(context) {
+                            if (context.tick.value === 0) {
+                                return 'rgba(0, 0, 0, 0.3)';
+                            }
+                            return 'rgba(0, 0, 0, 0.05)';
+                        },
+                    },
+                    ticks: {
+                        callback: function(value) {
+                            return value > 0 ? '+' + value : value;
+                        }
+                    }
+                },
+                x: {
+                    title: {
+                        display: true,
+                        text: 'Game Number'
+                    },
+                    grid: {
+                        color: 'rgba(0, 0, 0, 0.05)',
+                    }
+                }
+            }
+        }
+    });
+</script>
+
+{% endif %}
+{% endblock %}

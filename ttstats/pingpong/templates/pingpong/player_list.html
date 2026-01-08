@@ -1,0 +1,173 @@
+{% extends "pingpong/base.html" %}
+{% load static %}
+
+{% block title %}Players - Table Tennis Tracker{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto space-y-6">
+    <!-- Header -->
+    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <div>
+            <h2 class="text-3xl font-bold tracking-tight">Players</h2>
+            <p class="text-muted-foreground mt-1">Manage all registered players</p>
+        </div>
+        <a href="{% url 'pingpong:player_add' %}" class="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors">
+            <img src="{% static 'pingpong/icons/plus.svg' %}" class="w-4 h-4 invert" alt="">
+            Add Player
+        </a>
+    </div>
+
+    <!-- Stats Card -->
+    <div class="rounded-lg border bg-white p-6">
+        <div class="flex items-center justify-between">
+            <div>
+                <p class="text-sm font-medium text-muted-foreground">Total Players</p>
+                <p class="text-3xl font-bold mt-1">{{ players.count }}</p>
+                <p class="text-xs text-muted-foreground mt-1">Registered in the system</p>
+            </div>
+            <div class="w-12 h-12 bg-primary/10 rounded-full flex items-center justify-center">
+                <img src="{% static 'pingpong/icons/users.svg' %}" class="w-6 h-6" alt="">
+            </div>
+        </div>
+    </div>
+
+    <!-- Players Table -->
+    {% if players %}
+    <div class="rounded-lg border bg-white overflow-hidden">
+        <div class="overflow-x-auto">
+            <table class="w-full">
+                <thead class="border-b bg-muted/50">
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Player</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Name</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Playing Style</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Notes</th>
+                        <th class="px-6 py-3 text-right text-xs font-medium text-muted-foreground uppercase tracking-wider">Actions</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y">
+                    {% for player in players %}
+                    <tr class="hover:bg-muted/50">
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <div class="flex items-center gap-3">
+                                <div class="w-10 h-10 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-semibold">
+                                    {{ player.name|slice:":1"|upper }}
+                                </div>
+                                <div>
+                                    <div class="font-medium">{{ player }}</div>
+                                    {% if player.user %}
+                                    <div class="text-xs">
+                                        <span class="inline-flex items-center rounded-md bg-success/10 px-2 py-0.5 text-xs font-medium text-success">Linked Account</span>
+                                    </div>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </td>
+                        <td class="px-6 py-4">
+                            <div class="font-medium">{{ player.name }}</div>
+                            {% if player.nickname and player.nickname != player.name %}
+                            <div class="text-sm text-muted-foreground">aka {{ player.nickname }}</div>
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            {% if player.playing_style == 'normal' %}
+                            <span class="inline-flex items-center rounded-md bg-secondary px-2 py-1 text-xs font-medium">Normal</span>
+                            {% elif player.playing_style == 'hard_rubber' %}
+                            <span class="inline-flex items-center rounded-md bg-warning/10 px-2 py-1 text-xs font-medium text-warning">Hard Rubber</span>
+                            {% else %}
+                            <span class="inline-flex items-center rounded-md bg-muted px-2 py-1 text-xs font-medium text-muted-foreground">Unknown</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4">
+                            {% if player.notes %}
+                            <span class="text-sm text-muted-foreground line-clamp-2">{{ player.notes|truncatewords:8 }}</span>
+                            {% else %}
+                            <span class="text-sm text-muted-foreground">No notes</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-right">
+                            <div class="inline-flex gap-2">
+                                <a href="{% url 'pingpong:player_detail' player.pk %}" class="inline-flex items-center gap-1 px-3 py-1.5 text-sm font-medium hover:bg-secondary rounded-md transition-colors">
+                                    <img src="{% static 'pingpong/icons/eye.svg' %}" class="w-4 h-4" alt="">
+                                    View
+                                </a>
+                                <a href="{% url 'pingpong:player_edit' player.pk %}" class="inline-flex items-center gap-1 px-3 py-1.5 text-sm font-medium hover:bg-secondary rounded-md transition-colors">
+                                    <img src="{% static 'pingpong/icons/pencil.svg' %}" class="w-4 h-4" alt="">
+                                    Edit
+                                </a>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% else %}
+    <div class="rounded-lg border bg-white p-12 text-center">
+        <img src="{% static 'pingpong/icons/info.svg' %}" class="w-12 h-12 mx-auto text-muted-foreground mb-4 opacity-50" alt="">
+        <p class="text-muted-foreground">No players found. <a href="{% url 'pingpong:player_add' %}" class="font-medium hover:underline">Add your first player</a></p>
+    </div>
+    {% endif %}
+        <!-- Pagination -->
+    {% if is_paginated %}
+    <div class="flex items-center justify-between border-t bg-white px-4 py-3 rounded-b-lg">
+        <div class="flex flex-1 justify-between sm:hidden">
+            {% if page_obj.has_previous %}
+            <a href="?page={{ page_obj.previous_page_number }}" class="inline-flex items-center rounded-md border bg-white px-4 py-2 text-sm font-medium hover:bg-secondary">
+                Previous
+            </a>
+            {% else %}
+            <span class="inline-flex items-center rounded-md border bg-muted px-4 py-2 text-sm font-medium text-muted-foreground">
+                Previous
+            </span>
+            {% endif %}
+            {% if page_obj.has_next %}
+            <a href="?page={{ page_obj.next_page_number }}" class="ml-3 inline-flex items-center rounded-md border bg-white px-4 py-2 text-sm font-medium hover:bg-secondary">
+                Next
+            </a>
+            {% else %}
+            <span class="ml-3 inline-flex items-center rounded-md border bg-muted px-4 py-2 text-sm font-medium text-muted-foreground">
+                Next
+            </span>
+            {% endif %}
+        </div>
+        <div class="hidden sm:flex sm:flex-1 sm:items-center sm:justify-between">
+            <div>
+                <p class="text-sm text-muted-foreground">
+                    Showing <span class="font-medium">{{ page_obj.start_index }}</span> to <span class="font-medium">{{ page_obj.end_index }}</span> of <span class="font-medium">{{ page_obj.paginator.count }}</span> matches
+                </p>
+            </div>
+            <div>
+                <nav class="inline-flex -space-x-px rounded-md shadow-sm" aria-label="Pagination">
+                    {% if page_obj.has_previous %}
+                    <a href="?page={{ page_obj.previous_page_number }}" class="inline-flex items-center rounded-l-md border bg-white px-2 py-2 text-sm font-medium hover:bg-secondary">
+                        <img src="{% static 'pingpong/icons/chevron-left.svg' %}" class="w-5 h-5" alt="Previous">
+                    </a>
+                    {% endif %}
+                    
+                    {% for num in page_obj.paginator.page_range %}
+                        {% if page_obj.number == num %}
+                        <span class="inline-flex items-center border border-primary bg-primary px-4 py-2 text-sm font-medium text-primary-foreground">
+                            {{ num }}
+                        </span>
+                        {% elif num > page_obj.number|add:'-3' and num < page_obj.number|add:'3' %}
+                        <a href="?page={{ num }}" class="inline-flex items-center border bg-white px-4 py-2 text-sm font-medium hover:bg-secondary">
+                            {{ num }}
+                        </a>
+                        {% endif %}
+                    {% endfor %}
+                    
+                    {% if page_obj.has_next %}
+                    <a href="?page={{ page_obj.next_page_number }}" class="inline-flex items-center rounded-r-md border bg-white px-2 py-2 text-sm font-medium hover:bg-secondary">
+                        <img src="{% static 'pingpong/icons/chevron-right.svg' %}" class="w-5 h-5" alt="Next">
+                    </a>
+                    {% endif %}
+                </nav>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+</div>
+{% endblock %}

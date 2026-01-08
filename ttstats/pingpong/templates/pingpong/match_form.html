@@ -1,0 +1,394 @@
+{% extends "pingpong/base.html" %}
+{% load static %}
+
+{% block title %}{% if object %}Edit Match{% else %}Record New Match{% endif %} - Table Tennis Tracker{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto space-y-6">
+    <!-- Back button -->
+    <div>
+        <a href="{% if object %}{% url 'pingpong:match_detail' object.pk %}{% else %}{% url 'pingpong:match_list' %}{% endif %}" class="inline-flex items-center gap-2 text-sm font-medium hover:underline">
+            <img src="{% static 'pingpong/icons/arrow-left.svg' %}" class="w-4 h-4" alt="">
+            Back to {% if object %}Match{% else %}Matches{% endif %}
+        </a>
+    </div>
+
+    <!-- Form Card -->
+    <div class="rounded-lg border bg-white">
+        <div class="p-6">
+            <!-- Header -->
+            <div class="flex items-center gap-4 mb-6 pb-6 border-b">
+                <div class="w-14 h-14 rounded-full bg-primary text-primary-foreground flex items-center justify-center">
+                    {% if object %}
+                    <img src="{% static 'pingpong/icons/pencil.svg' %}" class="w-6 h-6 invert" alt="">
+                    {% else %}
+                    <img src="{% static 'pingpong/icons/clipboard-list.svg' %}" class="w-6 h-6 invert" alt="">
+                    {% endif %}
+                </div>
+                <div>
+                    <h2 class="text-2xl font-bold">
+                        {% if object %}Edit Match{% else %}Record New Match{% endif %}
+                    </h2>
+                    <p class="text-sm text-muted-foreground">
+                        {% if object %}Update match details{% else %}Add a new table tennis match to the records{% endif %}
+                    </p>
+                </div>
+            </div>
+
+            <!-- Warning for completed matches -->
+            {% if is_complete %}
+            <div class="rounded-lg border border-warning/20 bg-warning/5 p-4 mb-6">
+                <div class="flex items-center gap-2 text-warning">
+                    <img src="{% static 'pingpong/icons/lock.svg' %}" class="w-5 h-5" alt="">
+                    <div>
+                        <p class="font-semibold">This match is complete</p>
+                        <p class="text-sm mt-1">You can only edit the location and notes. Player and match details are locked.</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Display Read-Only Match Info -->
+            <div class="space-y-4 mb-6 p-4 bg-muted/30 rounded-lg">
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <p class="text-sm font-medium text-muted-foreground mb-1">Players</p>
+                        <p class="font-semibold">{{ object.player1 }} vs {{ object.player2 }}</p>
+                    </div>
+                    <div>
+                        <p class="text-sm font-medium text-muted-foreground mb-1">Final Score</p>
+                        <p class="font-semibold">{{ object.player1_score }} - {{ object.player2_score }}</p>
+                    </div>
+                    <div>
+                        <p class="text-sm font-medium text-muted-foreground mb-1">Date Played</p>
+                        <p class="font-semibold">{{ object.date_played|date:"F d, Y H:i" }}</p>
+                    </div>
+                    <div>
+                        <p class="text-sm font-medium text-muted-foreground mb-1">Match Type</p>
+                        <p class="font-semibold">{{ object.get_match_type_display }} • Best of {{ object.best_of }}</p>
+                    </div>
+                    <div>
+                        <p class="text-sm font-medium text-muted-foreground mb-1">Winner</p>
+                        <p class="font-semibold text-success flex items-center gap-1">
+                            <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-4 h-4" alt="">
+                            {{ object.winner }}
+                        </p>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- Display form errors if any -->
+            {% if form.non_field_errors %}
+            <div class="rounded-lg border border-destructive bg-destructive/10 p-4 mb-6">
+                <div class="flex items-center gap-2 text-destructive">
+                    <img src="{% static 'pingpong/icons/alert-circle.svg' %}" class="w-5 h-5" alt="">
+                    <span class="font-medium">{{ form.non_field_errors }}</span>
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- Form -->
+            <form method="post" class="space-y-6">
+                {% csrf_token %}
+
+                {% if not is_complete %}
+                <!-- Players Section -->
+                <div class="space-y-4">
+                    <h3 class="text-lg font-semibold flex items-center gap-2">
+                        <img src="{% static 'pingpong/icons/users.svg' %}" class="w-5 h-5" alt="">
+                        Players
+                    </h3>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <!-- Player 1 Field -->
+                        <div class="space-y-2">
+                            <label class="text-sm font-medium leading-none" for="id_player1">
+                                Player 1 <span class="text-destructive">*</span>
+                            </label>
+                            <select 
+                                name="player1" 
+                                id="id_player1"
+                                class="flex h-10 w-full rounded-md border border-input bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.player1.errors %}border-destructive{% endif %}"
+                                required
+                            >
+                                <option value="">Select Player 1...</option>
+                                {% for player in form.player1.field.queryset %}
+                                <option value="{{ player.pk }}" {% if form.player1.value == player.pk %}selected{% endif %}>
+                                    {{ player }}
+                                </option>
+                                {% endfor %}
+                            </select>
+                            {% if form.player1.errors %}
+                            <p class="text-sm text-destructive">{{ form.player1.errors.0 }}</p>
+                            {% else %}
+                            <p class="text-sm text-muted-foreground">First player in the match</p>
+                            {% endif %}
+                        </div>
+
+                        <!-- Player 2 Field -->
+                        <div class="space-y-2">
+                            <label class="text-sm font-medium leading-none" for="id_player2">
+                                Player 2 <span class="text-destructive">*</span>
+                            </label>
+                            <select 
+                                name="player2" 
+                                id="id_player2"
+                                class="flex h-10 w-full rounded-md border border-input bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.player2.errors %}border-destructive{% endif %}"
+                                required
+                            >
+                                <option value="">Select Player 2...</option>
+                                {% for player in form.player2.field.queryset %}
+                                <option value="{{ player.pk }}" {% if form.player2.value == player.pk %}selected{% endif %}>
+                                    {{ player }}
+                                </option>
+                                {% endfor %}
+                            </select>
+                            {% if form.player2.errors %}
+                            <p class="text-sm text-destructive">{{ form.player2.errors.0 }}</p>
+                            {% else %}
+                            <p class="text-sm text-muted-foreground">Second player in the match</p>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+
+                <div class="border-t"></div>
+
+                <!-- Match Details Section -->
+                <div class="space-y-4">
+                    <h3 class="text-lg font-semibold flex items-center gap-2">
+                        <img src="{% static 'pingpong/icons/file-text.svg' %}" class="w-5 h-5" alt="">
+                        Match Details
+                    </h3>
+
+                    <!-- Date Played Field -->
+                    <div class="space-y-2">
+                        <label class="text-sm font-medium leading-none" for="id_date_played">
+                            Date & Time <span class="text-destructive">*</span>
+                        </label>
+                        <input 
+                            type="datetime-local" 
+                            name="date_played" 
+                            id="id_date_played"
+                            value="{% if form.date_played.value %}{{ form.date_played.value|date:'Y-m-d\TH:i' }}{% endif %}"
+                            class="flex h-10 w-full rounded-md border border-input bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.date_played.errors %}border-destructive{% endif %}" 
+                            required
+                        />
+                        {% if form.date_played.errors %}
+                        <p class="text-sm text-destructive">{{ form.date_played.errors.0 }}</p>
+                        {% else %}
+                        <p class="text-sm text-muted-foreground">When the match was played</p>
+                        {% endif %}
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <!-- Match Type Field -->
+                        <div class="space-y-2">
+                            <label class="text-sm font-medium leading-none" for="id_match_type">
+                                Match Type <span class="text-destructive">*</span>
+                            </label>
+                            <select 
+                                name="match_type" 
+                                id="id_match_type"
+                                class="flex h-10 w-full rounded-md border border-input bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.match_type.errors %}border-destructive{% endif %}"
+                            >
+                                <option value="casual" {% if form.match_type.value == 'casual' or not form.match_type.value %}selected{% endif %}>
+                                    Casual
+                                </option>
+                                <option value="practice" {% if form.match_type.value == 'practice' %}selected{% endif %}>
+                                    Practice
+                                </option>
+                                <option value="tournament" {% if form.match_type.value == 'tournament' %}selected{% endif %}>
+                                    Tournament
+                                </option>
+                            </select>
+                            {% if form.match_type.errors %}
+                            <p class="text-sm text-destructive">{{ form.match_type.errors.0 }}</p>
+                            {% else %}
+                            <p class="text-sm text-muted-foreground">Type of match</p>
+                            {% endif %}
+                        </div>
+
+                        <!-- Best Of Field -->
+                        <div class="space-y-2">
+                            <label class="text-sm font-medium leading-none" for="id_best_of">
+                                Best Of <span class="text-destructive">*</span>
+                            </label>
+                            <select 
+                                name="best_of" 
+                                id="id_best_of"
+                                class="flex h-10 w-full rounded-md border border-input bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.best_of.errors %}border-destructive{% endif %}"
+                            >
+                                <option value="1" {% if form.best_of.value == 1 %}selected{% endif %}>Best of 1</option>
+                                <option value="3" {% if form.best_of.value == 3 or not form.best_of.value %}selected{% endif %}>Best of 3</option>
+                                <option value="5" {% if form.best_of.value == 5 %}selected{% endif %}>Best of 5</option>
+                                <option value="7" {% if form.best_of.value == 7 %}selected{% endif %}>Best of 7</option>
+                                <option value="9" {% if form.best_of.value == 9 %}selected{% endif %}>Best of 9</option>
+                            </select>
+                            {% if form.best_of.errors %}
+                            <p class="text-sm text-destructive">{{ form.best_of.errors.0 }}</p>
+                            {% else %}
+                            <p class="text-sm text-muted-foreground">Number of games to play</p>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+
+                <div class="border-t"></div>
+                {% endif %}
+
+                <!-- Location and Notes (always editable) -->
+                <div class="space-y-4">
+                    {% if is_complete %}
+                    <h3 class="text-lg font-semibold flex items-center gap-2">
+                        <img src="{% static 'pingpong/icons/pencil.svg' %}" class="w-5 h-5" alt="">
+                        Editable Details
+                    </h3>
+                    {% else %}
+                    <h3 class="text-lg font-semibold flex items-center gap-2">
+                        <img src="{% static 'pingpong/icons/map-pin.svg' %}" class="w-5 h-5" alt="">
+                        Additional Details
+                    </h3>
+                    {% endif %}
+
+                    <!-- Location Field -->
+                    <div class="space-y-2">
+                        <div class="flex items-center justify-between">
+                            <label class="text-sm font-medium leading-none" for="id_location">Location</label>
+                            <span class="text-xs text-muted-foreground">Optional</span>
+                        </div>
+                        <select 
+                            name="location" 
+                            id="id_location"
+                            class="flex h-10 w-full rounded-md border border-input bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.location.errors %}border-destructive{% endif %}"
+                        >
+                            <option value="">No location specified</option>
+                            {% for location in locations %}
+                            <option value="{{ location.pk }}" {% if form.location.value == location.pk %}selected{% endif %}>
+                                {{ location.name }}{% if location.address %} - {{ location.address|truncatewords:5 }}{% endif %}
+                            </option>
+                            {% endfor %}
+                        </select>
+                        {% if form.location.errors %}
+                        <p class="text-sm text-destructive">{{ form.location.errors.0 }}</p>
+                        {% else %}
+                        <p class="text-sm text-muted-foreground">Where the match took place</p>
+                        {% endif %}
+                    </div>
+
+                    <!-- Notes Field -->
+                    <div class="space-y-2">
+                        <div class="flex items-center justify-between">
+                            <label class="text-sm font-medium leading-none" for="id_notes">Notes</label>
+                            <span class="text-xs text-muted-foreground">Optional</span>
+                        </div>
+                        <textarea 
+                            name="notes" 
+                            id="id_notes"
+                            rows="3"
+                            class="flex w-full rounded-md border border-input bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.notes.errors %}border-destructive{% endif %}" 
+                            placeholder="Any notes about this match..."
+                        >{{ form.notes.value|default:'' }}</textarea>
+                        {% if form.notes.errors %}
+                        <p class="text-sm text-destructive">{{ form.notes.errors.0 }}</p>
+                        {% else %}
+                        <p class="text-sm text-muted-foreground">Additional observations or comments</p>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <div class="border-t pt-6"></div>
+
+                <!-- Form Actions -->
+                <div class="flex gap-3 justify-end">
+                    <a href="{% if object %}{% url 'pingpong:match_detail' object.pk %}{% else %}{% url 'pingpong:match_list' %}{% endif %}" class="inline-flex items-center justify-center gap-2 rounded-md border bg-white px-4 py-2 text-sm font-medium hover:bg-secondary transition-colors">
+                        <img src="{% static 'pingpong/icons/x.svg' %}" class="w-4 h-4" alt="">
+                        Cancel
+                    </a>
+                    <button type="submit" class="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors">
+                        <img src="{% static 'pingpong/icons/check.svg' %}" class="w-4 h-4 invert" alt="">
+                        {% if object %}Update Match{% else %}Create Match{% endif %}
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Help Card -->
+    <div class="rounded-lg border border-primary/20 bg-primary/5 p-4">
+        <div class="flex gap-3">
+            <img src="{% static 'pingpong/icons/info.svg' %}" class="w-5 h-5 text-primary flex-shrink-0" alt="">
+            <div>
+                <h3 class="font-semibold text-sm mb-1">Quick Tips</h3>
+                <ul class="text-sm text-muted-foreground space-y-1 list-disc list-inside">
+                    {% if is_complete %}
+                    <li>This match is complete - only location and notes can be edited</li>
+                    <li>To modify player or match details, you'll need to delete and recreate the match</li>
+                    <li>All game scores and statistics are preserved</li>
+                    {% else %}
+                    <li>Select two different players for the match</li>
+                    <li>Create the match first, then add individual game scores from the match detail page</li>
+                    <li>The winner will be automatically determined based on game results</li>
+                    <li>Best of 3 means first to win 2 games wins the match</li>
+                    {% endif %}
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% if not is_complete %}
+<script>
+    // Dynamic player dropdown filtering
+    const player1Select = document.getElementById('id_player1');
+    const player2Select = document.getElementById('id_player2');
+    
+    // Store all options
+    const player1Options = Array.from(player1Select.options).map(opt => ({
+        value: opt.value,
+        text: opt.text
+    }));
+    const player2Options = Array.from(player2Select.options).map(opt => ({
+        value: opt.value,
+        text: opt.text
+    }));
+    
+    function filterPlayers() {
+        const player1Value = player1Select.value;
+        const player2Value = player2Select.value;
+        
+        // Filter Player 2 dropdown
+        const currentPlayer2Value = player2Select.value;
+        player2Select.innerHTML = '';
+        player2Options.forEach(opt => {
+            if (opt.value === '' || opt.value !== player1Value) {
+                const option = new Option(opt.text, opt.value);
+                if (opt.value === currentPlayer2Value) {
+                    option.selected = true;
+                }
+                player2Select.add(option);
+            }
+        });
+        
+        // Filter Player 1 dropdown
+        const currentPlayer1Value = player1Select.value;
+        player1Select.innerHTML = '';
+        player1Options.forEach(opt => {
+            if (opt.value === '' || opt.value !== player2Value) {
+                const option = new Option(opt.text, opt.value);
+                if (opt.value === currentPlayer1Value) {
+                    option.selected = true;
+                }
+                player1Select.add(option);
+            }
+        });
+    }
+    
+    player1Select.addEventListener('change', filterPlayers);
+    player2Select.addEventListener('change', filterPlayers);
+    
+    // Initial filter on page load
+    filterPlayers();
+</script>
+{% endif %}
+{% endblock %}

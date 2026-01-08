@@ -1,0 +1,266 @@
+{% extends "pingpong/base.html" %}
+{% load static %}
+
+{% block title %}Add Game Score - {{ match }} - Table Tennis Tracker{% endblock %}
+
+{% block content %}
+<div class="max-w-2xl mx-auto space-y-6">
+    <!-- Back button -->
+    <div>
+        <a href="{% url 'pingpong:match_detail' match.pk %}" class="inline-flex items-center gap-2 text-sm font-medium hover:underline">
+            <img src="{% static 'pingpong/icons/arrow-left.svg' %}" class="w-4 h-4" alt="">
+            Back to Match
+        </a>
+    </div>
+
+    <!-- Match Context Card -->
+    <div class="rounded-lg border bg-gradient-to-r from-primary to-primary/90 text-primary-foreground p-6">
+        <div class="flex items-center justify-between">
+            <div>
+                <p class="text-sm opacity-80 mb-1">Adding score for</p>
+                <h2 class="text-2xl font-bold">{{ match.player1 }} vs {{ match.player2 }}</h2>
+                <p class="text-sm opacity-90 mt-1">{{ match.date_played|date:"F d, Y" }} • Best of {{ match.best_of }}</p>
+            </div>
+            <div class="text-right">
+                <p class="text-sm opacity-80 mb-1">Current Score</p>
+                <div class="text-3xl font-bold">{{ match.player1_score }} - {{ match.player2_score }}</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Form Card -->
+    <div class="rounded-lg border bg-white">
+        <div class="p-6">
+            <!-- Header -->
+            <div class="flex items-center gap-4 mb-6 pb-6 border-b">
+                <div class="w-14 h-14 rounded-full bg-primary text-primary-foreground flex items-center justify-center">
+                    <img src="{% static 'pingpong/icons/plus-circle.svg' %}" class="w-6 h-6 invert" alt="">
+                </div>
+                <div>
+                    <h3 class="text-2xl font-bold">Add Game Score</h3>
+                    <p class="text-sm text-muted-foreground">Record the result of game #{{ next_game_number }}</p>
+                </div>
+            </div>
+
+            <!-- Display form errors -->
+            {% if form.non_field_errors %}
+            <div class="rounded-lg border border-destructive bg-destructive/10 p-4 mb-6">
+                <div class="flex items-center gap-2 text-destructive">
+                    <img src="{% static 'pingpong/icons/alert-circle.svg' %}" class="w-5 h-5" alt="">
+                    <span class="font-medium">{{ form.non_field_errors }}</span>
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- Form -->
+            <form method="post" class="space-y-6">
+                {% csrf_token %}
+
+                <!-- Game Number (hidden, auto-filled) -->
+                <input type="hidden" name="game_number" value="{{ next_game_number }}">
+
+                <!-- Score Section -->
+                <div class="space-y-4">
+                    <h4 class="text-lg font-semibold flex items-center gap-2">
+                        <img src="{% static 'pingpong/icons/hash.svg' %}" class="w-5 h-5" alt="">
+                        Game Score
+                    </h4>
+
+                    <div class="grid grid-cols-2 gap-6">
+                        <!-- Player 1 Score -->
+                        <div class="space-y-2">
+                            <label class="text-sm font-medium leading-none" for="id_player1_score">
+                                {{ match.player1 }} <span class="text-destructive">*</span>
+                            </label>
+                            <input 
+                                type="number" 
+                                name="player1_score" 
+                                id="id_player1_score"
+                                value="{{ form.player1_score.value|default:'0' }}"
+                                min="0"
+                                max="99"
+                                class="flex h-16 w-full rounded-md border border-input bg-white px-4 py-2 text-3xl font-bold text-center focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.player1_score.errors %}border-destructive{% endif %}" 
+                                required
+                                autofocus
+                            />
+                            {% if form.player1_score.errors %}
+                            <p class="text-sm text-destructive">{{ form.player1_score.errors.0 }}</p>
+                            {% endif %}
+                        </div>
+
+                        <!-- Player 2 Score -->
+                        <div class="space-y-2">
+                            <label class="text-sm font-medium leading-none" for="id_player2_score">
+                                {{ match.player2 }} <span class="text-destructive">*</span>
+                            </label>
+                            <input 
+                                type="number" 
+                                name="player2_score" 
+                                id="id_player2_score"
+                                value="{{ form.player2_score.value|default:'0' }}"
+                                min="0"
+                                max="99"
+                                class="flex h-16 w-full rounded-md border border-input bg-white px-4 py-2 text-3xl font-bold text-center focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.player2_score.errors %}border-destructive{% endif %}" 
+                                required
+                            />
+                            {% if form.player2_score.errors %}
+                            <p class="text-sm text-destructive">{{ form.player2_score.errors.0 }}</p>
+                            {% endif %}
+                        </div>
+                    </div>
+
+                    <div class="rounded-lg bg-muted/50 p-4 text-sm text-muted-foreground">
+                        <div class="flex items-center gap-2">
+                            <img src="{% static 'pingpong/icons/info.svg' %}" class="w-4 h-4" alt="">
+                            <span>Standard table tennis games are played to 11 points (must win by 2)</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Duration (Optional) -->
+                <div class="space-y-2">
+                    <div class="flex items-center justify-between">
+                        <label class="text-sm font-medium leading-none" for="id_duration_minutes">
+                            Duration (minutes)
+                        </label>
+                        <span class="text-xs text-muted-foreground">Optional</span>
+                    </div>
+                    <input 
+                        type="number" 
+                        name="duration_minutes" 
+                        id="id_duration_minutes"
+                        value="{{ form.duration_minutes.value|default:'' }}"
+                        min="1"
+                        max="300"
+                        placeholder="How long did this game take?"
+                        class="flex h-10 w-full rounded-md border border-input bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.duration_minutes.errors %}border-destructive{% endif %}" 
+                    />
+                    {% if form.duration_minutes.errors %}
+                    <p class="text-sm text-destructive">{{ form.duration_minutes.errors.0 }}</p>
+                    {% else %}
+                    <p class="text-sm text-muted-foreground">Track how long each game lasted</p>
+                    {% endif %}
+                </div>
+
+                <div class="border-t pt-6"></div>
+
+                <!-- Form Actions -->
+                <div class="flex gap-3 justify-end">
+                    <a href="{% url 'pingpong:match_detail' match.pk %}" class="inline-flex items-center justify-center gap-2 rounded-md border bg-white px-4 py-2 text-sm font-medium hover:bg-secondary transition-colors">
+                        <img src="{% static 'pingpong/icons/x.svg' %}" class="w-4 h-4" alt="">
+                        Cancel
+                    </a>
+                    <button type="submit" name="add_another" value="1" class="inline-flex items-center justify-center gap-2 rounded-md border border-primary bg-white px-4 py-2 text-sm font-medium text-primary hover:bg-secondary transition-colors">
+                        <img src="{% static 'pingpong/icons/chevron-last.svg' %}" class="w-4 h-4" alt="">
+                        Save & Add Next
+                    </button>
+                    <button type="submit" class="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors">
+                        <img src="{% static 'pingpong/icons/check.svg' %}" class="w-4 h-4 invert" alt="">
+                        Save & Finish
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Help Card -->
+    <div class="rounded-lg border border-primary/20 bg-primary/5 p-4">
+        <div class="flex gap-3">
+            <img src="{% static 'pingpong/icons/lightbulb.svg' %}" class="w-5 h-5 text-primary flex-shrink-0" alt="">
+            <div>
+                <h3 class="font-semibold text-sm mb-1">Quick Tips</h3>
+                <ul class="text-sm text-muted-foreground space-y-1 list-disc list-inside">
+                    <li>The winner is automatically determined based on the scores</li>
+                    <li>Use "Save & Add Next" to quickly record multiple games</li>
+                    <li>The match winner updates automatically when a player reaches the required wins</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Keyboard shortcuts for quick scoring
+    document.addEventListener('keydown', function(e) {
+        const player1Input = document.getElementById('id_player1_score');
+        const player2Input = document.getElementById('id_player2_score');
+        const durationInput = document.getElementById('id_duration_minutes');
+        const form = document.querySelector('form');
+        
+        // Don't trigger if user is typing in duration field
+        if (document.activeElement === durationInput) {
+            return;
+        }
+        
+        // Number keys 0-9 for player 1 score (when not focused elsewhere)
+        if (e.key >= '0' && e.key <= '9' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            if (document.activeElement !== player1Input && document.activeElement !== player2Input) {
+                e.preventDefault();
+                player1Input.focus();
+                player1Input.value = e.key;
+            }
+        }
+        
+        // Tab to switch between scores
+        if (e.key === 'Tab' && document.activeElement === player1Input) {
+            e.preventDefault();
+            player2Input.focus();
+            player2Input.select();
+        }
+        
+        // Ctrl/Cmd + Enter to save and add another
+        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+            e.preventDefault();
+            const addAnotherBtn = document.querySelector('button[name="add_another"]');
+            addAnotherBtn.click();
+        }
+        
+        // Shift + Enter to save and finish
+        if (e.shiftKey && e.key === 'Enter') {
+            e.preventDefault();
+            form.submit();
+        }
+        
+        // Quick score presets
+        if (e.altKey) {
+            e.preventDefault();
+            switch(e.key) {
+                case '1': // 11-0
+                    player1Input.value = '11';
+                    player2Input.value = '0';
+                    break;
+                case '2': // 11-9
+                    player1Input.value = '11';
+                    player2Input.value = '9';
+                    break;
+                case '3': // 0-11
+                    player1Input.value = '0';
+                    player2Input.value = '11';
+                    break;
+                case '4': // 9-11
+                    player1Input.value = '9';
+                    player2Input.value = '11';
+                    break;
+            }
+        }
+    });
+    
+    // Show keyboard shortcuts hint
+    const helpText = document.createElement('div');
+    helpText.className = 'mt-4 text-xs text-muted-foreground';
+    helpText.innerHTML = `
+        <div class="flex items-center gap-2 mb-1">
+            <img src="{% static 'pingpong/icons/keyboard.svg' %}" class="w-4 h-4" alt="">
+            <span class="font-semibold">Keyboard Shortcuts:</span>
+        </div>
+        <ul class="space-y-0.5 ml-6">
+            <li><kbd class="px-1.5 py-0.5 text-xs bg-muted rounded">0-9</kbd> Quick entry for Player 1</li>
+            <li><kbd class="px-1.5 py-0.5 text-xs bg-muted rounded">Tab</kbd> Switch to Player 2</li>
+            <li><kbd class="px-1.5 py-0.5 text-xs bg-muted rounded">Ctrl</kbd>+<kbd class="px-1.5 py-0.5 text-xs bg-muted rounded">Enter</kbd> Save & Add Next</li>
+            <li><kbd class="px-1.5 py-0.5 text-xs bg-muted rounded">Shift</kbd>+<kbd class="px-1.5 py-0.5 text-xs bg-muted rounded">Enter</kbd> Save & Finish</li>
+            <li><kbd class="px-1.5 py-0.5 text-xs bg-muted rounded">Alt</kbd>+<kbd class="px-1.5 py-0.5 text-xs bg-muted rounded">1-4</kbd> Quick scores (11-0, 11-9, 0-11, 9-11)</li>
+        </ul>
+    `;
+    document.querySelector('.space-y-6').appendChild(helpText);
+</script>
+{% endblock %}
