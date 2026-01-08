@@ -122,8 +122,7 @@
                     <li>
                         <a href="{% url 'pingpong:dashboard' %}"
                             class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors {% if request.resolver_match.url_name == 'dashboard' %}bg-secondary text-secondary-foreground{% else %}text-muted-foreground hover:bg-secondary hover:text-secondary-foreground{% endif %}">
-                            <img src="{% static 'pingpong/icons/layout-dashboard.svg' %}" class="w-5 h-5"
-                                alt="">
+                            <img src="{% static 'pingpong/icons/layout-dashboard.svg' %}" class="w-5 h-5" alt="">
                             Dashboard
                         </a>
                     </li>
@@ -137,8 +136,7 @@
                     <li>
                         <a href="{% url 'pingpong:match_list' %}"
                             class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors {% if request.resolver_match.url_name == 'match_list' or request.resolver_match.url_name == 'match_detail' %}bg-secondary text-secondary-foreground{% else %}text-muted-foreground hover:bg-secondary hover:text-secondary-foreground{% endif %}">
-                            <img src="{% static 'pingpong/icons/clipboard-list.svg' %}" class="w-5 h-5"
-                                alt="">
+                            <img src="{% static 'pingpong/icons/clipboard-list.svg' %}" class="w-5 h-5" alt="">
                             Matches
                         </a>
                     </li>
@@ -153,8 +151,7 @@
                     <li>
                         <a href="{% url 'pingpong:head_to_head' %}"
                             class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors {% if request.resolver_match.url_name == 'head_to_head' %}bg-secondary text-secondary-foreground{% else %}text-muted-foreground hover:bg-secondary hover:text-secondary-foreground{% endif %}">
-                            <img src="{% static 'pingpong/icons/chart-spline.svg' %}" class="w-5 h-5"
-                                alt="">
+                            <img src="{% static 'pingpong/icons/chart-spline.svg' %}" class="w-5 h-5" alt="">
                             Head to Head
                         </a>
                     </li>
@@ -173,12 +170,16 @@
                         </a>
                     </li>
                     <li>
-                        <a href="{% url 'logout' %}"
-                            class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium text-muted-foreground hover:bg-secondary hover:text-secondary-foreground transition-colors">
-                            <img src="{% static 'pingpong/icons/log-out.svg' %}" class="w-5 h-5" alt="">
-                            Logout
-                        </a>
+                        <form method="post" action="{% url 'logout' %}" class="w-full">
+                            {% csrf_token %}
+                            <button type="submit"
+                                class="w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium text-muted-foreground hover:bg-secondary hover:text-secondary-foreground transition-colors text-left">
+                                <img src="{% static 'pingpong/icons/log-out.svg' %}" class="w-5 h-5" alt="">
+                                Logout
+                            </button>
+                        </form>
                     </li>
+
                 </ul>
             </div>
         </aside>
@@ -224,24 +225,21 @@
                         <li>
                             <a href="{% url 'pingpong:dashboard' %}"
                                 class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium hover:bg-secondary">
-                                <img src="{% static 'pingpong/icons/layout-dashboard.svg' %}"
-                                    class="w-5 h-5" alt="">
+                                <img src="{% static 'pingpong/icons/layout-dashboard.svg' %}" class="w-5 h-5" alt="">
                                 Dashboard
                             </a>
                         </li>
                         <li>
                             <a href="{% url 'pingpong:player_list' %}"
                                 class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium hover:bg-secondary">
-                                <img src="{% static 'pingpong/icons/users.svg' %}" class="w-5 h-5"
-                                    alt="">
+                                <img src="{% static 'pingpong/icons/users.svg' %}" class="w-5 h-5" alt="">
                                 Players
                             </a>
                         </li>
                         <li>
                             <a href="{% url 'pingpong:match_list' %}"
                                 class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium hover:bg-secondary">
-                                <img src="{% static 'pingpong/icons/clipboard-list.svg' %}"
-                                    class="w-5 h-5" alt="">
+                                <img src="{% static 'pingpong/icons/clipboard-list.svg' %}" class="w-5 h-5" alt="">
                                 Matches
                             </a>
                         </li>
@@ -249,16 +247,14 @@
                         <li>
                             <a href="{% url 'pingpong:leaderboard' %}"
                                 class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors {% if request.resolver_match.url_name == 'leaderboard' %}bg-secondary text-secondary-foreground{% else %}text-muted-foreground hover:bg-secondary hover:text-secondary-foreground{% endif %}">
-                                <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-5 h-5"
-                                    alt="">
+                                <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-5 h-5" alt="">
                                 Leaderboard
                             </a>
                         </li>
                         <li>
                             <a href="{% url 'pingpong:head_to_head' %}"
                                 class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors {% if request.resolver_match.url_name == 'head_to_head' %}bg-secondary text-secondary-foreground{% else %}text-muted-foreground hover:bg-secondary hover:text-secondary-foreground{% endif %}">
-                                <img src="{% static 'pingpong/icons/chart-spline.svg' %}" class="w-5 h-5"
-                                    alt="">
+                                <img src="{% static 'pingpong/icons/chart-spline.svg' %}" class="w-5 h-5" alt="">
                                 Head to Head
                             </a>
                         </li>
@@ -266,19 +262,21 @@
                         <li>
                             <a href="{% url 'admin:index' %}"
                                 class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium hover:bg-secondary">
-                                <img src="{% static 'pingpong/icons/settings.svg' %}" class="w-5 h-5"
-                                    alt="">
+                                <img src="{% static 'pingpong/icons/settings.svg' %}" class="w-5 h-5" alt="">
                                 Admin
                             </a>
                         </li>
                         <li>
-                            <a href="{% url 'logout' %}"
-                                class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium hover:bg-secondary">
-                                <img src="{% static 'pingpong/icons/log-out.svg' %}" class="w-5 h-5"
-                                    alt="">
-                                Logout
-                            </a>
+                            <form method="post" action="{% url 'logout' %}" class="w-full">
+                                {% csrf_token %}
+                                <button type="submit"
+                                    class="w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium text-muted-foreground hover:bg-secondary hover:text-secondary-foreground transition-colors text-left">
+                                    <img src="{% static 'pingpong/icons/log-out.svg' %}" class="w-5 h-5" alt="">
+                                    Logout
+                                </button>
+                            </form>
                         </li>
+
                     </ul>
                 </nav>
             </div>
@@ -295,11 +293,9 @@
                         class="rounded-lg border px-4 py-3 {% if message.tags == 'success' %}bg-success/10 border-success text-success-foreground{% elif message.tags == 'error' %}bg-destructive/10 border-destructive text-destructive{% elif message.tags == 'warning' %}bg-warning/10 border-warning text-warning-foreground{% else %}bg-secondary border-border{% endif %}">
                         <div class="flex items-center gap-2">
                             {% if message.tags == 'success' %}
-                            <img src="{% static 'pingpong/icons/award.svg' %}" class="w-5 h-5"
-                                alt="">
+                            <img src="{% static 'pingpong/icons/award.svg' %}" class="w-5 h-5" alt="">
                             {% elif message.tags == 'error' %}
-                            <img src="{% static 'pingpong/icons/alert-circle.svg' %}" class="w-5 h-5"
-                                alt="">
+                            <img src="{% static 'pingpong/icons/alert-circle.svg' %}" class="w-5 h-5" alt="">
                             {% else %}
                             <img src="{% static 'pingpong/icons/info.svg' %}" class="w-5 h-5" alt="">
                             {% endif %}

@@ -48,9 +48,7 @@ ROOT_URLCONF = 'ttstats.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [
-            BASE_DIR / 'templates',  # Optional: project-level templates
-        ],
+        'DIRS': [],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -109,3 +107,6 @@ STATICFILES_DIRS = [
 ]
 
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+
+LOGOUT_REDIRECT_URL = '/pingpong/'
+ADMIN_LOGOUT_URL = '/accounts/logout/'
