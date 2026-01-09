@@ -2,6 +2,7 @@
 from django.contrib.auth.models import User
 from django.db import models
 from django.utils import timezone
+from .managers import MatchManager, PlayerManager, GameManager
 
 
 class Location(models.Model):
@@ -17,6 +18,7 @@ class Location(models.Model):
 
     def __str__(self):
         return self.name
+
 
 class Player(models.Model):
     """General player model"""
@@ -42,6 +44,18 @@ class Player(models.Model):
     notes = models.TextField(blank=True, help_text="Strengths, weaknesses, etc.")
     created_at = models.DateTimeField(auto_now_add=True)
 
+    objects = PlayerManager()
+
+    def user_can_edit(self, user):
+        """Check if given user can edit this player"""
+        if not user or not user.is_authenticated:
+            return False
+        if user.is_staff or user.is_superuser:
+            return True
+        if self.user and self.user == user:
+            return True
+        return False
+
     class Meta:
         ordering = ["name"]
 
@@ -59,7 +73,9 @@ class Match(models.Model):
         Player, on_delete=models.CASCADE, related_name="matches_as_player2"
     )
     date_played = models.DateTimeField(default=timezone.now)
-    location = models.ForeignKey(Location, on_delete=models.SET_NULL, null=True, blank=True)
+    location = models.ForeignKey(
+        Location, on_delete=models.SET_NULL, null=True, blank=True
+    )
 
     match_type = models.CharField(
         max_length=20,
@@ -84,6 +100,24 @@ class Match(models.Model):
     notes = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    objects = MatchManager()
+
+    def user_can_edit(self, user):
+        """Check if user can edit this match"""
+        if not user or not user.is_authenticated:
+            return False
+        if user.is_staff or user.is_superuser:
+            return True
+        try:
+            return self.player1.user == user or self.player2.user == user
+        except AttributeError:
+            return False
+
+    def user_can_view(self, user):
+        """Check if user can view this match"""
+        # Same as edit for now (could be different)
+        return self.user_can_edit(user)
 
     class Meta:
         ordering = ["-date_played"]
@@ -132,6 +166,8 @@ class Game(models.Model):
     )
 
     duration_minutes = models.IntegerField(null=True, blank=True)
+
+    objects = GameManager()
 
     class Meta:
         ordering = ["game_number"]
