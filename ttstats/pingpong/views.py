@@ -2,9 +2,10 @@ import json
 from typing import Any
 
 from django.contrib import messages
-from django.contrib.auth.mixins import LoginRequiredMixin
+from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
+from django.core.exceptions import PermissionDenied
 from django.core.serializers.json import DjangoJSONEncoder
-from django.db.models import Q, F, Count
+from django.db.models import Count, F, Q
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse_lazy
 from django.views.generic import (
@@ -15,7 +16,7 @@ from django.views.generic import (
     UpdateView,
 )
 
-from .forms import MatchEditForm, MatchForm, GameForm
+from .forms import GameForm, MatchEditForm, MatchForm
 from .models import Game, Location, Match, Player
 
 
@@ -275,9 +276,90 @@ class MatchCreateView(LoginRequiredMixin, CreateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["locations"] = Location.objects.all()
+
+        # Add user permission info for template
+        context["is_staff"] = self.request.user.is_staff
+        try:
+            context["user_player"] = self.request.user.player
+        except AttributeError:
+            context["user_player"] = None
+
         return context
 
+    def get_form(self, form_class=None):
+        """Customize form based on user permissions"""
+        form = super().get_form(form_class)
+        user = self.request.user
+
+        if not user.is_staff:
+            # Non-staff users must be one of the players
+            try:
+                user_player = user.player
+
+                # Pre-select and lock user as player1
+                form.fields["player1"].initial = user_player
+                form.fields["player1"].disabled = True
+                form.fields["player1"].widget.attrs.update(
+                    {"class": "bg-muted cursor-not-allowed"}
+                )
+                form.fields[
+                    "player1"
+                ].help_text = "You are automatically set as Player 1"
+
+                # Limit player2 choices to exclude the user
+                form.fields["player2"].queryset = Player.objects.exclude(
+                    pk=user_player.pk
+                )
+
+            except Player.DoesNotExist:
+                # User has no player profile - show error message
+                messages.error(
+                    self.request,
+                    "You must have a player profile to create matches. Please contact an administrator.",
+                )
+                form.fields["player1"].disabled = True
+                form.fields["player2"].disabled = True
+
+        return form
+
     def form_valid(self, form):
+        """Validate that non-staff users are participants"""
+        user = self.request.user
+        player1 = form.cleaned_data["player1"]
+        player2 = form.cleaned_data["player2"]
+
+        # Prevent creating matches between same player
+        if player1 == player2:
+            messages.error(
+                self.request, "You cannot create a match between the same player!"
+            )
+            return self.form_invalid(form)
+
+        # Non-staff users must be participants
+        if not user.is_staff:
+            try:
+                user_player = user.player
+
+                # Ensure user is one of the players
+                if player1 != user_player and player2 != user_player:
+                    messages.error(
+                        self.request, "You can only create matches you participate in!"
+                    )
+                    return self.form_invalid(form)
+
+                # Force user to be player1 (prevent tampering)
+                if player1 != user_player:
+                    messages.error(
+                        self.request, "You must be Player 1 in matches you create!"
+                    )
+                    return self.form_invalid(form)
+
+            except Player.DoesNotExist:
+                messages.error(
+                    self.request, "You must have a player profile to create matches."
+                )
+                return self.form_invalid(form)
+
         messages.success(self.request, "Match created successfully!")
         return super().form_valid(form)
 

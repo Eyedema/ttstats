@@ -1,74 +1,110 @@
 {% extends "pingpong/base.html" %}
 {% load static %}
 
+
 {% block title %}{% if object %}Edit Match{% else %}Record New Match{% endif %} - Table Tennis Tracker{% endblock %}
+
 
 {% block content %}
 <div class="max-w-3xl mx-auto space-y-6">
     <!-- Back button -->
     <div>
-        <a href="{% if object %}{% url 'pingpong:match_detail' object.pk %}{% else %}{% url 'pingpong:match_list' %}{% endif %}" class="inline-flex items-center gap-2 text-sm font-medium hover:underline">
+        <a href="{% if object %}{% url 'pingpong:match_detail' object.pk %}{% else %}{% url 'pingpong:match_list' %}{% endif %}" class="inline-flex items-center gap-2 text-sm font-medium hover:underline min-h-[44px]">
             <img src="{% static 'pingpong/icons/arrow-left.svg' %}" class="w-4 h-4" alt="">
             Back to {% if object %}Match{% else %}Matches{% endif %}
         </a>
     </div>
 
+    <!-- Permission Info Banner (for non-staff users creating new matches) -->
+    {% if not object and not is_staff and user_player %}
+    <div class="rounded-lg border-l-4 border-primary bg-primary/10 p-4">
+        <div class="flex items-start gap-3">
+            <img src="{% static 'pingpong/icons/info.svg' %}" class="w-5 h-5 text-primary mt-0.5 flex-shrink-0" alt="">
+            <div>
+                <p class="text-sm font-semibold text-primary mb-1">
+                    Creating match as: {{ user_player.name }}
+                </p>
+                <p class="text-xs text-muted-foreground">
+                    You are automatically set as <strong>Player 1</strong>. Select your opponent as Player 2. 
+                    You cannot create matches for other players.
+                </p>
+            </div>
+        </div>
+    </div>
+    {% elif not object and not user_player %}
+    <div class="rounded-lg border-l-4 border-destructive bg-destructive/10 p-4">
+        <div class="flex items-start gap-3">
+            <img src="{% static 'pingpong/icons/alert-circle.svg' %}" class="w-5 h-5 text-destructive mt-0.5 flex-shrink-0" alt="">
+            <div>
+                <p class="text-sm font-semibold text-destructive mb-1">
+                    No Player Profile Found
+                </p>
+                <p class="text-xs text-muted-foreground">
+                    You need a player profile to create matches. Please contact an administrator.
+                </p>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
     <!-- Form Card -->
     <div class="rounded-lg border bg-white">
-        <div class="p-6">
+        <div class="p-4 md:p-6">
             <!-- Header -->
             <div class="flex items-center gap-4 mb-6 pb-6 border-b">
-                <div class="w-14 h-14 rounded-full bg-primary text-primary-foreground flex items-center justify-center">
+                <div class="w-12 h-12 md:w-14 md:h-14 rounded-full bg-primary text-primary-foreground flex items-center justify-center flex-shrink-0">
                     {% if object %}
-                    <img src="{% static 'pingpong/icons/pencil.svg' %}" class="w-6 h-6 invert" alt="">
+                    <img src="{% static 'pingpong/icons/pencil.svg' %}" class="w-5 h-5 md:w-6 md:h-6 invert" alt="">
                     {% else %}
-                    <img src="{% static 'pingpong/icons/clipboard-list.svg' %}" class="w-6 h-6 invert" alt="">
+                    <img src="{% static 'pingpong/icons/clipboard-list.svg' %}" class="w-5 h-5 md:w-6 md:h-6 invert" alt="">
                     {% endif %}
                 </div>
                 <div>
-                    <h2 class="text-2xl font-bold">
+                    <h2 class="text-xl md:text-2xl font-bold">
                         {% if object %}Edit Match{% else %}Record New Match{% endif %}
                     </h2>
-                    <p class="text-sm text-muted-foreground">
+                    <p class="text-xs md:text-sm text-muted-foreground">
                         {% if object %}Update match details{% else %}Add a new table tennis match to the records{% endif %}
                     </p>
                 </div>
             </div>
 
+
             <!-- Warning for completed matches -->
             {% if is_complete %}
             <div class="rounded-lg border border-warning/20 bg-warning/5 p-4 mb-6">
-                <div class="flex items-center gap-2 text-warning">
-                    <img src="{% static 'pingpong/icons/lock.svg' %}" class="w-5 h-5" alt="">
-                    <div>
-                        <p class="font-semibold">This match is complete</p>
-                        <p class="text-sm mt-1">You can only edit the location and notes. Player and match details are locked.</p>
+                <div class="flex items-start gap-3">
+                    <img src="{% static 'pingpong/icons/lock.svg' %}" class="w-5 h-5 text-warning flex-shrink-0" alt="">
+                    <div class="text-warning">
+                        <p class="font-semibold text-sm md:text-base">This match is complete</p>
+                        <p class="text-xs md:text-sm mt-1">You can only edit the location and notes. Player and match details are locked.</p>
                     </div>
                 </div>
             </div>
 
+
             <!-- Display Read-Only Match Info -->
             <div class="space-y-4 mb-6 p-4 bg-muted/30 rounded-lg">
-                <div class="grid grid-cols-2 gap-4">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                        <p class="text-sm font-medium text-muted-foreground mb-1">Players</p>
-                        <p class="font-semibold">{{ object.player1 }} vs {{ object.player2 }}</p>
+                        <p class="text-xs md:text-sm font-medium text-muted-foreground mb-1">Players</p>
+                        <p class="font-semibold text-sm md:text-base">{{ object.player1 }} vs {{ object.player2 }}</p>
                     </div>
                     <div>
-                        <p class="text-sm font-medium text-muted-foreground mb-1">Final Score</p>
-                        <p class="font-semibold">{{ object.player1_score }} - {{ object.player2_score }}</p>
+                        <p class="text-xs md:text-sm font-medium text-muted-foreground mb-1">Final Score</p>
+                        <p class="font-semibold text-sm md:text-base">{{ object.player1_score }} - {{ object.player2_score }}</p>
                     </div>
                     <div>
-                        <p class="text-sm font-medium text-muted-foreground mb-1">Date Played</p>
-                        <p class="font-semibold">{{ object.date_played|date:"F d, Y H:i" }}</p>
+                        <p class="text-xs md:text-sm font-medium text-muted-foreground mb-1">Date Played</p>
+                        <p class="font-semibold text-sm md:text-base">{{ object.date_played|date:"F d, Y H:i" }}</p>
                     </div>
                     <div>
-                        <p class="text-sm font-medium text-muted-foreground mb-1">Match Type</p>
-                        <p class="font-semibold">{{ object.get_match_type_display }} • Best of {{ object.best_of }}</p>
+                        <p class="text-xs md:text-sm font-medium text-muted-foreground mb-1">Match Type</p>
+                        <p class="font-semibold text-sm md:text-base">{{ object.get_match_type_display }} • Best of {{ object.best_of }}</p>
                     </div>
-                    <div>
-                        <p class="text-sm font-medium text-muted-foreground mb-1">Winner</p>
-                        <p class="font-semibold text-success flex items-center gap-1">
+                    <div class="sm:col-span-2">
+                        <p class="text-xs md:text-sm font-medium text-muted-foreground mb-1">Winner</p>
+                        <p class="font-semibold text-sm md:text-base text-success flex items-center gap-1">
                             <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-4 h-4" alt="">
                             {{ object.winner }}
                         </p>
@@ -77,89 +113,106 @@
             </div>
             {% endif %}
 
+
             <!-- Display form errors if any -->
             {% if form.non_field_errors %}
             <div class="rounded-lg border border-destructive bg-destructive/10 p-4 mb-6">
-                <div class="flex items-center gap-2 text-destructive">
-                    <img src="{% static 'pingpong/icons/alert-circle.svg' %}" class="w-5 h-5" alt="">
-                    <span class="font-medium">{{ form.non_field_errors }}</span>
+                <div class="flex items-start gap-3">
+                    <img src="{% static 'pingpong/icons/alert-circle.svg' %}" class="w-5 h-5 text-destructive flex-shrink-0" alt="">
+                    <span class="font-medium text-sm text-destructive">{{ form.non_field_errors }}</span>
                 </div>
             </div>
             {% endif %}
+
 
             <!-- Form -->
             <form method="post" class="space-y-6">
                 {% csrf_token %}
 
+
                 {% if not is_complete %}
                 <!-- Players Section -->
                 <div class="space-y-4">
-                    <h3 class="text-lg font-semibold flex items-center gap-2">
+                    <h3 class="text-base md:text-lg font-semibold flex items-center gap-2">
                         <img src="{% static 'pingpong/icons/users.svg' %}" class="w-5 h-5" alt="">
                         Players
                     </h3>
+
 
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <!-- Player 1 Field -->
                         <div class="space-y-2">
                             <label class="text-sm font-medium leading-none" for="id_player1">
-                                Player 1 <span class="text-destructive">*</span>
+                                Player 1 
+                                {% if not is_staff %}<span class="text-muted-foreground text-xs">(You)</span>{% endif %}
+                                <span class="text-destructive">*</span>
                             </label>
                             <select 
                                 name="player1" 
                                 id="id_player1"
-                                class="flex h-10 w-full rounded-md border border-input bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.player1.errors %}border-destructive{% endif %}"
+                                class="flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.player1.errors %}border-destructive{% endif %} {% if form.player1.field.disabled %}bg-muted cursor-not-allowed{% endif %}"
                                 required
+                                {% if form.player1.field.disabled %}disabled{% endif %}
                             >
                                 <option value="">Select Player 1...</option>
                                 {% for player in form.player1.field.queryset %}
-                                <option value="{{ player.pk }}" {% if form.player1.value == player.pk %}selected{% endif %}>
+                                <option value="{{ player.pk }}" {% if form.player1.value == player.pk or form.player1.value|stringformat:"s" == player.pk|stringformat:"s" %}selected{% endif %}>
                                     {{ player }}
                                 </option>
                                 {% endfor %}
                             </select>
                             {% if form.player1.errors %}
-                            <p class="text-sm text-destructive">{{ form.player1.errors.0 }}</p>
+                            <p class="text-xs md:text-sm text-destructive">{{ form.player1.errors.0 }}</p>
+                            {% elif form.player1.help_text %}
+                            <p class="text-xs md:text-sm text-muted-foreground">{{ form.player1.help_text }}</p>
+                            {% elif not is_staff %}
+                            <p class="text-xs md:text-sm text-muted-foreground">You are automatically set as Player 1</p>
                             {% else %}
-                            <p class="text-sm text-muted-foreground">First player in the match</p>
+                            <p class="text-xs md:text-sm text-muted-foreground">First player in the match</p>
                             {% endif %}
                         </div>
+
 
                         <!-- Player 2 Field -->
                         <div class="space-y-2">
                             <label class="text-sm font-medium leading-none" for="id_player2">
-                                Player 2 <span class="text-destructive">*</span>
+                                Player 2 
+                                {% if not is_staff %}<span class="text-muted-foreground text-xs">(Opponent)</span>{% endif %}
+                                <span class="text-destructive">*</span>
                             </label>
                             <select 
                                 name="player2" 
                                 id="id_player2"
-                                class="flex h-10 w-full rounded-md border border-input bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.player2.errors %}border-destructive{% endif %}"
+                                class="flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.player2.errors %}border-destructive{% endif %}"
                                 required
                             >
                                 <option value="">Select Player 2...</option>
                                 {% for player in form.player2.field.queryset %}
-                                <option value="{{ player.pk }}" {% if form.player2.value == player.pk %}selected{% endif %}>
+                                <option value="{{ player.pk }}" {% if form.player2.value == player.pk or form.player2.value|stringformat:"s" == player.pk|stringformat:"s" %}selected{% endif %}>
                                     {{ player }}
                                 </option>
                                 {% endfor %}
                             </select>
                             {% if form.player2.errors %}
-                            <p class="text-sm text-destructive">{{ form.player2.errors.0 }}</p>
+                            <p class="text-xs md:text-sm text-destructive">{{ form.player2.errors.0 }}</p>
                             {% else %}
-                            <p class="text-sm text-muted-foreground">Second player in the match</p>
+                            <p class="text-xs md:text-sm text-muted-foreground">Select your opponent</p>
                             {% endif %}
                         </div>
                     </div>
                 </div>
 
+
                 <div class="border-t"></div>
+
 
                 <!-- Match Details Section -->
                 <div class="space-y-4">
-                    <h3 class="text-lg font-semibold flex items-center gap-2">
+                    <h3 class="text-base md:text-lg font-semibold flex items-center gap-2">
                         <img src="{% static 'pingpong/icons/file-text.svg' %}" class="w-5 h-5" alt="">
                         Match Details
                     </h3>
+
 
                     <!-- Date Played Field -->
                     <div class="space-y-2">
@@ -171,15 +224,16 @@
                             name="date_played" 
                             id="id_date_played"
                             value="{% if form.date_played.value %}{{ form.date_played.value|date:'Y-m-d\TH:i' }}{% endif %}"
-                            class="flex h-10 w-full rounded-md border border-input bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.date_played.errors %}border-destructive{% endif %}" 
+                            class="flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.date_played.errors %}border-destructive{% endif %}" 
                             required
                         />
                         {% if form.date_played.errors %}
-                        <p class="text-sm text-destructive">{{ form.date_played.errors.0 }}</p>
+                        <p class="text-xs md:text-sm text-destructive">{{ form.date_played.errors.0 }}</p>
                         {% else %}
-                        <p class="text-sm text-muted-foreground">When the match was played</p>
+                        <p class="text-xs md:text-sm text-muted-foreground">When the match was played</p>
                         {% endif %}
                     </div>
+
 
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <!-- Match Type Field -->
@@ -190,7 +244,7 @@
                             <select 
                                 name="match_type" 
                                 id="id_match_type"
-                                class="flex h-10 w-full rounded-md border border-input bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.match_type.errors %}border-destructive{% endif %}"
+                                class="flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.match_type.errors %}border-destructive{% endif %}"
                             >
                                 <option value="casual" {% if form.match_type.value == 'casual' or not form.match_type.value %}selected{% endif %}>
                                     Casual
@@ -203,11 +257,12 @@
                                 </option>
                             </select>
                             {% if form.match_type.errors %}
-                            <p class="text-sm text-destructive">{{ form.match_type.errors.0 }}</p>
+                            <p class="text-xs md:text-sm text-destructive">{{ form.match_type.errors.0 }}</p>
                             {% else %}
-                            <p class="text-sm text-muted-foreground">Type of match</p>
+                            <p class="text-xs md:text-sm text-muted-foreground">Type of match</p>
                             {% endif %}
                         </div>
+
 
                         <!-- Best Of Field -->
                         <div class="space-y-2">
@@ -217,7 +272,7 @@
                             <select 
                                 name="best_of" 
                                 id="id_best_of"
-                                class="flex h-10 w-full rounded-md border border-input bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.best_of.errors %}border-destructive{% endif %}"
+                                class="flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.best_of.errors %}border-destructive{% endif %}"
                             >
                                 <option value="1" {% if form.best_of.value == 1 %}selected{% endif %}>Best of 1</option>
                                 <option value="3" {% if form.best_of.value == 3 or not form.best_of.value %}selected{% endif %}>Best of 3</option>
@@ -226,30 +281,33 @@
                                 <option value="9" {% if form.best_of.value == 9 %}selected{% endif %}>Best of 9</option>
                             </select>
                             {% if form.best_of.errors %}
-                            <p class="text-sm text-destructive">{{ form.best_of.errors.0 }}</p>
+                            <p class="text-xs md:text-sm text-destructive">{{ form.best_of.errors.0 }}</p>
                             {% else %}
-                            <p class="text-sm text-muted-foreground">Number of games to play</p>
+                            <p class="text-xs md:text-sm text-muted-foreground">Number of games to play</p>
                             {% endif %}
                         </div>
                     </div>
                 </div>
 
+
                 <div class="border-t"></div>
                 {% endif %}
+
 
                 <!-- Location and Notes (always editable) -->
                 <div class="space-y-4">
                     {% if is_complete %}
-                    <h3 class="text-lg font-semibold flex items-center gap-2">
+                    <h3 class="text-base md:text-lg font-semibold flex items-center gap-2">
                         <img src="{% static 'pingpong/icons/pencil.svg' %}" class="w-5 h-5" alt="">
                         Editable Details
                     </h3>
                     {% else %}
-                    <h3 class="text-lg font-semibold flex items-center gap-2">
+                    <h3 class="text-base md:text-lg font-semibold flex items-center gap-2">
                         <img src="{% static 'pingpong/icons/map-pin.svg' %}" class="w-5 h-5" alt="">
                         Additional Details
                     </h3>
                     {% endif %}
+
 
                     <!-- Location Field -->
                     <div class="space-y-2">
@@ -260,21 +318,22 @@
                         <select 
                             name="location" 
                             id="id_location"
-                            class="flex h-10 w-full rounded-md border border-input bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.location.errors %}border-destructive{% endif %}"
+                            class="flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.location.errors %}border-destructive{% endif %}"
                         >
                             <option value="">No location specified</option>
                             {% for location in locations %}
-                            <option value="{{ location.pk }}" {% if form.location.value == location.pk %}selected{% endif %}>
+                            <option value="{{ location.pk }}" {% if form.location.value == location.pk or form.location.value|stringformat:"s" == location.pk|stringformat:"s" %}selected{% endif %}>
                                 {{ location.name }}{% if location.address %} - {{ location.address|truncatewords:5 }}{% endif %}
                             </option>
                             {% endfor %}
                         </select>
                         {% if form.location.errors %}
-                        <p class="text-sm text-destructive">{{ form.location.errors.0 }}</p>
+                        <p class="text-xs md:text-sm text-destructive">{{ form.location.errors.0 }}</p>
                         {% else %}
-                        <p class="text-sm text-muted-foreground">Where the match took place</p>
+                        <p class="text-xs md:text-sm text-muted-foreground">Where the match took place</p>
                         {% endif %}
                     </div>
+
 
                     <!-- Notes Field -->
                     <div class="space-y-2">
@@ -286,26 +345,28 @@
                             name="notes" 
                             id="id_notes"
                             rows="3"
-                            class="flex w-full rounded-md border border-input bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.notes.errors %}border-destructive{% endif %}" 
+                            class="flex w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.notes.errors %}border-destructive{% endif %}" 
                             placeholder="Any notes about this match..."
                         >{{ form.notes.value|default:'' }}</textarea>
                         {% if form.notes.errors %}
-                        <p class="text-sm text-destructive">{{ form.notes.errors.0 }}</p>
+                        <p class="text-xs md:text-sm text-destructive">{{ form.notes.errors.0 }}</p>
                         {% else %}
-                        <p class="text-sm text-muted-foreground">Additional observations or comments</p>
+                        <p class="text-xs md:text-sm text-muted-foreground">Additional observations or comments</p>
                         {% endif %}
                     </div>
                 </div>
 
+
                 <div class="border-t pt-6"></div>
 
+
                 <!-- Form Actions -->
-                <div class="flex gap-3 justify-end">
-                    <a href="{% if object %}{% url 'pingpong:match_detail' object.pk %}{% else %}{% url 'pingpong:match_list' %}{% endif %}" class="inline-flex items-center justify-center gap-2 rounded-md border bg-white px-4 py-2 text-sm font-medium hover:bg-secondary transition-colors">
+                <div class="flex flex-col sm:flex-row gap-3 sm:justify-end">
+                    <a href="{% if object %}{% url 'pingpong:match_detail' object.pk %}{% else %}{% url 'pingpong:match_list' %}{% endif %}" class="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 rounded-md border bg-white px-4 py-3 text-sm font-medium hover:bg-secondary transition-colors min-h-[48px]">
                         <img src="{% static 'pingpong/icons/x.svg' %}" class="w-4 h-4" alt="">
                         Cancel
                     </a>
-                    <button type="submit" class="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors">
+                    <button type="submit" class="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-3 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors min-h-[48px]">
                         <img src="{% static 'pingpong/icons/check.svg' %}" class="w-4 h-4 invert" alt="">
                         {% if object %}Update Match{% else %}Create Match{% endif %}
                     </button>
@@ -314,17 +375,23 @@
         </div>
     </div>
 
+
     <!-- Help Card -->
     <div class="rounded-lg border border-primary/20 bg-primary/5 p-4">
         <div class="flex gap-3">
             <img src="{% static 'pingpong/icons/info.svg' %}" class="w-5 h-5 text-primary flex-shrink-0" alt="">
             <div>
                 <h3 class="font-semibold text-sm mb-1">Quick Tips</h3>
-                <ul class="text-sm text-muted-foreground space-y-1 list-disc list-inside">
+                <ul class="text-xs md:text-sm text-muted-foreground space-y-1 list-disc list-inside">
                     {% if is_complete %}
                     <li>This match is complete - only location and notes can be edited</li>
                     <li>To modify player or match details, you'll need to delete and recreate the match</li>
                     <li>All game scores and statistics are preserved</li>
+                    {% elif not is_staff and not object %}
+                    <li>You are automatically set as Player 1 in matches you create</li>
+                    <li>Select your opponent from the Player 2 dropdown</li>
+                    <li>Create the match first, then add individual game scores from the match detail page</li>
+                    <li>The winner will be automatically determined based on game results</li>
                     {% else %}
                     <li>Select two different players for the match</li>
                     <li>Create the match first, then add individual game scores from the match detail page</li>
@@ -337,9 +404,10 @@
     </div>
 </div>
 
-{% if not is_complete %}
+
+{% if not is_complete and is_staff %}
 <script>
-    // Dynamic player dropdown filtering
+    // Dynamic player dropdown filtering (only for staff users)
     const player1Select = document.getElementById('id_player1');
     const player2Select = document.getElementById('id_player2');
     

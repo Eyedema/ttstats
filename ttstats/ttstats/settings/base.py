@@ -41,6 +41,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'ttstats.middleware.CurrentUserMiddleware',
 ]
 
 ROOT_URLCONF = 'ttstats.urls'

@@ -1,18 +1,49 @@
 from django import forms
 from .models import Match, Game, Player
 
+
 class MatchForm(forms.ModelForm):
     class Meta:
         model = Match
-        fields = ['player1', 'player2', 'date_played', 'location', 'match_type', 'best_of']
+        fields = ['player1', 'player2', 'date_played', 'location', 'match_type', 'best_of', 'notes']
+        widgets = {
+            'date_played': forms.DateTimeInput(attrs={
+                'type': 'datetime-local',
+                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
+            }),
+            'player1': forms.Select(attrs={
+                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
+            }),
+            'player2': forms.Select(attrs={
+                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
+            }),
+            'location': forms.Select(attrs={
+                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
+            }),
+            'match_type': forms.Select(attrs={
+                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
+            }),
+            'best_of': forms.NumberInput(attrs={
+                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm',
+                'min': 1,
+                'max': 11,
+                'step': 2
+            }),
+            'notes': forms.Textarea(attrs={
+                'class': 'flex min-h-[80px] w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm',
+                'rows': 3
+            }),
+        }
     
     def clean(self):
+        """Additional validation"""
         cleaned_data = super().clean()
         player1 = cleaned_data.get('player1')
         player2 = cleaned_data.get('player2')
         
+        # Ensure players are different
         if player1 and player2 and player1 == player2:
-            raise forms.ValidationError("A player cannot play against themselves!")
+            raise forms.ValidationError("Player 1 and Player 2 must be different!")
         
         return cleaned_data
 
