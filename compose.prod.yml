@@ -22,21 +22,6 @@ services:
       - db
     networks:
       - pingpong_network
-
-  nginx:
-    image: nginx:1.27-alpine
-    restart: unless-stopped
-    ports:
-      - "293:293"
-      - "4443:4443" 
-    volumes:
-      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - static_volume:/app/static:ro
-      - /etc/letsencrypt:/etc/letsencrypt:ro
-    depends_on:
-      - web
-    networks:
-      - pingpong_network
       - pangolin
 
 volumes:
