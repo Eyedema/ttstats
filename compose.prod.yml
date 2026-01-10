@@ -27,8 +27,8 @@ services:
     image: nginx:1.27-alpine
     restart: unless-stopped
     ports:
-      - "80:80"
-      - "443:443" 
+      - "293:293"
+      - "4443:4443" 
     volumes:
       - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - static_volume:/app/static:ro
@@ -37,6 +37,7 @@ services:
       - web
     networks:
       - pingpong_network
+      - pangolin
 
 volumes:
   pgdata:
@@ -45,3 +46,5 @@ volumes:
 networks:
   pingpong_network:
     driver: bridge
+  pangolin:
+    external: true
