@@ -25,7 +25,7 @@ DATABASES = {
 }
 # Security settings for production
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')  # Important!
-SECURE_SSL_REDIRECT = False  # Let nginx handle redirects, not Django
+SECURE_SSL_REDIRECT = True
 
 # Security settings for production
 SECURE_SSL_REDIRECT = True
