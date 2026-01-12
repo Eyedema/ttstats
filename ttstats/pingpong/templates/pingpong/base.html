@@ -224,6 +224,7 @@
             <!-- Bottom actions -->
             <div class="p-4 border-t">
                 <ul class="space-y-1">
+                    {% if user.is_staff %}
                     <li>
                         <a href="{% url 'admin:index' %}"
                             class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium text-muted-foreground hover:bg-secondary hover:text-secondary-foreground transition-colors">
@@ -231,6 +232,7 @@
                             Admin
                         </a>
                     </li>
+                    {% endif %}
                     <li>
                         <form method="post" action="{% url 'logout' %}" class="w-full">
                             {% csrf_token %}

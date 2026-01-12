@@ -175,10 +175,12 @@
                                     <img src="{% static 'pingpong/icons/eye.svg' %}" class="w-4 h-4" alt="">
                                     View
                                 </a>
+                                {% if user.is_staff %}
                                 <a href="{% url 'pingpong:match_edit' match.pk %}" class="inline-flex items-center gap-1 px-3 py-1.5 text-sm font-medium hover:bg-secondary rounded-md transition-colors">
                                     <img src="{% static 'pingpong/icons/pencil.svg' %}" class="w-4 h-4" alt="">
                                     Edit
                                 </a>
+                                {% endif %}
                             </div>
                         </td>
                     </tr>

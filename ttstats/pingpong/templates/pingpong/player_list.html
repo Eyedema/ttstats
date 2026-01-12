@@ -11,10 +11,12 @@
             <h2 class="text-2xl md:text-3xl font-bold tracking-tight">Players</h2>
             <p class="text-muted-foreground mt-1 text-sm md:text-base">Manage all registered players</p>
         </div>
+        {% if user.is_staff %}
         <a href="{% url 'pingpong:player_add' %}" class="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors min-h-[44px]">
             <img src="{% static 'pingpong/icons/plus.svg' %}" class="w-4 h-4 invert" alt="">
             Add Player
         </a>
+        {% endif %}
     </div>
 
     <!-- Stats Card -->
@@ -92,10 +94,12 @@
                                     <img src="{% static 'pingpong/icons/eye.svg' %}" class="w-4 h-4" alt="">
                                     View
                                 </a>
+                                {% if user.is_staff %}
                                 <a href="{% url 'pingpong:player_edit' player.pk %}" class="inline-flex items-center gap-1 px-3 py-1.5 text-sm font-medium hover:bg-secondary rounded-md transition-colors">
                                     <img src="{% static 'pingpong/icons/pencil.svg' %}" class="w-4 h-4" alt="">
                                     Edit
                                 </a>
+                                {% endif %}
                             </div>
                         </td>
                     </tr>
