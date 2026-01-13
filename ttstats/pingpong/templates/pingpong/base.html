@@ -197,9 +197,16 @@
                     </li>
                     <li>
                         <a href="{% url 'pingpong:match_list' %}"
-                            class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors {% if request.resolver_match.url_name == 'match_list' or request.resolver_match.url_name == 'match_detail' %}bg-secondary text-secondary-foreground{% else %}text-muted-foreground hover:bg-secondary hover:text-secondary-foreground{% endif %}">
-                            <img src="{% static 'pingpong/icons/clipboard-list.svg' %}" class="w-5 h-5" alt="">
-                            Matches
+                           class="flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors {% if request.resolver_match.url_name == 'match_list' or request.resolver_match.url_name == 'match_detail' %}bg-secondary text-secondary-foreground{% else %}text-muted-foreground hover:bg-secondary hover:text-secondary-foreground{% endif %}">
+                            <span class="flex items-center gap-3">
+                                <img src="{% static 'pingpong/icons/clipboard-list.svg' %}" class="w-5 h-5" alt="">
+                                <span>Matches</span>
+                            </span>
+                            {% if pending_matches_count %}
+                            <span class="inline-flex items-center justify-center rounded-full bg-destructive/10 text-destructive min-w-[20px] h-5 px-1.5 text-xs font-semibold">
+                                {{ pending_matches_count }}
+                            </span>
+                            {% endif %}
                         </a>
                     </li>
                     <!-- In the sidebar navigation, add after Matches -->

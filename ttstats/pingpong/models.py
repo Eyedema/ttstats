@@ -97,6 +97,8 @@ class Match(models.Model):
         blank=True,
     )
 
+    player1_confirmed = models.BooleanField(default=False)
+    player2_confirmed = models.BooleanField(default=False)
     notes = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -133,6 +135,10 @@ class Match(models.Model):
     @property
     def player2_score(self):
         return self.games.filter(winner=self.player2).count()  # type: ignore
+
+    @property
+    def match_confirmed(self):
+        return self.player1_confirmed & self.player2_confirmed
 
     def save(self, *args, **kwargs):
         # Auto-determine winner based on games
