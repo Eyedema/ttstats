@@ -19,5 +19,3 @@ jobs:
             cd ${{ secrets.WORK_DIR }}
             git pull
             docker compose -f compose.prod.yml up -d --build
-            docker compose -f compose.prod.yml exec -T web python manage.py migrate
-            docker compose -f compose.prod.yml exec -T web python manage.py collectstatic --noinput
