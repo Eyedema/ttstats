@@ -2,6 +2,8 @@ import json
 from typing import Any
 
 from django.contrib import messages
+from django.contrib.auth import login
+from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.core.exceptions import PermissionDenied
@@ -17,7 +19,7 @@ from django.views.generic import (
     UpdateView,
 )
 
-from .forms import GameForm, MatchEditForm, MatchForm
+from .forms import GameForm, MatchEditForm, MatchForm, PlayerRegistrationForm
 from .models import Game, Location, Match, Player
 
 
@@ -659,6 +661,40 @@ class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
 
         return context
 
+
+class PlayerRegistrationView(CreateView):
+    """View that creates User + Player"""
+
+    form_class = PlayerRegistrationForm
+    template_name = "registration/signup.html"
+    success_url = reverse_lazy("pingpong:dashboard")
+
+    def dispatch(self, request, *args, **kwargs):
+        # Redirect if already logged in
+        if request.user.is_authenticated:
+            return redirect("pingpong:dashboard")
+        return super().dispatch(request, *args, **kwargs)
+
+    def form_valid(self, form):
+        """Log the user in after successful registration"""
+        response = super().form_valid(form)
+        # Log the user in
+        login(
+            self.request,
+            self.object,
+            backend="django.contrib.auth.backends.ModelBackend",
+        )
+        messages.success(
+            self.request,
+            f"Welcome, {self.object.username}! Your account has been created.",
+        )
+        return response
+
+    def form_invalid(self, form):
+        """Add error message on failed registration"""
+        messages.error(self.request, "Please correct the errors below.")
+        return super().form_invalid(form)
+      
 
 @login_required
 def match_confirm(request, pk):

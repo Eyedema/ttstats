@@ -22,5 +22,6 @@ urlpatterns = [
         name="game_add",
     ),
     path("head-to-head/", views.HeadToHeadStatsView.as_view(), name="head_to_head"),
+    path("signup/", views.PlayerRegistrationView.as_view(), name="signup"),
     path('match/<int:pk>/confirm/', views.match_confirm, name='match_confirm'),
 ]
