@@ -97,6 +97,8 @@ class Match(models.Model):
         blank=True,
     )
 
+    player1_confirmed = models.BooleanField(default=False)
+    player2_confirmed = models.BooleanField(default=False)
     notes = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
