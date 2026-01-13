@@ -2,6 +2,9 @@ import json
 from typing import Any
 
 from django.contrib import messages
+from django.contrib.auth import login
+from django.contrib.auth.mixins import LoginRequiredMixin
+from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.core.exceptions import PermissionDenied
 from django.core.serializers.json import DjangoJSONEncoder
@@ -16,7 +19,7 @@ from django.views.generic import (
     UpdateView,
 )
 
-from .forms import GameForm, MatchEditForm, MatchForm
+from .forms import GameForm, MatchEditForm, MatchForm, PlayerRegistrationForm
 from .models import Game, Location, Match, Player
 
 
@@ -62,7 +65,8 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
 
         player = self.get_object()
         matches = (
-            Match.objects.filter(Q(player1=player) | Q(player2=player))
+            Match.objects.filter((Q(player1=player) | Q(player2=player)) &
+                                 (Q(player1_confirmed=True) & Q(player2_confirmed=True)))
             .order_by("-date_played")
             .prefetch_related("games")
         )
@@ -405,7 +409,8 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
         player_stats = []
 
         for player in players:
-            matches = Match.objects.filter(Q(player1=player) | Q(player2=player))
+            matches = Match.objects.filter((Q(player1=player) | Q(player2=player)) &
+                                 (Q(player1_confirmed=True) & Q(player2_confirmed=True)))
             total_matches = matches.count()
             wins = matches.filter(winner=player).count()
             losses = total_matches - wins
@@ -455,8 +460,8 @@ class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
             # Get all matches between these players
             matches = (
                 Match.objects.filter(
-                    Q(player1=player1, player2=player2)
-                    | Q(player1=player2, player2=player1)
+                    (Q(player1=player1, player2=player2) | Q(player1=player2, player2=player1)) &
+                    (Q(player1_confirmed=True) & Q(player2_confirmed=True))
                 )
                 .prefetch_related("games")
                 .order_by("date_played")
@@ -655,3 +660,67 @@ class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
                 )
 
         return context
+
+
+class PlayerRegistrationView(CreateView):
+    """View that creates User + Player"""
+
+    form_class = PlayerRegistrationForm
+    template_name = "registration/signup.html"
+    success_url = reverse_lazy("pingpong:dashboard")
+
+    def dispatch(self, request, *args, **kwargs):
+        # Redirect if already logged in
+        if request.user.is_authenticated:
+            return redirect("pingpong:dashboard")
+        return super().dispatch(request, *args, **kwargs)
+
+    def form_valid(self, form):
+        """Log the user in after successful registration"""
+        response = super().form_valid(form)
+        # Log the user in
+        login(
+            self.request,
+            self.object,
+            backend="django.contrib.auth.backends.ModelBackend",
+        )
+        messages.success(
+            self.request,
+            f"Welcome, {self.object.username}! Your account has been created.",
+        )
+        return response
+
+    def form_invalid(self, form):
+        """Add error message on failed registration"""
+        messages.error(self.request, "Please correct the errors below.")
+        return super().form_invalid(form)
+      
+
+@login_required
+def match_confirm(request, pk):
+    """Allow a player to confirm a match"""
+    match = get_object_or_404(Match, pk=pk)
+
+    # Determine which player is confirming
+    user = request.user
+
+    try:
+        user_player = user.player
+
+        if match.player1 == user_player and not match.player1_confirmed:
+            match.player1_confirmed = True
+            match.save()
+            messages.success(request, "You have confirmed this match!")
+        elif match.player2 == user_player and not match.player2_confirmed:
+            match.player2_confirmed = True
+            match.save()
+            messages.success(request, "You have confirmed this match!")
+        elif match.player1 == user_player or match.player2 == user_player:
+            messages.info(request, "You have already confirmed this match.")
+        else:
+            messages.error(request, "You are not a player in this match.")
+
+    except Player.DoesNotExist:
+        messages.error(request, "You must have a player profile to confirm matches.")
+
+    return redirect('pingpong:match_detail', pk=pk)

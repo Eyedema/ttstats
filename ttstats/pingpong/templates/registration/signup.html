@@ -1,0 +1,190 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sign Up - Table Tennis Tracker</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: { DEFAULT: '#2563eb', foreground: '#ffffff' },
+                        secondary: { DEFAULT: '#f3f4f6', foreground: '#111827' },
+                        muted: { DEFAULT: '#f3f4f6', foreground: '#6b7280' },
+                        destructive: { DEFAULT: '#ef4444', foreground: '#ffffff' },
+                        success: { DEFAULT: '#10b981', foreground: '#ffffff' },
+                        warning: { DEFAULT: '#f59e0b', foreground: '#ffffff' },
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-gray-50">
+    <div class="min-h-screen flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
+        <div class="max-w-md w-full space-y-8">
+            <div class="text-center">
+                <h2 class="text-3xl font-bold text-gray-900">Table Tennis Tracker 🏓</h2>
+                <p class="mt-2 text-sm text-gray-600">Create your player account</p>
+            </div>
+            
+            <div class="rounded-lg border bg-white p-8 shadow">
+                {% if form.non_field_errors %}
+                <div class="rounded-lg border border-destructive bg-destructive/10 p-4 mb-6">
+                    <div class="flex items-center gap-2 text-destructive">
+                        <span class="font-medium">{{ form.non_field_errors.0 }}</span>
+                    </div>
+                </div>
+                {% endif %}
+
+                <form method="post" class="space-y-5">
+                    {% csrf_token %}
+                    
+                    <div>
+                        <label for="id_username" class="block text-sm font-medium text-gray-700">
+                            Username
+                        </label>
+                        <input 
+                            type="text" 
+                            name="username" 
+                            id="id_username"
+                            value="{{ form.username.value|default:'' }}"
+                            required
+                            autofocus
+                            class="mt-1 block w-full rounded-md border {% if form.username.errors %}border-destructive{% else %}border-gray-300{% endif %} px-3 py-2 shadow-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary"
+                            placeholder="Choose a username"
+                        />
+                        {% if form.username.errors %}
+                            <p class="mt-1 text-sm text-destructive">{{ form.username.errors.0 }}</p>
+                        {% endif %}
+                        <p class="mt-1 text-xs text-gray-500">This will be your login name</p>
+                    </div>
+
+                    <div>
+                        <label for="id_email" class="block text-sm font-medium text-gray-700">
+                            Email
+                        </label>
+                        <input 
+                            type="email" 
+                            name="email" 
+                            id="id_email"
+                            value="{{ form.email.value|default:'' }}"
+                            required
+                            class="mt-1 block w-full rounded-md border {% if form.email.errors %}border-destructive{% else %}border-gray-300{% endif %} px-3 py-2 shadow-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary"
+                            placeholder="your.email@example.com"
+                        />
+                        {% if form.email.errors %}
+                            <p class="mt-1 text-sm text-destructive">{{ form.email.errors.0 }}</p>
+                        {% endif %}
+                    </div>
+
+                    <div>
+                        <label for="id_full_name" class="block text-sm font-medium text-gray-700">
+                            Full Name
+                        </label>
+                        <input 
+                            type="text" 
+                            name="full_name" 
+                            id="id_full_name"
+                            value="{{ form.full_name.value|default:'' }}"
+                            required
+                            class="mt-1 block w-full rounded-md border {% if form.full_name.errors %}border-destructive{% else %}border-gray-300{% endif %} px-3 py-2 shadow-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary"
+                            placeholder="John Doe"
+                        />
+                        {% if form.full_name.errors %}
+                            <p class="mt-1 text-sm text-destructive">{{ form.full_name.errors.0 }}</p>
+                        {% endif %}
+                    </div>
+
+                    <div>
+                        <label for="id_nickname" class="block text-sm font-medium text-gray-700">
+                            Nickname <span class="text-gray-500">(Optional)</span>
+                        </label>
+                        <input 
+                            type="text" 
+                            name="nickname" 
+                            id="id_nickname"
+                            value="{{ form.nickname.value|default:'' }}"
+                            class="mt-1 block w-full rounded-md border {% if form.nickname.errors %}border-destructive{% else %}border-gray-300{% endif %} px-3 py-2 shadow-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary"
+                            placeholder="Optional display name"
+                        />
+                        {% if form.nickname.errors %}
+                            <p class="mt-1 text-sm text-destructive">{{ form.nickname.errors.0 }}</p>
+                        {% endif %}
+                        <p class="mt-1 text-xs text-gray-500">How you want to appear on the leaderboard</p>
+                    </div>
+
+                    <div>
+                        <label for="id_playing_style" class="block text-sm font-medium text-gray-700">
+                            Playing Style
+                        </label>
+                        <select 
+                            name="playing_style" 
+                            id="id_playing_style"
+                            class="mt-1 block w-full rounded-md border {% if form.playing_style.errors %}border-destructive{% else %}border-gray-300{% endif %} px-3 py-2 shadow-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary"
+                        >
+                            <option value="normal" {% if form.playing_style.value == 'normal' or not form.playing_style.value %}selected{% endif %}>Normal</option>
+                            <option value="hard_rubber" {% if form.playing_style.value == 'hard_rubber' %}selected{% endif %}>Hard Rubber</option>
+                            <option value="unknown" {% if form.playing_style.value == 'unknown' %}selected{% endif %}>Unknown</option>
+                        </select>
+                        {% if form.playing_style.errors %}
+                            <p class="mt-1 text-sm text-destructive">{{ form.playing_style.errors.0 }}</p>
+                        {% endif %}
+                    </div>
+
+                    <div>
+                        <label for="id_password1" class="block text-sm font-medium text-gray-700">
+                            Password
+                        </label>
+                        <input 
+                            type="password" 
+                            name="password1" 
+                            id="id_password1"
+                            required
+                            class="mt-1 block w-full rounded-md border {% if form.password1.errors %}border-destructive{% else %}border-gray-300{% endif %} px-3 py-2 shadow-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary"
+                        />
+                        {% if form.password1.errors %}
+                            <p class="mt-1 text-sm text-destructive">{{ form.password1.errors.0 }}</p>
+                        {% endif %}
+                    </div>
+
+                    <div>
+                        <label for="id_password2" class="block text-sm font-medium text-gray-700">
+                            Confirm Password
+                        </label>
+                        <input 
+                            type="password" 
+                            name="password2" 
+                            id="id_password2"
+                            required
+                            class="mt-1 block w-full rounded-md border {% if form.password2.errors %}border-destructive{% else %}border-gray-300{% endif %} px-3 py-2 shadow-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary"
+                        />
+                        {% if form.password2.errors %}
+                            <p class="mt-1 text-sm text-destructive">{{ form.password2.errors.0 }}</p>
+                        {% endif %}
+                    </div>
+
+                    <button 
+                        type="submit"
+                        class="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary"
+                    >
+                        Create Account
+                    </button>
+                </form>
+
+                <div class="mt-6 text-center">
+                    <p class="text-sm text-gray-600">
+                        Already have an account? 
+                        <a href="/accounts/login/?next=/pingpong/" class="text-primary hover:text-primary/80 font-medium">
+                            Log in
+                        </a>
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

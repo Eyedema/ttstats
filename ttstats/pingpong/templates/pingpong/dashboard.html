@@ -49,10 +49,12 @@
                     <img src="{% static 'pingpong/icons/plus.svg' %}" class="w-4 h-4 invert" alt="">
                     New Match
                 </a>
+                {% if user.is_staff %}
                 <a href="{% url 'pingpong:player_add' %}" class="w-full inline-flex items-center justify-center gap-2 rounded-md border bg-white px-4 py-2.5 md:py-2 text-sm font-medium hover:bg-secondary transition-colors min-h-[44px]">
                     <img src="{% static 'pingpong/icons/user-plus.svg' %}" class="w-4 h-4" alt="">
                     Add Player
                 </a>
+                {% endif %}
             </div>
         </div>
     </div>
