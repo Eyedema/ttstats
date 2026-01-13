@@ -362,7 +362,7 @@
                 <div class="mb-4 space-y-2">
                     {% for message in messages %}
                     <div
-                        class="rounded-lg border px-4 py-3 {% if message.tags == 'success' %}bg-success/10 border-success text-success-foreground{% elif message.tags == 'error' %}bg-destructive/10 border-destructive text-destructive{% elif message.tags == 'warning' %}bg-warning/10 border-warning text-warning-foreground{% else %}bg-secondary border-border{% endif %}">
+                        class="rounded-lg border px-4 py-3 {% if message.tags == 'success' %}bg-success/10 border-success text-black{% elif message.tags == 'error' %}bg-destructive/10 border-destructive text-destructive{% elif message.tags == 'warning' %}bg-warning/10 border-warning text-warning-foreground{% else %}bg-secondary border-border{% endif %}">
                         <div class="flex items-center gap-2">
                             {% if message.tags == 'success' %}
                             <img src="{% static 'pingpong/icons/award.svg' %}" class="w-5 h-5" alt="">

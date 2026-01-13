@@ -48,6 +48,48 @@
                         Match Complete
                     </span>
                     {% endif %}
+                    <!-- Confirm Button (only for players in the match) -->
+                    {% if user.is_authenticated and user.player and match.winner %}
+                        {% if match.player1 == user.player %}
+                            {% if match.player1_confirmed %}
+                                <span class="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 rounded-md border-2 border-white/30 bg-white/50 text-primary/70 px-4 py-2.5 text-sm font-medium cursor-not-allowed min-h-[44px]">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                                    </svg>
+                                    Confirmed
+                                </span>
+                            {% else %}
+                                <form method="post" action="{% url 'pingpong:match_confirm' match.pk %}" class="flex-1 sm:flex-none">
+                                    {% csrf_token %}
+                                    <button type="submit" class="w-full inline-flex items-center justify-center gap-2 rounded-md border-2 border-white/30 bg-white/10 px-4 py-2.5 text-sm font-medium hover:bg-white/20 transition-colors min-h-[44px]">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                                        </svg>
+                                        Confirm Match
+                                    </button>
+                                </form>
+                            {% endif %}
+                        {% elif match.player2 == user.player %}
+                            {% if match.player2_confirmed %}
+                                <span class="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 rounded-md border-2 border-white/30 bg-white/50 text-primary/70 px-4 py-2.5 text-sm font-medium cursor-not-allowed min-h-[44px]">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                                    </svg>
+                                    Confirmed
+                                </span>
+                            {% else %}
+                                <form method="post" action="{% url 'pingpong:match_confirm' match.pk %}" class="flex-1 sm:flex-none">
+                                    {% csrf_token %}
+                                    <button type="submit" class="w-full inline-flex items-center justify-center gap-2 rounded-md border-2 border-white/30 bg-white/10 px-4 py-2.5 text-sm font-medium hover:bg-white/20 transition-colors min-h-[44px]">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                                        </svg>
+                                        Confirm Match
+                                    </button>
+                                </form>
+                            {% endif %}
+                        {% endif %}
+                    {% endif %}
                     <a href="{% url 'pingpong:match_edit' match.pk %}" class="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 rounded-md border-2 border-white/30 bg-white/10 px-4 py-2.5 text-sm font-medium hover:bg-white/20 transition-colors min-h-[44px]">
                         <img src="{% static 'pingpong/icons/pencil.svg' %}" class="w-4 h-4 invert" alt="">
                         Edit Match

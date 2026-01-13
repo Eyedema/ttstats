@@ -2,6 +2,7 @@ import json
 from typing import Any
 
 from django.contrib import messages
+from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.core.exceptions import PermissionDenied
 from django.core.serializers.json import DjangoJSONEncoder
@@ -655,3 +656,33 @@ class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
                 )
 
         return context
+
+
+@login_required
+def match_confirm(request, pk):
+    """Allow a player to confirm a match"""
+    match = get_object_or_404(Match, pk=pk)
+
+    # Determine which player is confirming
+    user = request.user
+
+    try:
+        user_player = user.player
+
+        if match.player1 == user_player and not match.player1_confirmed:
+            match.player1_confirmed = True
+            match.save()
+            messages.success(request, "You have confirmed this match!")
+        elif match.player2 == user_player and not match.player2_confirmed:
+            match.player2_confirmed = True
+            match.save()
+            messages.success(request, "You have confirmed this match!")
+        elif match.player1 == user_player or match.player2 == user_player:
+            messages.info(request, "You have already confirmed this match.")
+        else:
+            messages.error(request, "You are not a player in this match.")
+
+    except Player.DoesNotExist:
+        messages.error(request, "You must have a player profile to confirm matches.")
+
+    return redirect('pingpong:match_detail', pk=pk)
