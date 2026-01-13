@@ -63,7 +63,8 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
 
         player = self.get_object()
         matches = (
-            Match.objects.filter(Q(player1=player) | Q(player2=player))
+            Match.objects.filter((Q(player1=player) | Q(player2=player)) &
+                                 (Q(player1_confirmed=True) & Q(player2_confirmed=True)))
             .order_by("-date_played")
             .prefetch_related("games")
         )
@@ -406,7 +407,8 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
         player_stats = []
 
         for player in players:
-            matches = Match.objects.filter(Q(player1=player) | Q(player2=player))
+            matches = Match.objects.filter((Q(player1=player) | Q(player2=player)) &
+                                 (Q(player1_confirmed=True) & Q(player2_confirmed=True)))
             total_matches = matches.count()
             wins = matches.filter(winner=player).count()
             losses = total_matches - wins
@@ -456,8 +458,8 @@ class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
             # Get all matches between these players
             matches = (
                 Match.objects.filter(
-                    Q(player1=player1, player2=player2)
-                    | Q(player1=player2, player2=player1)
+                    (Q(player1=player1, player2=player2) | Q(player1=player2, player2=player1)) &
+                    (Q(player1_confirmed=True) & Q(player2_confirmed=True))
                 )
                 .prefetch_related("games")
                 .order_by("date_played")
