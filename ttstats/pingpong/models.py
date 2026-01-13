@@ -136,6 +136,10 @@ class Match(models.Model):
     def player2_score(self):
         return self.games.filter(winner=self.player2).count()  # type: ignore
 
+    @property
+    def match_confirmed(self):
+        return self.player1_confirmed & self.player2_confirmed
+
     def save(self, *args, **kwargs):
         # Auto-determine winner based on games
         if self.pk:  # Only if match already exists
