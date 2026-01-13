@@ -1,5 +1,8 @@
 from django import forms
-from .models import Match, Game, Player
+from django.contrib.auth.forms import UserCreationForm
+from django.contrib.auth.models import User
+
+from .models import Game, Match, Player
 
 
 class MatchForm(forms.ModelForm):
@@ -75,3 +78,38 @@ class GameForm(forms.ModelForm):
                     raise forms.ValidationError("When score is 10-10 or higher, you must win by 2 points!")
         
         return cleaned_data
+
+
+class PlayerRegistrationForm(UserCreationForm):
+    """User registration + player profile creation"""
+    
+    email = forms.EmailField(required=True)
+    full_name = forms.CharField(max_length=100, label="Full Name")
+    nickname = forms.CharField(max_length=50, required=False)
+    playing_style = forms.ChoiceField(
+        choices=[
+            ('normal', 'Normal'),
+            ('hard_rubber', 'Hard Rubber'),
+            ('unknown', 'Unknown'),
+        ],
+        initial='normal',
+    )
+    
+    class Meta:
+        model = User
+        fields = ['username', 'email', 'password1', 'password2']
+    
+    def save(self, commit=True):
+        user = super().save(commit=False)
+        user.email = self.cleaned_data['email']
+        
+        if commit:
+            user.save()
+            Player.objects.create(
+                user=user,
+                name=self.cleaned_data['full_name'],
+                nickname=self.cleaned_data.get('nickname', ''),
+                playing_style=self.cleaned_data['playing_style']
+            )
+        
+        return user
