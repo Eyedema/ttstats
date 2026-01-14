@@ -3,14 +3,15 @@ from typing import Any
 
 from django.contrib import messages
 from django.contrib.auth import login
-from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.auth.decorators import login_required
-from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
-from django.core.exceptions import PermissionDenied
+from django.contrib.auth.mixins import LoginRequiredMixin
+from django.contrib.auth.views import LoginView
+from django.core.mail import send_mail
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db.models import Count, F, Q
-from django.shortcuts import get_object_or_404, redirect
+from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse_lazy
+from django.views import View
 from django.views.generic import (
     CreateView,
     DetailView,
@@ -20,7 +21,7 @@ from django.views.generic import (
 )
 
 from .forms import GameForm, MatchEditForm, MatchForm, PlayerRegistrationForm
-from .models import Game, Location, Match, Player
+from .models import Game, Location, Match, Player, UserProfile
 
 
 # Create your views here.
@@ -65,8 +66,10 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
 
         player = self.get_object()
         matches = (
-            Match.objects.filter((Q(player1=player) | Q(player2=player)) &
-                                 (Q(player1_confirmed=True) & Q(player2_confirmed=True)))
+            Match.objects.filter(
+                (Q(player1=player) | Q(player2=player))
+                & (Q(player1_confirmed=True) & Q(player2_confirmed=True))
+            )
             .order_by("-date_played")
             .prefetch_related("games")
         )
@@ -409,8 +412,10 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
         player_stats = []
 
         for player in players:
-            matches = Match.objects.filter((Q(player1=player) | Q(player2=player)) &
-                                 (Q(player1_confirmed=True) & Q(player2_confirmed=True)))
+            matches = Match.objects.filter(
+                (Q(player1=player) | Q(player2=player))
+                & (Q(player1_confirmed=True) & Q(player2_confirmed=True))
+            )
             total_matches = matches.count()
             wins = matches.filter(winner=player).count()
             losses = total_matches - wins
@@ -460,8 +465,11 @@ class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
             # Get all matches between these players
             matches = (
                 Match.objects.filter(
-                    (Q(player1=player1, player2=player2) | Q(player1=player2, player2=player1)) &
-                    (Q(player1_confirmed=True) & Q(player2_confirmed=True))
+                    (
+                        Q(player1=player1, player2=player2)
+                        | Q(player1=player2, player2=player1)
+                    )
+                    & (Q(player1_confirmed=True) & Q(player2_confirmed=True))
                 )
                 .prefetch_related("games")
                 .order_by("date_played")
@@ -678,23 +686,35 @@ class PlayerRegistrationView(CreateView):
     def form_valid(self, form):
         """Log the user in after successful registration"""
         response = super().form_valid(form)
-        # Log the user in
-        login(
-            self.request,
-            self.object,
-            backend="django.contrib.auth.backends.ModelBackend",
+        user = self.object  # type: ignore
+        verification_url = self.request.build_absolute_uri(
+            reverse_lazy(
+                "pingpong:email_verify", args=[user.profile.email_verification_token]
+            )
         )
-        messages.success(
-            self.request,
-            f"Welcome, {self.object.username}! Your account has been created.",
+
+        send_mail(
+            subject="Verify your email address",
+            message=f"Welcome {user.username}! Click here to verify your email: {verification_url}",
+            from_email="pingpong@ubaldopuocci.org",
+            recipient_list=[user.email],
+            fail_silently=True,
         )
-        return response
+
+        return render(
+            self.request,
+            "registration/verify_email_sent.html",
+            {
+                "email": user.email,
+                "username": user.username,
+            },
+        )
 
     def form_invalid(self, form):
         """Add error message on failed registration"""
         messages.error(self.request, "Please correct the errors below.")
         return super().form_invalid(form)
-      
+
 
 @login_required
 def match_confirm(request, pk):
@@ -723,4 +743,109 @@ def match_confirm(request, pk):
     except Player.DoesNotExist:
         messages.error(request, "You must have a player profile to confirm matches.")
 
-    return redirect('pingpong:match_detail', pk=pk)
+    return redirect("pingpong:match_detail", pk=pk)
+
+
+class EmailVerifyView(View):
+    """Verify email with token"""
+
+    def get(self, request, token):
+        try:
+            profile = UserProfile.objects.get(email_verification_token=token)
+
+            # Check if already verified
+            if profile.email_verified:
+                messages.info(request, "Your email is already verified!")
+                # If already logged in, go to dashboard
+                if request.user.is_authenticated:
+                    return redirect("pingpong:dashboard")
+                # Otherwise go to login
+                return redirect("pingpong:login")
+
+            # Verify the email
+            if profile.verify_email(token):
+                # Log the user in automatically after verification
+                login(
+                    request,
+                    profile.user,
+                    backend="django.contrib.auth.backends.ModelBackend",
+                )
+                messages.success(
+                    request,
+                    f"Welcome, {profile.user.username}! Your email has been verified.",
+                )
+                return redirect("pingpong:dashboard")
+            else:
+                messages.error(request, "Invalid or expired verification token.")
+                return redirect("pingpong:login")
+
+        except UserProfile.DoesNotExist:
+            messages.error(request, "Invalid verification link.")
+            return redirect("pingpong:login")
+
+
+class EmailResendVerificationView(LoginRequiredMixin, View):
+    """Resend verification email"""
+
+    def post(self, request):
+        profile = request.user.profile
+        user = request.user
+
+        if profile.email_verified:
+            messages.info(request, "Your email is already verified.")
+        else:
+            # Generate new token
+            token = profile.create_verification_token()
+            profile.save()
+
+            verification_url = request.build_absolute_uri(
+                f"/pingpong/verify-email/{token}/"
+            )
+
+            send_mail(
+                subject="Verify your email address",
+                message=f"Welcome {user.username}! Click here to verify your email: {verification_url}",
+                from_email="pingpong@ubaldopuocci.org",
+                recipient_list=[user.email],
+                fail_silently=True,
+            )
+
+            messages.success(
+                request,
+                f"Verification email sent! Check your inbox at {request.user.email}",
+            )
+
+        # Redirect to player profile if exists, otherwise dashboard
+        if hasattr(request.user, "player"):
+            return redirect("pingpong:player_detail", pk=request.user.player.pk)
+        return redirect("pingpong:dashboard")
+
+
+class CustomLoginView(LoginView):
+    """Custom login view with tailwind styling"""
+
+    template_name = "registration/login.html"
+    redirect_authenticated_user = True
+
+    def get_success_url(self):
+        return reverse_lazy("pingpong:dashboard")
+
+    def form_valid(self, form):
+        user = form.get_user()
+        print(f"DEBUG: User {user.username} logging in.")
+        print(
+            f"DEBUG: Email verified: {getattr(user.profile, 'email_verified', 'No profile')}"
+        )
+        print(
+            f"DEBUG: Verification token: {getattr(user.profile, 'email_verification_token', 'No profile')}"
+        )
+        # Check if email is verified
+        if hasattr(user, "profile") and not user.profile.email_verified:
+            messages.warning(
+                self.request,
+                "Please verify your email before logging in. Check your inbox!",
+            )
+            return redirect("pingpong:login")
+
+        messages.success(self.request, f"Welcome back, {user.username}!")
+        return super().form_valid(form)

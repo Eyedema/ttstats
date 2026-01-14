@@ -1,0 +1,89 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Check Your Email - Table Tennis Tracker</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: { DEFAULT: '#2563eb', foreground: '#ffffff' },
+                        secondary: { DEFAULT: '#f3f4f6', foreground: '#111827' },
+                        muted: { DEFAULT: '#f3f4f6', foreground: '#6b7280' },
+                        success: { DEFAULT: '#10b981', foreground: '#ffffff' },
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-gray-50">
+    <div class="min-h-screen flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
+        <div class="max-w-md w-full space-y-8">
+            <div class="text-center">
+                <div class="mx-auto w-16 h-16 bg-primary rounded-full flex items-center justify-center mb-4">
+                    <svg class="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path>
+                    </svg>
+                </div>
+                <h2 class="text-3xl font-bold text-gray-900">Check Your Email</h2>
+                <p class="mt-2 text-sm text-gray-600">We've sent a verification link to</p>
+                <p class="mt-1 text-base font-semibold text-primary">{{ email }}</p>
+            </div>
+            
+            <div class="rounded-lg border bg-white p-6 shadow">
+                <div class="space-y-4">
+                    <div class="flex items-start gap-3">
+                        <div class="w-6 h-6 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0 mt-0.5">
+                            <span class="text-primary font-semibold text-sm">1</span>
+                        </div>
+                        <div>
+                            <h3 class="font-medium text-gray-900">Check your inbox</h3>
+                            <p class="text-sm text-gray-600 mt-1">Look for an email from Table Tennis Tracker</p>
+                        </div>
+                    </div>
+                    
+                    <div class="flex items-start gap-3">
+                        <div class="w-6 h-6 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0 mt-0.5">
+                            <span class="text-primary font-semibold text-sm">2</span>
+                        </div>
+                        <div>
+                            <h3 class="font-medium text-gray-900">Click the verification link</h3>
+                            <p class="text-sm text-gray-600 mt-1">This will activate your account</p>
+                        </div>
+                    </div>
+                    
+                    <div class="flex items-start gap-3">
+                        <div class="w-6 h-6 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0 mt-0.5">
+                            <span class="text-primary font-semibold text-sm">3</span>
+                        </div>
+                        <div>
+                            <h3 class="font-medium text-gray-900">Start tracking matches</h3>
+                            <p class="text-sm text-gray-600 mt-1">You'll be automatically logged in</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="mt-6 pt-6 border-t">
+                    <p class="text-sm text-gray-600 text-center">
+                        Didn't receive the email? Check your spam folder or
+                        <a href="{% url 'pingpong:signup' %}" class="text-primary hover:text-primary/80 font-medium">
+                            try signing up again
+                        </a>
+                    </p>
+                </div>
+            </div>
+            
+            <div class="text-center">
+                <a href="/accounts/login/?next=/pingpong/" class="text-sm text-gray-600 hover:text-gray-900">
+                    Already verified? Log in
+                </a>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
