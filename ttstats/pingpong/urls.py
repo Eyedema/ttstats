@@ -4,6 +4,10 @@ from . import views
 app_name = "pingpong"
 
 urlpatterns = [
+    path("signup/", views.PlayerRegistrationView.as_view(), name="signup"),
+    path("login/", views.CustomLoginView.as_view(), name="login"),
+    path("verify-email/<str:token>/", views.EmailVerifyView.as_view(), name="email_verify"),
+    path("resend-verification/", views.EmailResendVerificationView.as_view(), name="email_resend_verification"),
     path("", views.DashboardView.as_view(), name="dashboard"),
     path("leaderboard/", views.LeaderboardView.as_view(), name="leaderboard"),
     path("players/", views.PlayerListView.as_view(), name="player_list"),

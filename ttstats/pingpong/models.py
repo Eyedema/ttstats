@@ -1,8 +1,11 @@
 # Create your models here.
+import uuid
+
 from django.contrib.auth.models import User
 from django.db import models
 from django.utils import timezone
-from .managers import MatchManager, PlayerManager, GameManager
+
+from .managers import GameManager, MatchManager, PlayerManager
 
 
 class Location(models.Model):
@@ -140,6 +143,21 @@ class Match(models.Model):
     def match_confirmed(self):
         return self.player1_confirmed & self.player2_confirmed
 
+    def should_auto_confirm(self):
+        if not self.winner or self.match_confirmed:
+            return False
+        for player in [self.player1, self.player2]:
+            if not player.user or not player.user.profile.email_verified:
+                return True
+        return False
+
+    def get_unverified_players(self):
+        unverified = []
+        for player in [self.player1, self.player2]:
+            if not player.user or not player.user.profile.email_verified:
+                unverified.append(player)
+        return unverified
+
     def save(self, *args, **kwargs):
         # Auto-determine winner based on games
         if self.pk:  # Only if match already exists
@@ -151,7 +169,7 @@ class Match(models.Model):
                 self.winner = self.player1
             elif p2_wins >= games_to_win:
                 self.winner = self.player2
-
+        self.auto_confirm()
         super().save(*args, **kwargs)
 
 
@@ -193,3 +211,29 @@ class Game(models.Model):
 
         # Update match winner
         self.match.save()
+
+
+class UserProfile(models.Model):
+    """Extended user profile for additional information"""
+
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="profile")
+    email_verified = models.BooleanField(default=False)
+    email_verification_token = models.CharField(max_length=64, blank=True)
+    email_verification_sent_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def create_verification_token(self):
+        self.email_verification_token = uuid.uuid4().hex
+        self.email_verification_sent_at = timezone.now()
+        return self.email_verification_token
+
+    def verify_email(self, token):
+        if self.email_verification_token == token:
+            self.email_verified = True
+            self.email_verification_token = ""
+            self.save()
+            return True
+        return False
+
+    def __str__(self):
+        return f"Profile of {self.user.username}"
