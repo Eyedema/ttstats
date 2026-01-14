@@ -14,6 +14,13 @@ def create_user_profile(sender, instance, created, **kwargs):
         userprofile = UserProfile.objects.create(user=instance)
         userprofile.create_verification_token()
         userprofile.save()
+    else:
+        # Ensure profile exists even for existing users
+        # (in case they were created before signal was added)
+        if not hasattr(instance, 'profile'):
+            userprofile = UserProfile.objects.create(user=instance)
+            userprofile.create_verification_token()
+            userprofile.save()
 
 
 @receiver(pre_save, sender=Match)
