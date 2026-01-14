@@ -143,6 +143,21 @@ class Match(models.Model):
     def match_confirmed(self):
         return self.player1_confirmed & self.player2_confirmed
 
+    def should_auto_confirm(self):
+        if not self.winner or self.match_confirmed:
+            return False
+        for player in [self.player1, self.player2]:
+            if not player.user or not player.user.profile.email_verified:
+                return True
+        return False
+
+    def get_unverified_players(self):
+        unverified = []
+        for player in [self.player1, self.player2]:
+            if not player.user or not player.user.profile.email_verified:
+                unverified.append(player)
+        return unverified
+
     def save(self, *args, **kwargs):
         # Auto-determine winner based on games
         if self.pk:  # Only if match already exists
@@ -154,7 +169,7 @@ class Match(models.Model):
                 self.winner = self.player1
             elif p2_wins >= games_to_win:
                 self.winner = self.player2
-
+        self.auto_confirm()
         super().save(*args, **kwargs)
 
 
@@ -211,7 +226,7 @@ class UserProfile(models.Model):
         self.email_verification_token = uuid.uuid4().hex
         self.email_verification_sent_at = timezone.now()
         return self.email_verification_token
-    
+
     def verify_email(self, token):
         if self.email_verification_token == token:
             self.email_verified = True

@@ -249,21 +249,18 @@ class GameCreateView(LoginRequiredMixin, CreateView):
 
         # Check if match is now complete
         if self.match.winner:
+            # Check if it was auto-confirmed by signals.py logic
+            if self.match.match_confirmed:
+                unverified_players = self.match.get_unverified_players()
+                if unverified_players:
+                    messages.warning(
+                        self.request,
+                        f"Match auto-confirmed because {', '.join([p.name for p in unverified_players])} {'is an' if len(unverified_players) == 1 else 'are'} unverified user{'s' if len(unverified_players) > 1 else ''}.",
+                    )
             messages.success(
                 self.request,
                 f"🎉 Match Complete! {self.match.winner} wins {self.match.player1_score}-{self.match.player2_score}!",
             )
-            # If any of the two players are not verified users, show a warning and confirm match automatically
-            for player in [self.match.player1, self.match.player2]:
-                if not player.user or not player.user.profile.email_verified:
-                    messages.warning(
-                        self.request,
-                        f"Player {player.name} is not a verified user. Match will be auto-confirmed.",
-                    )
-                    self.match.player1_confirmed = True
-                    self.match.player2_confirmed = True
-                    self.match.save()
-                    break
             # Always go to match detail if match is complete, regardless of button pressed
             return redirect("pingpong:match_detail", pk=self.match.pk)
 
