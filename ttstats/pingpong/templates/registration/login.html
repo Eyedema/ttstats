@@ -31,6 +31,8 @@
                 <p class="mt-2 text-sm text-gray-600">Sign in to your account</p>
             </div>
             
+            {% include 'pingpong/_messages.html' %}
+            
             <div class="rounded-lg border bg-white p-8 shadow">
                 {% if form.errors %}
                 <div class="rounded-lg border border-destructive bg-destructive/10 p-4 mb-6">
