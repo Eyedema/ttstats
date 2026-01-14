@@ -11,7 +11,11 @@ echo "Collecting static files..."
 python manage.py collectstatic --noinput
 
 echo "Making migrations..."
-python manage.py makemigrations --noinput
+python manage.py makemigrations --check --dry-run || {
+    echo "⚠️  WARNING: Uncommitted migrations detected!"
+    echo "Migrations should be created in development and committed to git."
+    exit 1
+}
 
 echo "Running migrations..."
 python manage.py migrate --noinput
