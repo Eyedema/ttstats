@@ -169,7 +169,6 @@ class Match(models.Model):
                 self.winner = self.player1
             elif p2_wins >= games_to_win:
                 self.winner = self.player2
-        self.auto_confirm()
         super().save(*args, **kwargs)
 
 
