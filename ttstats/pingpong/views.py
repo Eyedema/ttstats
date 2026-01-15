@@ -8,7 +8,7 @@ from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.auth.views import LoginView
 from django.core.mail import send_mail
 from django.core.serializers.json import DjangoJSONEncoder
-from django.db.models import Count, F, Q
+from django.db.models import Count, F, Q, Sum
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse_lazy
 from django.views import View
@@ -21,7 +21,7 @@ from django.views.generic import (
 )
 
 from .forms import GameForm, MatchEditForm, MatchForm, PlayerRegistrationForm
-from .models import Game, Location, Match, Player, UserProfile
+from .models import Game, Location, Match, Player, UserProfile, MatchConfirmation
 
 
 # Create your views here.
@@ -67,29 +67,36 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
         player = self.get_object()
         matches = (
             Match.objects.filter(
-                (Q(player1=player) | Q(player2=player))
-                & (Q(player1_confirmed=True) & Q(player2_confirmed=True))
+                Q(team1__players=player) | Q(team2__players=player)
             )
+            .filter(
+                confirmations__match__team1__players__isnull=False,
+                confirmations__match__team2__players__isnull=False
+            )
+            .distinct()
+            .select_related('team1', 'team2')
+            .prefetch_related('team1__players', 'team2__players', 'confirmations__player')
             .order_by("-date_played")
-            .prefetch_related("games")
         )
 
         # Annotate matches with game counts for efficiency
         matches_with_scores = matches.annotate(
-            p1_score=Count("games", filter=Q(games__winner=F("player1"))),
-            p2_score=Count("games", filter=Q(games__winner=F("player2"))),
+            team1_score=Count("games",
+                filter=Q(games__winner__in=F('team1__players'))
+            ),
+            team2_score=Count("games",
+                filter=Q(games__winner__in=F('team2__players'))
+            ),
         )
 
         if matches_with_scores.exists():
             first_match = matches_with_scores.first()
             print(f"DEBUG: Match {first_match.pk}")
-            print(f"  p1_score: {first_match.p1_score}")
-            print(f"  p2_score: {first_match.p2_score}")
-            print(f"  player1_score property: {first_match.player1_score}")
-            print(f"  player2_score property: {first_match.player2_score}")
+            print(f"  team1_score property: {first_match.team1_score}")
+            print(f"  team1_score property: {first_match.team2_score}")
 
         total_matches = matches.count()
-        wins = matches.filter(winner=player).count()
+        wins = matches.filter(winners=player).count()
         losses = total_matches - wins
 
         # Calculate current streak
@@ -101,7 +108,9 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
         temp_loss_streak = 0
 
         for match in matches:
-            if match.winner == player:
+            player_won = match.winners.filter(pk=player.pk).exists()
+
+            if player_won:
                 if streak_type == "loss" or streak_type is None:
                     if streak_type == "loss":
                         longest_loss_streak = max(longest_loss_streak, temp_loss_streak)
@@ -214,9 +223,9 @@ class GameCreateView(LoginRequiredMixin, CreateView):
         self.match = get_object_or_404(Match, pk=kwargs["match_pk"])
 
         # Check if match is already complete
-        if self.match.winner:
+        if self.match.winners:
             messages.warning(
-                request, f"This match is already complete. {self.match.winner} won!"
+                request, f"This match is already complete. {self.match.winners} won!"
             )
             return redirect("pingpong:match_detail", pk=self.match.pk)
 
@@ -248,9 +257,9 @@ class GameCreateView(LoginRequiredMixin, CreateView):
         self.match.refresh_from_db()
 
         # Check if match is now complete
-        if self.match.winner:
+        if self.match.winners:
             # Check if it was auto-confirmed by signals.py logic
-            if self.match.match_confirmed:
+            if self.match.is_fully_confirmed:
                 unverified_players = self.match.get_unverified_players()
                 if unverified_players:
                     messages.warning(
@@ -259,7 +268,7 @@ class GameCreateView(LoginRequiredMixin, CreateView):
                     )
             messages.success(
                 self.request,
-                f"🎉 Match Complete! {self.match.winner} wins {self.match.player1_score}-{self.match.player2_score}!",
+                f"🎉 Match Complete! {self.match.winners} wins {self.match.team1_score}-{self.match.team2_score}!",
             )
             # Always go to match detail if match is complete, regardless of button pressed
             return redirect("pingpong:match_detail", pk=self.match.pk)
@@ -326,6 +335,16 @@ class MatchCreateView(LoginRequiredMixin, CreateView):
                     pk=user_player.pk
                 )
 
+                # Limit player3 choices to exclude the user
+                form.fields["player3"].queryset = Player.objects.exclude(
+                    pk=user_player.pk
+                )
+
+                # Limit player4 choices to exclude the user
+                form.fields["player4"].queryset = Player.objects.exclude(
+                    pk=user_player.pk
+                )
+
             except Player.DoesNotExist:
                 # User has no player profile - show error message
                 messages.error(
@@ -334,14 +353,23 @@ class MatchCreateView(LoginRequiredMixin, CreateView):
                 )
                 form.fields["player1"].disabled = True
                 form.fields["player2"].disabled = True
+                form.fields["player3"].disabled = True
+                form.fields["player4"].disabled = True
 
         return form
 
     def form_valid(self, form):
         """Validate that non-staff users are participants"""
         user = self.request.user
+        form.is_double = (form.cleaned_data.get('is_double') == 'True')
         player1 = form.cleaned_data["player1"]
         player2 = form.cleaned_data["player2"]
+        player3 = form.cleaned_data["player3"]
+        player4 = form.cleaned_data["player4"]
+
+        if not form.is_double:
+            form.player3 = None
+            form.player4 = None
 
         # Prevent creating matches between same player
         if player1 == player2:
@@ -349,6 +377,13 @@ class MatchCreateView(LoginRequiredMixin, CreateView):
                 self.request, "You cannot create a match between the same player!"
             )
             return self.form_invalid(form)
+
+        if form.is_double:
+            if (player1 == player3 | player1 == player4) | (player2 == player3 | player2 == player4):
+                messages.error(
+                    self.request, "You cannot create a match between the same player!"
+                )
+                return self.form_invalid(form)
 
         # Non-staff users must be participants
         if not user.is_staff:
@@ -394,14 +429,14 @@ class MatchUpdateView(LoginRequiredMixin, UpdateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["locations"] = Location.objects.all()
-        context["is_complete"] = bool(self.object.winner)
+        context["is_complete"] = bool(self.object.winners)
         return context
 
     def get_success_url(self):
         return reverse_lazy("pingpong:match_detail", kwargs={"pk": self.object.pk})
 
     def form_valid(self, form):
-        if self.object.winner:
+        if self.object.winners:
             messages.success(self.request, "Match details updated successfully!")
         else:
             messages.success(self.request, "Match updated successfully!")
@@ -416,38 +451,31 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
 
-        players = Player.objects.all()
-        player_stats = []
+        player_stats = Player.objects.annotate(
+            total_matches=Count(
+                'team1__matches',
+                filter=Q(team1__matches__confirmations__isnull=False),
+                distinct=True
+            ) + Count(
+                'team2__matches',
+                filter=Q(team2__matches__confirmations__isnull=False),
+                distinct=True
+            ),
+            wins=Count('matches_won'),
+            total_games=Sum('team1__matches__games__id', distinct=True) +
+                        Sum('team2__matches__games__id', distinct=True)
+        ).select_related('user')
 
-        for player in players:
-            matches = Match.objects.filter(
-                (Q(player1=player) | Q(player2=player))
-                & (Q(player1_confirmed=True) & Q(player2_confirmed=True))
-            )
-            total_matches = matches.count()
-            wins = matches.filter(winner=player).count()
-            losses = total_matches - wins
-            win_rate = (wins / total_matches * 100) if total_matches > 0 else 0
-
-            # Calculate total games played
-            total_games = 0
-            for match in matches:
-                total_games += match.games.count()
-
-            player_stats.append(
-                {
-                    "player": player,
-                    "total_matches": total_matches,
-                    "total_games": total_games,
-                    "wins": wins,
-                    "losses": losses,
-                    "win_rate": win_rate,
-                }
+        for player in player_stats:
+            player.losses = (player.total_matches or 0) - (player.wins or 0)
+            player.win_rate = (
+                    (player.wins or 0) / (player.total_matches or 1) * 100
             )
 
-        # Sort by win rate (desc), then by total wins (desc), then by total matches (desc)
-        player_stats.sort(
-            key=lambda x: (x["win_rate"], x["wins"], x["total_matches"]), reverse=True
+        player_stats = sorted(
+            player_stats,
+            key=lambda p: (p.win_rate, p.wins, p.total_matches),
+            reverse=True
         )
 
         context["player_stats"] = player_stats
@@ -473,12 +501,18 @@ class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
             # Get all matches between these players
             matches = (
                 Match.objects.filter(
-                    (
-                        Q(player1=player1, player2=player2)
-                        | Q(player1=player2, player2=player1)
-                    )
-                    & (Q(player1_confirmed=True) & Q(player2_confirmed=True))
+                    # Only matches between these two exact players
+                    team1__players=player1,
+                    team2__players=player2,
+                    team1__players__count=1,
+                    team2__players__count=1
                 )
+                .filter(
+                    # Completamente confermati
+                    confirmations__match__team1__players__isnull=False,
+                    confirmations__match__team2__players__isnull=False
+                )
+                .distinct()
                 .prefetch_related("games")
                 .order_by("date_played")
             )
@@ -486,8 +520,8 @@ class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
             if matches.exists():
                 # Basic stats
                 total_matches = matches.count()
-                player1_match_wins = matches.filter(winner=player1).count()
-                player2_match_wins = matches.filter(winner=player2).count()
+                player1_match_wins = matches.filter(winners=player1).count()
+                player2_match_wins = matches.filter(winners=player2).count()
 
                 # Game-level analysis
                 all_games = []
@@ -503,11 +537,11 @@ class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
                     for game in games:
                         # Determine scores based on who was player1 in the match
                         if match.player1 == player1:
-                            p1_score = game.player1_score
-                            p2_score = game.player2_score
+                            p1_score = game.team1_score
+                            p2_score = game.team2_score
                         else:
-                            p1_score = game.player2_score
-                            p2_score = game.player1_score
+                            p1_score = game.team2_score
+                            p2_score = game.team1_score
 
                         diff = p1_score - p2_score
                         point_differences.append(
@@ -590,15 +624,15 @@ class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
                 for match in matches:
                     if match.winner == player1:
                         margin = (
-                            match.player1_score - match.player2_score
+                            match.team1_score - match.team2_score
                             if match.player1 == player1
-                            else match.player2_score - match.player1_score
+                            else match.team2_score - match.team1_score
                         )
                     elif match.winner == player2:
                         margin = -(
-                            match.player1_score - match.player2_score
+                            match.team1_score - match.team2_score
                             if match.player1 == player1
-                            else match.player2_score - match.player1_score
+                            else match.team2_score - match.team1_score
                         )
                     else:
                         margin = 0
@@ -729,25 +763,22 @@ def match_confirm(request, pk):
     """Allow a player to confirm a match"""
     match = get_object_or_404(Match, pk=pk)
 
-    # Determine which player is confirming
-    user = request.user
-
     try:
-        user_player = user.player
+        user_player = Player.objects.get(user=request.user)
 
-        if match.player1 == user_player and not match.player1_confirmed:
-            match.player1_confirmed = True
-            match.save()
-            messages.success(request, "You have confirmed this match!")
-        elif match.player2 == user_player and not match.player2_confirmed:
-            match.player2_confirmed = True
-            match.save()
-            messages.success(request, "You have confirmed this match!")
-        elif match.player1 == user_player or match.player2 == user_player:
-            messages.info(request, "You have already confirmed this match.")
-        else:
+        # Verify the player belongs to one of the two teams
+        if (user_player not in match.team1.players.all() and
+                user_player not in match.team2.players.all()):
             messages.error(request, "You are not a player in this match.")
+            return redirect("pingpong:match_detail", pk=pk)
 
+        # Create confirmations (does not duplicate existing ones)
+        MatchConfirmation.objects.get_or_create(
+            match=match,
+            player=user_player
+        )
+
+        messages.success(request, "You have confirmed this match!")
     except Player.DoesNotExist:
         messages.error(request, "You must have a player profile to confirm matches.")
 

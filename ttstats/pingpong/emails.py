@@ -18,16 +18,16 @@ def send_match_confirmation_email(match, player, opponent):
         result = "won"
         emoji = "🎉"
         if match.player1 == player:
-            score = f"{match.player1_score}-{match.player2_score}"
+            score = f"{match.team1_score}-{match.team2_score}"
         else:
-            score = f"{match.player2_score}-{match.player1_score}"
+            score = f"{match.team2_score}-{match.team1_score}"
     else:
         result = "lost"
         emoji = "💪"
         if match.player1 == player:
-            score = f"{match.player1_score}-{match.player2_score}"
+            score = f"{match.team1_score}-{match.team2_score}"
         else:
-            score = f"{match.player2_score}-{match.player1_score}"
+            score = f"{match.team2_score}-{match.team1_score}"
 
     # Build absolute URL
     protocol = getattr(settings, "SITE_PROTOCOL", "http")

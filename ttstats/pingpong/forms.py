@@ -8,8 +8,15 @@ from .models import Game, Match, Player
 class MatchForm(forms.ModelForm):
     class Meta:
         model = Match
-        fields = ['player1', 'player2', 'date_played', 'location', 'match_type', 'best_of', 'notes']
+        fields = ['is_double', 'player1', 'player2', 'player3', 'player4', 'date_played', 'location', 'match_type', 'best_of', 'notes']
         widgets = {
+            'is_double' : forms.ChoiceField(choices=(
+                ('False', 'Single'),
+                ('True', 'Double')),
+                widget=forms.Select(attrs={
+                    'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'}
+                )
+            ),
             'date_played': forms.DateTimeInput(attrs={
                 'type': 'datetime-local',
                 'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
@@ -18,6 +25,12 @@ class MatchForm(forms.ModelForm):
                 'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
             }),
             'player2': forms.Select(attrs={
+                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
+            }),
+            'player3': forms.Select(attrs={
+                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
+            }),
+            'player4': forms.Select(attrs={
                 'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
             }),
             'location': forms.Select(attrs={

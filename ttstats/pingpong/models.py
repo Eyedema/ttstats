@@ -66,14 +66,37 @@ class Player(models.Model):
         return self.nickname if self.nickname else self.name
 
 
+class Team(models.Model):
+    """Concept used for matches to include both singles and doubles score"""
+
+    players = models.ManyToManyField(Player, related_name="teams")
+    name = models.CharField(max_length=100, blank=True)
+
+    def __str__(self):
+        if self.name:
+            return self.name
+
+        # Default: "Player1 and Player2"
+        players_list = self.players.order_by('name').all()
+        if len(players_list) == 1:
+            return str(players_list[0])
+        elif len(players_list) == 2:
+            return f"{players_list[0]} and {players_list[1]}"
+        else:
+            names = [p.name for p in players_list[:2]]
+            return f"{names[0]} and {names[1]} (+{len(players_list) - 2})"
+
+
 class Match(models.Model):
     """Individual match between two players"""
 
-    player1 = models.ForeignKey(
-        Player, on_delete=models.CASCADE, related_name="matches_as_player1"
+    is_double = models.BooleanField(default=False)
+
+    team1 = models.ForeignKey(
+        Team, on_delete=models.CASCADE, related_name="matches_as_team11"
     )
-    player2 = models.ForeignKey(
-        Player, on_delete=models.CASCADE, related_name="matches_as_player2"
+    team2 = models.ForeignKey(
+        Team, on_delete=models.CASCADE, related_name="matches_as_team2"
     )
     date_played = models.DateTimeField(default=timezone.now)
     location = models.ForeignKey(
@@ -93,15 +116,13 @@ class Match(models.Model):
     # Best of format (best of 3, 5, 7, etc.)
     best_of = models.IntegerField(default=5, help_text="Best of how many games?")
 
-    winner = models.ForeignKey(
-        Player,
-        on_delete=models.SET_NULL,
-        null=True,
+    winners = models.ManyToManyField(
+        "Player",
+        related_name="matches_won",
         blank=True,
     )
 
-    player1_confirmed = models.BooleanField(default=False)
-    player2_confirmed = models.BooleanField(default=False)
+    confirmations = models.ManyToManyField(Player, through='MatchConfirmation')
     notes = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -115,7 +136,7 @@ class Match(models.Model):
         if user.is_staff or user.is_superuser:
             return True
         try:
-            return self.player1.user == user or self.player2.user == user
+            return user in self.team1.players or user in self.team2.players
         except AttributeError:
             return False
 
@@ -129,31 +150,50 @@ class Match(models.Model):
         verbose_name_plural = "matches"
 
     def __str__(self):
-        return f"{self.player1} vs {self.player2} - {self.date_played.date()}"
+        return f"{self.team1} vs {self.team2} - {self.date_played.date()}"
 
     @property
-    def player1_score(self):
-        return self.games.filter(winner=self.player1).count()  # type: ignore
+    def team1_score(self):
+        return self.games.filter(winner__in=self.team1.players.all()).count()
 
     @property
-    def player2_score(self):
-        return self.games.filter(winner=self.player2).count()  # type: ignore
+    def team2_score(self):
+        return self.games.filter(winner__in=self.team2.players.all()).count()
 
     @property
-    def match_confirmed(self):
-        return self.player1_confirmed & self.player2_confirmed
+    def team1_confirmed(self):
+        """All Team 1 members have confirmed"""
+        team1_players = self.team1.players.all()
+        if not team1_players.exists():
+            return False
+        confirmed_players = self.confirmations.all()
+        return team1_players.count() == confirmed_players.count()
+
+    @property
+    def team2_confirmed(self):
+        """All Team 2 members have confirmed"""
+        team2_players = self.team2.players.all()
+        if not team2_players.exists():
+            return False
+        confirmed_players = self.confirmations.all()
+        return team2_players.count() == confirmed_players.count()
+
+    @property
+    def is_fully_confirmed(self):
+        """Tutti i giocatori di entrambi i team hanno confermato"""
+        return self.team1_confirmed and self.team2_confirmed
 
     def should_auto_confirm(self):
-        if not self.winner or self.match_confirmed:
+        if not self.winners or self.is_fully_confirmed:
             return False
-        for player in [self.player1, self.player2]:
+        for player in [self.team1.players, self.team2.players]:
             if not player.user or not player.user.profile.email_verified:
                 return True
         return False
 
     def get_unverified_players(self):
         unverified = []
-        for player in [self.player1, self.player2]:
+        for player in [self.team1.players, self.team2.players]:
             if not player.user or not player.user.profile.email_verified:
                 unverified.append(player)
         return unverified
@@ -161,15 +201,28 @@ class Match(models.Model):
     def save(self, *args, **kwargs):
         # Auto-determine winner based on games
         if self.pk:  # Only if match already exists
-            p1_wins = self.games.filter(winner=self.player1).count()  # type: ignore
-            p2_wins = self.games.filter(winner=self.player2).count()  # type: ignore
+            p1_wins = self.games.filter(winners=self.team1.players).count()  # type: ignore
+            p2_wins = self.games.filter(winners=self.team2.players).count()  # type: ignore
             games_to_win = (self.best_of // 2) + 1
 
             if p1_wins >= games_to_win:
-                self.winner = self.player1
+                self.winner = self.team1
             elif p2_wins >= games_to_win:
-                self.winner = self.player2
+                self.winner = self.team2
         super().save(*args, **kwargs)
+
+
+class MatchConfirmation(models.Model):
+    match = models.ForeignKey(Match, on_delete=models.CASCADE, related_name='confirmations')
+    player = models.ForeignKey(Player, on_delete=models.CASCADE)
+    confirmed_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('match', 'player')  # Players need to confirm only once
+        verbose_name_plural = "Match Confirmations"
+
+    def __str__(self):
+        return f"{self.player} confirmed {self.match}"
 
 
 class Game(models.Model):
@@ -177,15 +230,13 @@ class Game(models.Model):
 
     match = models.ForeignKey(Match, on_delete=models.CASCADE, related_name="games")
     game_number = models.IntegerField(help_text="1st game, 2nd game, etc.")
-    player1_score = models.IntegerField(default=0)
-    player2_score = models.IntegerField(default=0)
+    team1_score = models.IntegerField(default=0)
+    team2_score = models.IntegerField(default=0)
 
-    winner = models.ForeignKey(
-        Player,
-        on_delete=models.SET_NULL,
-        null=True,
+    winners = models.ManyToManyField(
+        "Player",
+        related_name="games_won",
         blank=True,
-        related_name="won_games",
     )
 
     duration_minutes = models.IntegerField(null=True, blank=True)
@@ -197,14 +248,14 @@ class Game(models.Model):
         unique_together = ["match", "game_number"]
 
     def __str__(self):
-        return f"Game {self.game_number}: {self.player1_score}-{self.player2_score}"
+        return f"Game {self.game_number}: {self.team1_score}-{self.team2_score}"
 
     def save(self, *args, **kwargs):
         # Auto-determine winner
-        if self.player1_score > self.player2_score:
-            self.winner = self.match.player1
-        elif self.player2_score > self.player1_score:
-            self.winner = self.match.player2
+        if self.team1_score > self.team2_score:
+            self.winners = self.match.team1
+        elif self.team2_score > self.team1_score:
+            self.winners = self.match.team2
 
         super().save(*args, **kwargs)
 
