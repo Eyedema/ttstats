@@ -21,7 +21,6 @@ def track_match_winner_change(sender, instance, **kwargs):
     """Remember if winner is being set for the first time"""
     if instance.pk:  # Match already exists in DB
         old_match = Match.objects.get(pk=instance.pk)
-        # Compare: was None, now has value?
         instance._winner_just_set = (
             old_match.winner is None and instance.winner is not None
         )
