@@ -28,6 +28,6 @@ docker-compose.override.yml
 
 # Coverage
 .coverage
-.coveragerc
+.coverage
 htmlcov/
 .coverage.*
