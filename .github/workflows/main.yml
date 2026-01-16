@@ -35,16 +35,16 @@ jobs:
         pip install coverage
     
     - name: Run tests with coverage
-      working-directory: ./ttstats
       env:
         DJANGO_SETTINGS_MODULE: ttstats.settings
         SECRET_KEY: "test-secret-key-for-ci-only"
       run: |
+        cd ttstats
         coverage run --rcfile=../.coveragerc manage.py test pingpong --verbosity=2
     
     - name: Generate coverage report
-      working-directory: ./ttstats
       run: |
+        cd ttstats
         echo "## 📊 Coverage Report" >> $GITHUB_STEP_SUMMARY
         echo '```' >> $GITHUB_STEP_SUMMARY
         coverage report >> $GITHUB_STEP_SUMMARY
