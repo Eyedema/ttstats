@@ -1,23 +1,123 @@
-name: Deploy to VPS
+name: CI/CD Pipeline
 
 on:
   push:
     branches: [ "master" ]
+  pull_request:
+    branches: [ "**" ]
 
 jobs:
-  deploy:
+  test:
+    name: Run Tests & Coverage
     runs-on: ubuntu-latest
+    
     steps:
-      - name: Deploy via SSH
-        uses: appleboy/ssh-action@master
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          script: |
-            set -e
-            cd ${{ secrets.WORK_DIR }}
-            git pull
-            docker compose -f compose.prod.yml up -d --build
-            docker compose -f compose.prod.yml exec -T web python manage.py migrate
-            docker compose -f compose.prod.yml exec -T web python manage.py collectstatic --noinput
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install coverage
+    
+    - name: Run tests with coverage
+      working-directory: ./ttstats
+      env:
+        DJANGO_SETTINGS_MODULE: ttstats.settings
+        SECRET_KEY: "test-secret-key-for-ci-only"
+      run: |
+        coverage run --rcfile=../.coveragerc manage.py test pingpong --verbosity=2
+    
+    - name: Generate coverage report
+      working-directory: ./ttstats
+      run: |
+        echo "## 📊 Coverage Report" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+        coverage report >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+        
+        # Print to console
+        echo ""
+        echo "📊 Coverage Report:"
+        echo "===================="
+        coverage report
+        
+        # Generate HTML report
+        coverage html
+        
+        # Extract total coverage
+        COVERAGE=$(coverage report | grep TOTAL | awk '{print $4}')
+        echo ""
+        echo "✅ Total Coverage: $COVERAGE"
+        echo "coverage=$COVERAGE" >> $GITHUB_OUTPUT
+      id: coverage
+    
+    - name: Comment coverage on PR
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const coverage = '${{ steps.coverage.outputs.coverage }}';
+          const comment = `## 📊 Test Coverage Report
+          
+          **Total Coverage:** ${coverage}
+          
+          <details>
+          <summary>View detailed coverage report</summary>
+          
+          Check the Actions tab for the full HTML coverage report artifact.
+          </details>
+          
+          ✅ All tests passed!`;
+          
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: comment
+          });
+    
+    - name: Upload coverage HTML report
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-report
+        path: ttstats/htmlcov/
+        retention-days: 30
+
+  deploy:
+    name: Deploy to VPS
+    needs: test
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Deploy via SSH
+      uses: appleboy/ssh-action@master
+      with:
+        host: ${{ secrets.SSH_HOST }}
+        username: ${{ secrets.SSH_USER }}
+        key: ${{ secrets.SSH_PRIVATE_KEY }}
+        script: |
+          set -e
+          cd ${{ secrets.WORK_DIR }}
+          git pull
+          docker compose -f compose.prod.yml up -d --build
+          docker compose -f compose.prod.yml exec -T web python manage.py migrate
+          docker compose -f compose.prod.yml exec -T web python manage.py collectstatic --noinput
+    
+    - name: Deployment status
+      run: echo "✅ Deployment to VPS completed successfully!"

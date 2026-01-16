@@ -1,7 +1,5 @@
-asgiref
+asgiref==3.11.0
+coverage==7.13.1
 Django==6.0
-sqlparse
-whitenoise
-psycopg2-binary
-gunicorn
-whitenoise
+sqlparse==0.5.5
+whitenoise==6.11.0

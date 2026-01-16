@@ -114,10 +114,7 @@ class Match(models.Model):
             return False
         if user.is_staff or user.is_superuser:
             return True
-        try:
-            return self.player1.user == user or self.player2.user == user
-        except AttributeError:
-            return False
+        return self.player1.user == user or self.player2.user == user
 
     def user_can_view(self, user):
         """Check if user can view this match"""
@@ -144,7 +141,9 @@ class Match(models.Model):
         return self.player1_confirmed & self.player2_confirmed
 
     def should_auto_confirm(self):
-        if not self.winner or self.match_confirmed:
+        if not self.winner:
+            return False
+        if self.match_confirmed:
             return False
         for player in [self.player1, self.player2]:
             if not player.user or not player.user.profile.email_verified:
