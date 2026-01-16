@@ -94,28 +94,28 @@ jobs:
           
           const comment = `## 📊 Test Coverage Report
           
-**Total Coverage:** ${coverage}
+          **Total Coverage:** ${coverage}
 
-\`\`\`
-${coverageReport}
-\`\`\`
+          \`\`\`
+          ${coverageReport}
+          \`\`\`
 
-<details>
-<summary>📥 Download detailed HTML report</summary>
+          <details>
+          <summary>📥 Download detailed HTML report</summary>
 
-The full HTML coverage report is available in the **Artifacts** section of this workflow run.
-Click on "coverage-report" to download and view locally.
+          The full HTML coverage report is available in the **Artifacts** section of this workflow run.
+          Click on "coverage-report" to download and view locally.
 
-</details>
+          </details>
 
-✅ All tests passed!`;
-          
-          github.rest.issues.createComment({
-            issue_number: context.issue.number,
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            body: comment
-          });
+          ✅ All tests passed!`;
+                    
+                    github.rest.issues.createComment({
+                      issue_number: context.issue.number,
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      body: comment
+                    });
     
     - name: Upload coverage HTML report
       uses: actions/upload-artifact@v4
