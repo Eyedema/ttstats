@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [ "**" ]
 
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
 jobs:
   test:
     name: Run Tests & Coverage
@@ -45,24 +50,36 @@ jobs:
     - name: Generate coverage report
       run: |
         cd ttstats
-        echo "## 📊 Coverage Report" >> $GITHUB_STEP_SUMMARY
+        
+        # Generate coverage report and save to file
+        coverage report > coverage_report.txt
+        
+        # Add to GitHub step summary
+        echo "## 📊 Test Coverage Report" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
         echo '```' >> $GITHUB_STEP_SUMMARY
-        coverage report >> $GITHUB_STEP_SUMMARY
+        cat coverage_report.txt >> $GITHUB_STEP_SUMMARY
         echo '```' >> $GITHUB_STEP_SUMMARY
         
-        # Print to console
+        # Extract coverage
+        COVERAGE=$(coverage report | grep TOTAL | awk '{print $4}')
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Total Coverage:** $COVERAGE" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "📥 Download the detailed HTML report from the artifacts section below." >> $GITHUB_STEP_SUMMARY
+        
+        # Generate HTML
+        coverage html
+        
+        # Console output
         echo ""
         echo "📊 Coverage Report:"
         echo "===================="
-        coverage report
-        
-        # Generate HTML report
-        coverage html
-        
-        # Extract total coverage
-        COVERAGE=$(coverage report | grep TOTAL | awk '{print $4}')
+        cat coverage_report.txt
         echo ""
         echo "✅ Total Coverage: $COVERAGE"
+        
+        # Save for next step
         echo "coverage=$COVERAGE" >> $GITHUB_OUTPUT
       id: coverage
     
@@ -71,18 +88,27 @@ jobs:
       uses: actions/github-script@v7
       with:
         script: |
+          const fs = require('fs');
+          const coverageReport = fs.readFileSync('ttstats/coverage_report.txt', 'utf8');
           const coverage = '${{ steps.coverage.outputs.coverage }}';
+          
           const comment = `## 📊 Test Coverage Report
           
-          **Total Coverage:** ${coverage}
-          
-          <details>
-          <summary>View detailed coverage report</summary>
-          
-          Check the Actions tab for the full HTML coverage report artifact.
-          </details>
-          
-          ✅ All tests passed!`;
+**Total Coverage:** ${coverage}
+
+\`\`\`
+${coverageReport}
+\`\`\`
+
+<details>
+<summary>📥 Download detailed HTML report</summary>
+
+The full HTML coverage report is available in the **Artifacts** section of this workflow run.
+Click on "coverage-report" to download and view locally.
+
+</details>
+
+✅ All tests passed!`;
           
           github.rest.issues.createComment({
             issue_number: context.issue.number,
