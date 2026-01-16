@@ -8,35 +8,30 @@ class MatchManager(models.Manager):
     - Regular users: See only matches they participated in
     - Anonymous users: See no matches
     """
-    
+
+    def visible_to(self, user):
+        # No user in context (e.g., management commands) or anonymous user (must see nothing)
+        if not user or not user.is_authenticated:
+            return self.none()
+
+        # Staff users see everything
+        if user.is_staff or user.is_superuser:
+            return self.all()
+
+        player = getattr(user, 'player', None)
+        if not player:
+            return self.none()
+
+        # Regular users see only their matches
+        return self.filter(
+            Q(team1__players=player) | Q(team2__players=player)
+        ).distinct()
+
     def get_queryset(self):
         """Automatically filter matches based on current user"""
         from ttstats.middleware import get_current_user
-        
-        qs = super().get_queryset()
-        user = get_current_user()
-        
-        # No user in context (e.g., management commands)
-        if not user:
-            return qs
-        
-        # Anonymous users see nothing
-        if not user.is_authenticated:
-            return qs.none()
-        
-        # Staff users see everything
-        if user.is_staff or user.is_superuser:
-            return qs
-        
-        # Regular users see only their matches
-        try:
-            user_player = user.player
-            return qs.filter(
-                Q(player1=user_player) | Q(player2=user_player)
-            )
-        except AttributeError:
-            # User has no linked player
-            return qs.none()
+
+        return self.visible_to(get_current_user())
 
 
 class PlayerManager(models.Manager):
@@ -70,28 +65,25 @@ class GameManager(models.Manager):
     """
     Games are visible if their parent match is visible.
     """
-    
+
+    def visible_to(self, user):
+        if not user.is_authenticated:
+            return self.none()
+
+        if user.is_staff or user.is_superuser:
+            return self.all()
+
+        player = getattr(user, 'player', None)
+        if not player:
+            return self.none()
+
+        return self.filter(
+            match__team1__players=player,
+            match__team2__players=player
+        ).distinct()
+
     def get_queryset(self):
         """Filter games based on match visibility"""
         from ttstats.middleware import get_current_user
-        
-        qs = super().get_queryset()
-        user = get_current_user()
-        
-        if not user:
-            return qs
-        
-        if not user.is_authenticated:
-            return qs.none()
-        
-        if user.is_staff or user.is_superuser:
-            return qs
-        
-        # Filter to games from matches user can see
-        try:
-            user_player = user.player
-            return qs.filter(
-                Q(match__player1=user_player) | Q(match__player2=user_player)
-            )
-        except AttributeError:
-            return qs.none()
+
+        return self.visible_to(get_current_user())

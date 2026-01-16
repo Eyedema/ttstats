@@ -1,7 +1,8 @@
 from django.contrib.auth.models import User
+from django.db.models import Count
 
 from .emails import send_match_confirmation_email
-from .models import Match
+from .models import Match, MatchConfirmation
 from django.db.models.signals import post_save, pre_save
 from django.dispatch import receiver
 
@@ -26,16 +27,15 @@ def create_user_profile(sender, instance, created, **kwargs):
 @receiver(pre_save, sender=Match)
 def track_match_winner_change(sender, instance, **kwargs):
     """Remember if winner is being set for the first time"""
-    if instance.pk:  # Match already exists in DB
-        try:
-            old_match = Match.objects.get(pk=instance.pk)
-            # Compare: was None, now has value?
-            instance._winner_just_set = (
-                old_match.winner is None and instance.winner is not None
-            )
-        except Match.DoesNotExist:
-            instance._winner_just_set = False
-    else:  # New match
+    if not instance.pk:
+        instance._winner_just_set = False
+        return
+
+    try:
+        old_match = sender.objects.annotate(winner_count=Count('winner')).get(pk=instance.pk)
+        # M2M: controlla se era vuoto
+        instance._winner_just_set = old_match.winner_count == 0
+    except sender.DoesNotExist:
         instance._winner_just_set = False
 
 
@@ -46,27 +46,20 @@ def handle_match_completion(sender, instance, created, **kwargs):
     if not getattr(instance, "_winner_just_set", False):
         return
 
-    if not instance.winner:
+    if not instance.winner.exists():
         return
 
     # 1. Auto-confirm if needed
     if instance.should_auto_confirm():
-        Match.objects.filter(pk=instance.pk).update(
-            player1_confirmed=True, player2_confirmed=True
+        all_players = (instance.team1.players.all() | instance.team2.players.all())
+        MatchConfirmation.objects.bulk_create(
+            [MatchConfirmation(match=instance, player=player) for player in all_players],
+            ignore_conflicts=True
         )
+        return
 
     # 2. Send confirmation emails (only to verified users who need to confirm)
-    else:
-        if (
-            instance.player1.user
-            and instance.player1.user.email
-            and not instance.player1_confirmed
-        ):
-            send_match_confirmation_email(instance, instance.player1, instance.player2)
-
-        if (
-            instance.player2.user
-            and instance.player2.user.email
-            and not instance.player2_confirmed
-        ):
-            send_match_confirmation_email(instance, instance.player2, instance.player1)
+    pending_players = instance.get_unverified_players()
+    for player in pending_players:
+        if player.user and player.user.email:
+            send_match_confirmation_email(instance, player)

@@ -2,29 +2,42 @@ from django.conf import settings
 from django.core.mail import send_mail
 
 
-def send_match_confirmation_email(match, player, opponent):
+def send_match_confirmation_email(match, player):
     """
     Helper function to send confirmation email to a player.
 
     Args:
         match: Match instance
         player: Player who needs to confirm
-        opponent: Other player in the match
     """
     user = player.user
 
+    player_team = None
+    opponent_team = None
+
+    if player in match.team1.players.all():
+        player_team, opponent_team = match.team1, match.team2
+        score = f"{match.team1_score}-{match.team2_score}"
+        opponent_name = f"{match.team2}"
+    elif player in match.team2.players.all():
+        player_team, opponent_team = match.team2, match.team1
+        score = f"{match.team2_score}-{match.team1_score}"
+        opponent_name = f"{match.team1}"
+    else:
+        return
+
     # Determine result for this player
-    if match.winner == player:
+    if player in match.winner.all():
         result = "won"
         emoji = "🎉"
-        if match.player1 == player:
+        if player in match.team1.players.all():
             score = f"{match.team1_score}-{match.team2_score}"
         else:
             score = f"{match.team2_score}-{match.team1_score}"
     else:
         result = "lost"
         emoji = "💪"
-        if match.player1 == player:
+        if player in match.team1.players.all():
             score = f"{match.team1_score}-{match.team2_score}"
         else:
             score = f"{match.team2_score}-{match.team1_score}"
@@ -38,7 +51,7 @@ def send_match_confirmation_email(match, player, opponent):
 
     message = f"""Hi {player.name},
 
-Your match against {opponent.name} is complete!
+Your match against {opponent_team} is complete!
 
 📊 Match Summary:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -62,7 +75,7 @@ Table Tennis Tracker Team
     <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <h2>{emoji} Match Complete!</h2>
         <p>Hi {player.name},</p>
-        <p>Your match against <strong>{opponent.name}</strong> is complete!</p>
+        <p>Your match against <strong>{opponent_team}</strong> is complete!</p>
         
         <div style="background: #f3f4f6; padding: 20px; border-radius: 8px; margin: 20px 0;">
             <h3 style="margin-top: 0;">📊 Match Summary</h3>
@@ -91,7 +104,7 @@ Table Tennis Tracker Team
     # Print to console for development
     print(f"\n{'=' * 60}")
     print(f"📧 MATCH CONFIRMATION EMAIL TO: {user.email}")
-    print(f"   Match: {match.player1} vs {match.player2}")
+    print(f"   Match: {match.team1} vs {match.team2}")
     print(f"   Result: {player.name} {result} {score}")
     print(f"   URL: {confirmation_url}")
     print(f"{'=' * 60}\n")

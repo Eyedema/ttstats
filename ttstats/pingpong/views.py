@@ -65,95 +65,75 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
         context = super().get_context_data(**kwargs)
 
         player = self.get_object()
-        matches = (
-            Match.objects.filter(
-                Q(team1__players=player) | Q(team2__players=player)
-            )
-            .filter(
-                confirmations__match__team1__players__isnull=False,
-                confirmations__match__team2__players__isnull=False
-            )
-            .distinct()
-            .select_related('team1', 'team2')
-            .prefetch_related('team1__players', 'team2__players', 'confirmations__player')
-            .order_by("-date_played")
-        )
 
-        # Annotate matches with game counts for efficiency
-        matches_with_scores = matches.annotate(
-            team1_score=Count("games",
-                filter=Q(games__winner__in=F('team1__players'))
-            ),
-            team2_score=Count("games",
-                filter=Q(games__winner__in=F('team2__players'))
-            ),
-        )
-
-        if matches_with_scores.exists():
-            first_match = matches_with_scores.first()
-            print(f"DEBUG: Match {first_match.pk}")
-            print(f"  team1_score property: {first_match.team1_score}")
-            print(f"  team1_score property: {first_match.team2_score}")
+        # All player matches
+        matches = Match.objects.filter(
+            Q(team1__players=player) | Q(team2__players=player),
+            match_confirmed=True
+        ).select_related('team1', 'team2').prefetch_related(
+            'team1__players',
+            'team2__players',
+            'winner'
+        ).order_by('-date_played').distinct()
 
         total_matches = matches.count()
-        wins = matches.filter(winners=player).count()
+
+        # Won matches
+        wins = matches.filter(
+            winner__players=player
+        ).count()
         losses = total_matches - wins
 
         # Calculate current streak
-        current_streak = 0
-        streak_type = None
-        longest_win_streak = 0
-        longest_loss_streak = 0
-        temp_win_streak = 0
-        temp_loss_streak = 0
+        stats = self._calculate_streaks(matches)
 
-        for match in matches:
-            player_won = match.winners.filter(pk=player.pk).exists()
-
-            if player_won:
-                if streak_type == "loss" or streak_type is None:
-                    if streak_type == "loss":
-                        longest_loss_streak = max(longest_loss_streak, temp_loss_streak)
-                        temp_loss_streak = 0
-                    current_streak = 1
-                    streak_type = "win"
-                    temp_win_streak = 1
-                else:
-                    current_streak += 1
-                    temp_win_streak += 1
-            elif match.winner:  # It's a loss (winner exists but isn't this player)
-                if streak_type == "win" or streak_type is None:
-                    if streak_type == "win":
-                        longest_win_streak = max(longest_win_streak, temp_win_streak)
-                        temp_win_streak = 0
-                    current_streak = 1
-                    streak_type = "loss"
-                    temp_loss_streak = 1
-                else:
-                    current_streak += 1
-                    temp_loss_streak += 1
-
-        # Don't forget the final streak
-        if streak_type == "win":
-            longest_win_streak = max(longest_win_streak, temp_win_streak)
-        elif streak_type == "loss":
-            longest_loss_streak = max(longest_loss_streak, temp_loss_streak)
-
-        context.update(
-            {
-                "matches": matches_with_scores,  # Use annotated matches
-                "total_matches": total_matches,
-                "wins": wins,
-                "losses": losses,
-                "win_rate": (wins / total_matches * 100) if total_matches > 0 else 0,
-                "current_streak": current_streak,
-                "streak_type": streak_type,
-                "longest_win_streak": longest_win_streak,
-                "longest_loss_streak": longest_loss_streak,
-            }
-        )
+        context.update({
+            'matches': matches,  # Limit per performance
+            'total_matches': total_matches,
+            'wins': wins,
+            'losses': losses,
+            'win_rate': (wins / total_matches * 100) if total_matches > 0 else 0,
+            'current_streak': stats['current_streak'],
+            'streak_type': stats['streak_type'],
+            'longest_win_streak': stats['longest_win_streak'],
+            'longest_loss_streak': stats['longest_loss_streak'],
+        })
 
         return context
+
+    def _calculate_streaks(self, matches):
+        current_streak = streak_type = 0
+        longest_win = longest_loss = win_streak = loss_streak = 0
+
+        for match in matches:
+            player_won = match.winner.filter(players=self.object).exists()
+
+            if player_won:
+                if streak_type != 'win':
+                    longest_loss = max(longest_loss, loss_streak)
+                    loss_streak = win_streak = 0
+                    streak_type = 'win'
+                win_streak += 1
+                current_streak = win_streak
+            elif match.winner.exists():  # Loss
+                if streak_type != 'loss':
+                    longest_win = max(longest_win, win_streak)
+                    win_streak = loss_streak = 0
+                    streak_type = 'loss'
+                loss_streak += 1
+                current_streak = loss_streak
+
+        if streak_type == 'win':
+            longest_win = max(longest_win, win_streak)
+        elif streak_type == 'loss':
+            longest_loss = max(longest_loss, loss_streak)
+
+        return {
+            'current_streak': current_streak,
+            'streak_type': streak_type,
+            'longest_win_streak': longest_win,
+            'longest_loss_streak': longest_loss,
+        }
 
 
 class DashboardView(LoginRequiredMixin, TemplateView):
@@ -166,7 +146,7 @@ class DashboardView(LoginRequiredMixin, TemplateView):
 
         # Get statistics
         total_players = Player.objects.count()
-        total_matches = Match.objects.count()
+        total_matches = Match.objects.filter(match_confirmed=True).count()
         recent_matches = Match.objects.all().order_by("-date_played")[:5]
 
         context.update(
@@ -223,9 +203,9 @@ class GameCreateView(LoginRequiredMixin, CreateView):
         self.match = get_object_or_404(Match, pk=kwargs["match_pk"])
 
         # Check if match is already complete
-        if self.match.winners:
+        if self.match.winner:
             messages.warning(
-                request, f"This match is already complete. {self.match.winners} won!"
+                request, f"This match is already complete. {self.match.winner} won!"
             )
             return redirect("pingpong:match_detail", pk=self.match.pk)
 
@@ -257,9 +237,9 @@ class GameCreateView(LoginRequiredMixin, CreateView):
         self.match.refresh_from_db()
 
         # Check if match is now complete
-        if self.match.winners:
+        if self.match.winner:
             # Check if it was auto-confirmed by signals.py logic
-            if self.match.is_fully_confirmed:
+            if self.match.match_confirmed:
                 unverified_players = self.match.get_unverified_players()
                 if unverified_players:
                     messages.warning(
@@ -268,7 +248,7 @@ class GameCreateView(LoginRequiredMixin, CreateView):
                     )
             messages.success(
                 self.request,
-                f"🎉 Match Complete! {self.match.winners} wins {self.match.team1_score}-{self.match.team2_score}!",
+                f"🎉 Match Complete! {self.match.winner} wins {self.match.team1_score}-{self.match.team2_score}!",
             )
             # Always go to match detail if match is complete, regardless of button pressed
             return redirect("pingpong:match_detail", pk=self.match.pk)
@@ -429,14 +409,14 @@ class MatchUpdateView(LoginRequiredMixin, UpdateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["locations"] = Location.objects.all()
-        context["is_complete"] = bool(self.object.winners)
+        context["is_complete"] = bool(self.object.winner)
         return context
 
     def get_success_url(self):
         return reverse_lazy("pingpong:match_detail", kwargs={"pk": self.object.pk})
 
     def form_valid(self, form):
-        if self.object.winners:
+        if self.object.winner:
             messages.success(self.request, "Match details updated successfully!")
         else:
             messages.success(self.request, "Match updated successfully!")
@@ -520,8 +500,8 @@ class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
             if matches.exists():
                 # Basic stats
                 total_matches = matches.count()
-                player1_match_wins = matches.filter(winners=player1).count()
-                player2_match_wins = matches.filter(winners=player2).count()
+                player1_match_wins = matches.filter(winner=player1).count()
+                player2_match_wins = matches.filter(winner=player2).count()
 
                 # Game-level analysis
                 all_games = []
