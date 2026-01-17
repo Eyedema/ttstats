@@ -93,7 +93,7 @@ class Match(models.Model):
     is_double = models.BooleanField(default=False)
 
     team1 = models.ForeignKey(
-        Team, on_delete=models.CASCADE, related_name="matches_as_team11"
+        Team, on_delete=models.CASCADE, related_name="matches_as_team1"
     )
     team2 = models.ForeignKey(
         Team, on_delete=models.CASCADE, related_name="matches_as_team2"
