@@ -29,13 +29,13 @@
 
             <!-- Calendar Navigation -->
             <div class="flex items-center justify-between mb-6">
-                <a href="?month={{ prev_month.month }}&year={{ prev_month.year }}" 
+                <a href="{% url 'pingpong:calendar' %}?month={{ prev_month.month }}&year={{ prev_month.year }}"
                    class="inline-flex items-center gap-2 rounded-md border bg-white px-4 py-2 text-sm font-medium hover:bg-secondary transition-colors">
                     <img src="{% static 'pingpong/icons/chevron-left.svg' %}" class="w-4 h-4" alt="">
                     Previous
                 </a>
                 <h3 class="text-lg font-semibold">{{ current_date|date:"F Y" }}</h3>
-                <a href="?month={{ next_month.month }}&year={{ next_month.year }}" 
+                <a href="{% url 'pingpong:calendar' %}?month={{ next_month.month }}&year={{ next_month.year }}"
                    class="inline-flex items-center gap-2 rounded-md border bg-white px-4 py-2 text-sm font-medium hover:bg-secondary transition-colors">
                     Next
                     <img src="{% static 'pingpong/icons/chevron-right.svg' %}" class="w-4 h-4" alt="">
@@ -61,10 +61,16 @@
                                 {{ day.day }}
                             </div>
                             {% for match in day.matches %}
-                            <a href="{% if match.is_scheduled %}{% url 'pingpong:scheduled_match_detail' match.pk %}{% else %}{% url 'pingpong:match_detail' match.pk %}{% endif %}" 
-                               class="block text-xs p-1 mb-1 rounded {% if match.is_scheduled %}bg-primary/10 text-primary hover:bg-primary/20{% else %}bg-secondary hover:bg-secondary/80{% endif %} transition-colors">
+                            {% if match.is_scheduled %}
+                            <div class="block text-xs p-1 mb-1 rounded bg-primary/10 text-primary" title="Scheduled: {{ match.player1 }} vs {{ match.player2 }}">
+                                {{ match.player1.name|slice:":10" }} vs {{ match.player2.name|slice:":10" }}
+                            </div>
+                            {% else %}
+                            <a href="{% url 'pingpong:match_detail' match.pk %}"
+                               class="block text-xs p-1 mb-1 rounded bg-secondary hover:bg-secondary/80 transition-colors">
                                 {{ match.player1.name|slice:":10" }} vs {{ match.player2.name|slice:":10" }}
                             </a>
+                            {% endif %}
                             {% endfor %}
                         </div>
                         {% endfor %}
@@ -97,19 +103,18 @@
         </div>
         <div class="space-y-3">
             {% for match in upcoming_matches %}
-            <a href="{% url 'pingpong:scheduled_match_detail' match.pk %}" 
-               class="block p-4 rounded-lg border hover:bg-secondary transition-colors">
+            <div class="block p-4 rounded-lg border bg-primary/5">
                 <div class="flex items-center justify-between">
                     <div>
                         <p class="font-medium">{{ match.player1 }} vs {{ match.player2 }}</p>
                         <p class="text-sm text-muted-foreground">
                             {{ match.scheduled_date|date:"F d, Y" }} at {{ match.scheduled_time|time:"H:i" }}
-                            {% if match.location %} • {{ match.location }}{% endif %}
+                            {% if match.location %} - {{ match.location }}{% endif %}
                         </p>
                     </div>
-                    <img src="{% static 'pingpong/icons/chevron-right.svg' %}" class="w-5 h-5" alt="">
+                    <span class="text-xs font-medium text-primary bg-primary/10 px-2 py-1 rounded">Scheduled</span>
                 </div>
-            </a>
+            </div>
             {% endfor %}
         </div>
     </div>

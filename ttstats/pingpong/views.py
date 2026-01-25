@@ -909,10 +909,10 @@ class ScheduledMatchCreateView(LoginRequiredMixin, CreateView):
                 return self.form_invalid(form)
 
         # Save the scheduled match
-        response = super().form_valid(form)
+        self.object = form.save()
+        scheduled_match = self.object
 
         # Send notification emails to both players
-        scheduled_match = self.object
         send_scheduled_match_email(scheduled_match, player1, player2)
         send_scheduled_match_email(scheduled_match, player2, player1)
 
@@ -924,7 +924,11 @@ class ScheduledMatchCreateView(LoginRequiredMixin, CreateView):
             self.request,
             f"Match scheduled for {scheduled_match.scheduled_date.strftime('%B %d, %Y')}! Notifications sent to both players.",
         )
-        return response
+
+        # Redirect to calendar showing the month of the scheduled match
+        return redirect(
+            f"{reverse_lazy('pingpong:calendar')}?year={scheduled_match.scheduled_date.year}&month={scheduled_match.scheduled_date.month}"
+        )
 
 
 class CalendarView(LoginRequiredMixin, TemplateView):
@@ -943,9 +947,19 @@ class CalendarView(LoginRequiredMixin, TemplateView):
         year = int(self.request.GET.get("year", today.year))
         month = int(self.request.GET.get("month", today.month))
 
-        # Get the calendar for this month
-        cal = calendar.Calendar(firstweekday=0)  # Monday first
-        month_days = cal.monthdayscalendar(year, month)
+        # Create current date for the selected month
+        current_date = date(year, month, 1)
+
+        # Calculate previous/next month as date objects (for template .month/.year access)
+        if month == 1:
+            prev_month = date(year - 1, 12, 1)
+        else:
+            prev_month = date(year, month - 1, 1)
+
+        if month == 12:
+            next_month = date(year + 1, 1, 1)
+        else:
+            next_month = date(year, month + 1, 1)
 
         # Get user's player
         try:
@@ -970,45 +984,46 @@ class CalendarView(LoginRequiredMixin, TemplateView):
         for sm in scheduled_matches:
             day = sm.scheduled_date.day
             if day not in matches_by_day:
-                matches_by_day[day] = {"scheduled": [], "completed": []}
-            matches_by_day[day]["scheduled"].append(sm)
+                matches_by_day[day] = []
+            sm.is_scheduled = True
+            matches_by_day[day].append(sm)
 
         for m in completed_matches:
             day = m.date_played.day
             if day not in matches_by_day:
-                matches_by_day[day] = {"scheduled": [], "completed": []}
-            matches_by_day[day]["completed"].append(m)
+                matches_by_day[day] = []
+            m.is_scheduled = False
+            matches_by_day[day].append(m)
 
-        # Calculate previous/next month
-        if month == 1:
-            prev_month, prev_year = 12, year - 1
-        else:
-            prev_month, prev_year = month - 1, year
-
-        if month == 12:
-            next_month, next_year = 1, year + 1
-        else:
-            next_month, next_year = month + 1, year
+        # Build calendar weeks structure for the template
+        cal = calendar.Calendar(firstweekday=6)  # Sunday first
+        calendar_weeks = []
+        for week in cal.monthdatescalendar(year, month):
+            week_data = []
+            for day_date in week:
+                day_matches = matches_by_day.get(day_date.day, []) if day_date.month == month else []
+                week_data.append({
+                    'day': day_date.day,
+                    'date': day_date,
+                    'is_other_month': day_date.month != month,
+                    'is_today': day_date == today,
+                    'matches': day_matches,
+                })
+            calendar_weeks.append(week_data)
 
         # Get upcoming scheduled matches (all future)
-        upcoming_scheduled = ScheduledMatch.objects.filter(
+        upcoming_matches = ScheduledMatch.objects.filter(
             scheduled_date__gte=today
         ).order_by("scheduled_date", "scheduled_time")[:5]
 
         context.update(
             {
-                "year": year,
-                "month": month,
-                "month_name": calendar.month_name[month],
-                "month_days": month_days,
-                "matches_by_day": matches_by_day,
-                "today": today,
+                "current_date": current_date,
                 "prev_month": prev_month,
-                "prev_year": prev_year,
                 "next_month": next_month,
-                "next_year": next_year,
-                "scheduled_matches": scheduled_matches,
-                "upcoming_scheduled": upcoming_scheduled,
+                "today": today,
+                "calendar_weeks": calendar_weeks,
+                "upcoming_matches": upcoming_matches,
                 "user_player": user_player,
             }
         )

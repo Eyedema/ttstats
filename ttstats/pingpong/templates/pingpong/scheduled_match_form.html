@@ -94,33 +94,55 @@
                     </div>
                 </div>
 
-                <!-- Date Played Field -->
-                    <div class="space-y-2">
-                        <label class="text-sm font-medium leading-none" for="id_date_played">
-                            Date & Time <span class="text-destructive">*</span>
-                        </label>
-                        <input 
-                            type="datetime-local" 
-                            name="date_played" 
-                            id="id_date_played"
-                            value="{% if form.date_played.value %}{{ form.date_played.value|date:'Y-m-d\TH:i' }}{% endif %}"
-                            class="flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.date_played.errors %}border-destructive{% endif %}" 
-                            required
-                        />
-                        {% if form.date_played.errors %}
-                        <p class="text-xs md:text-sm text-destructive">{{ form.date_played.errors.0 }}</p>
-                        {% else %}
-                        <p class="text-xs md:text-sm text-muted-foreground">When the match was played</p>
-                        {% endif %}
+                <!-- Date & Time Fields -->
+                <div class="space-y-4">
+                    <h3 class="text-sm font-medium text-muted-foreground uppercase tracking-wider">When</h3>
+                    <div class="grid gap-4 md:grid-cols-2">
+                        <div class="space-y-2">
+                            <label class="text-sm font-medium leading-none" for="id_scheduled_date">
+                                Date <span class="text-destructive">*</span>
+                            </label>
+                            <input
+                                type="date"
+                                name="scheduled_date"
+                                id="id_scheduled_date"
+                                value="{{ form.scheduled_date.value|date:'Y-m-d' }}"
+                                class="flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.scheduled_date.errors %}border-destructive{% endif %}"
+                                required
+                            />
+                            {% if form.scheduled_date.errors %}
+                            <p class="text-xs md:text-sm text-destructive">{{ form.scheduled_date.errors.0 }}</p>
+                            {% endif %}
+                        </div>
+                        <div class="space-y-2">
+                            <label class="text-sm font-medium leading-none" for="id_scheduled_time">
+                                Time <span class="text-destructive">*</span>
+                            </label>
+                            <input
+                                type="time"
+                                name="scheduled_time"
+                                id="id_scheduled_time"
+                                value="{{ form.scheduled_time.value|time:'H:i' }}"
+                                class="flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.scheduled_time.errors %}border-destructive{% endif %}"
+                                required
+                            />
+                            {% if form.scheduled_time.errors %}
+                            <p class="text-xs md:text-sm text-destructive">{{ form.scheduled_time.errors.0 }}</p>
+                            {% endif %}
+                        </div>
                     </div>
+                </div>
 
-                <div class="space-y-2">
+                <!-- Location Section -->
+                <div class="space-y-4">
+                    <h3 class="text-sm font-medium text-muted-foreground uppercase tracking-wider">Where</h3>
+                    <div class="space-y-2">
                         <div class="flex items-center justify-between">
                             <label class="text-sm font-medium leading-none" for="id_location">Location</label>
                             <span class="text-xs text-muted-foreground">Optional</span>
                         </div>
-                        <select 
-                            name="location" 
+                        <select
+                            name="location"
                             id="id_location"
                             class="flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.location.errors %}border-destructive{% endif %}"
                         >
@@ -134,28 +156,32 @@
                         {% if form.location.errors %}
                         <p class="text-xs md:text-sm text-destructive">{{ form.location.errors.0 }}</p>
                         {% else %}
-                        <p class="text-xs md:text-sm text-muted-foreground">Where the match took place</p>
+                        <p class="text-xs md:text-sm text-muted-foreground">Where the match will take place</p>
                         {% endif %}
                     </div>
+                </div>
 
                 <!-- Notes Section -->
-                <div class="space-y-2">
-                    <div class="flex items-center justify-between">
-                        <label for="{{ form.notes.id_for_label }}" class="text-sm font-medium leading-none">Notes</label>
-                        <span class="text-xs text-muted-foreground">Optional</span>
+                <div class="space-y-4">
+                    <h3 class="text-sm font-medium text-muted-foreground uppercase tracking-wider">Additional Info</h3>
+                    <div class="space-y-2">
+                        <div class="flex items-center justify-between">
+                            <label for="{{ form.notes.id_for_label }}" class="text-sm font-medium leading-none">Notes</label>
+                            <span class="text-xs text-muted-foreground">Optional</span>
+                        </div>
+                        <textarea
+                            name="notes"
+                            id="{{ form.notes.id_for_label }}"
+                            rows="3"
+                            class="flex w-full rounded-md border border-input bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.notes.errors %}border-destructive{% endif %}"
+                            placeholder="Add any additional details about the match..."
+                        >{{ form.notes.value|default:'' }}</textarea>
+                        {% if form.notes.errors %}
+                        <p class="text-sm text-destructive">{{ form.notes.errors.0 }}</p>
+                        {% else %}
+                        <p class="text-sm text-muted-foreground">Any special arrangements or information about this match</p>
+                        {% endif %}
                     </div>
-                    <textarea 
-                        name="notes" 
-                        id="{{ form.notes.id_for_label }}"
-                        rows="3"
-                        class="flex w-full rounded-md border border-input bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.notes.errors %}border-destructive{% endif %}"
-                        placeholder="Add any additional details about the match..."
-                    >{{ form.notes.value|default:'' }}</textarea>
-                    {% if form.notes.errors %}
-                    <p class="text-sm text-destructive">{{ form.notes.errors.0 }}</p>
-                    {% else %}
-                    <p class="text-sm text-muted-foreground">Any special arrangements or information about this match</p>
-                    {% endif %}
                 </div>
 
                 <div class="border-t pt-6"></div>
