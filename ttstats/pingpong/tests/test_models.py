@@ -261,11 +261,11 @@ class MatchModelTest(TestCase):
         
         # Only player1 confirmed
         match.confirmations.set([self.player1])
-        match.save()
+        match.refresh_from_db()
         self.assertFalse(match.match_confirmed)
         
         match.confirmations.set([self.player1, self.player2])
-        match.save()
+        match.refresh_from_db()
         self.assertTrue(match.match_confirmed)
 
     def test_doubles_match_confirmed_property(self):
@@ -279,22 +279,22 @@ class MatchModelTest(TestCase):
 
         # Only player1 confirmed
         match.confirmations.set([self.player1])
-        match.save()
+        match.refresh_from_db()
         self.assertFalse(match.match_confirmed)
 
         # Only team 1 confirmed
         match.confirmations.set([self.player1, self.player2])
-        match.save()
+        match.refresh_from_db()
         self.assertFalse(match.match_confirmed)
 
         # Only team 1 + player 3 confirmed
         match.confirmations.set([self.player1, self.player2, self.player3])
-        match.save()
+        match.refresh_from_db()
         self.assertFalse(match.match_confirmed)
 
         # Everyone confirmed
         match.confirmations.set([self.player1, self.player2, self.player3, self.player4])
-        match.save()
+        match.refresh_from_db()
         self.assertTrue(match.match_confirmed)
     
     def test_player_scores_empty_match(self):
@@ -651,7 +651,7 @@ class MatchModelTest(TestCase):
         )
 
         match.confirmations.set([self.player1, self.player2])
-        match.save()
+        match.refresh_from_db()
 
         self.assertFalse(match.should_auto_confirm())
 
@@ -664,7 +664,7 @@ class MatchModelTest(TestCase):
         )
 
         match.confirmations.set([self.player1, self.player2, self.player3, self.player4])
-        match.save()
+        match.refresh_from_db()
 
         self.assertFalse(match.should_auto_confirm())
     

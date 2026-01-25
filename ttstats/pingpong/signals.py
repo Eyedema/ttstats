@@ -46,7 +46,7 @@ def handle_match_completion(sender, instance, created, **kwargs):
     if not getattr(instance, "_winner_just_set", False):
         return
 
-    if not instance.winner.exists():
+    if not instance.winner:
         return
 
     # 1. Auto-confirm if needed

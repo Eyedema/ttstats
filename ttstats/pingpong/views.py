@@ -248,7 +248,7 @@ class GameCreateView(LoginRequiredMixin, CreateView):
                     )
             messages.success(
                 self.request,
-                f"🎉 Match Complete! {self.match.winner} wins {self.match.team1_score}-{self.match.team2_score}!",
+                f"🎉 Match Complete! {self.match.winner} wins {self.match.team1_score}-{self.match.team2_score}!", #TODO: "wins", but what if it is a team with 2 names?
             )
             # Always go to match detail if match is complete, regardless of button pressed
             return redirect("pingpong:match_detail", pk=self.match.pk)
@@ -433,17 +433,26 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
 
         player_stats = Player.objects.annotate(
             total_matches=Count(
-                'team1__matches',
-                filter=Q(team1__matches__confirmations__isnull=False),
-                distinct=True
+                'teams__matches_as_team1',
+                filter=Q(teams__matches_as_team1__team1_confirmed=True,
+                         teams__matches_as_team1__team2_confirmed=True),
+                distinct=True,
             ) + Count(
-                'team2__matches',
-                filter=Q(team2__matches__confirmations__isnull=False),
-                distinct=True
+                'teams__matches_as_team2',
+                filter=Q(teams__matches_as_team2__team1_confirmed=True,
+                         teams__matches_as_team2__team2_confirmed=True),
+                distinct=True,
             ),
-            wins=Count('matches_won'),
-            total_games=Sum('team1__matches__games__id', distinct=True) +
-                        Sum('team2__matches__games__id', distinct=True)
+            wins=Count(
+                'teams__matches_as_team1',
+                filter=Q(teams__matches_as_team1__winner__players__id=F('id'))
+                       | Q(teams__matches_as_team2__winner__players__id=F('id')),
+                distinct=True,
+            ),
+            total_games=(
+                    Count('teams__matches_as_team1__games', distinct=True)
+                    + Count('teams__matches_as_team2__games', distinct=True)
+            )
         ).select_related('user')
 
         for player in player_stats:
@@ -480,17 +489,24 @@ class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
 
             # Get all matches between these players
             matches = (
-                Match.objects.filter(
+                Match.objects.annotate(
+                    team1_player_count=Count('team1__players', distinct=True),
+                    team2_player_count=Count('team2__players', distinct=True)
+                )
+                .filter(
                     # Only matches between these two exact players
-                    team1__players=player1,
-                    team2__players=player2,
-                    team1__players__count=1,
-                    team2__players__count=1
+                    team1_player_count=1,
+                    team2_player_count=1
+                )
+                .filter(
+                    # Check if there are only the two selected players in the match, no one else
+                    Q(team1__players=player1, team2__players=player2) |
+                    Q(team1__players=player2, team2__players=player1)
                 )
                 .filter(
                     # Completamente confermati
-                    confirmations__match__team1__players__isnull=False,
-                    confirmations__match__team2__players__isnull=False
+                    team1_confirmed=True,
+                    team2_confirmed=True
                 )
                 .distinct()
                 .prefetch_related("games")
@@ -500,8 +516,14 @@ class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
             if matches.exists():
                 # Basic stats
                 total_matches = matches.count()
-                player1_match_wins = matches.filter(winner=player1).count()
-                player2_match_wins = matches.filter(winner=player2).count()
+                player1_match_wins = matches.filter(
+                    Q(team1__players=player1, winner__players=player1) |
+                    Q(team2__players=player1, winner__players=player1)
+                ).count()
+                player2_match_wins = matches.filter(
+                    Q(team1__players=player2, winner__players=player2) |
+                    Q(team2__players=player2, winner__players=player2)
+                ).count()
 
                 # Game-level analysis
                 all_games = []
@@ -516,7 +538,7 @@ class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
                     games = match.games.all()
                     for game in games:
                         # Determine scores based on who was player1 in the match
-                        if match.player1 == player1:
+                        if match.team1.players.first() == player1:
                             p1_score = game.team1_score
                             p2_score = game.team2_score
                         else:
@@ -593,25 +615,25 @@ class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
                 # Recent form (last 5 matches)
                 recent_matches = list(matches.order_by("-date_played")[:5])
                 player1_recent_wins = sum(
-                    1 for m in recent_matches if m.winner == player1
+                    1 for m in recent_matches if m.winner.players.first() == player1
                 )
                 player2_recent_wins = sum(
-                    1 for m in recent_matches if m.winner == player2
+                    1 for m in recent_matches if m.winner.players.first() == player2
                 )
 
                 # Match margins (for average margin per match chart)
                 match_margins = []
                 for match in matches:
-                    if match.winner == player1:
+                    if match.winner.players.first() == player1:
                         margin = (
                             match.team1_score - match.team2_score
-                            if match.player1 == player1
+                            if match.team1.players.first() == player1
                             else match.team2_score - match.team1_score
                         )
-                    elif match.winner == player2:
+                    elif match.winner.players.first() == player2:
                         margin = -(
                             match.team1_score - match.team2_score
-                            if match.player1 == player1
+                            if match.team1.players.first() == player1
                             else match.team2_score - match.team1_score
                         )
                     else:
