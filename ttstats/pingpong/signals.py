@@ -15,13 +15,6 @@ def create_user_profile(sender, instance, created, **kwargs):
         userprofile = UserProfile.objects.create(user=instance)
         userprofile.create_verification_token()
         userprofile.save()
-    else:
-        # Ensure profile exists even for existing users
-        # (in case they were created before signal was added)
-        if not hasattr(instance, 'profile'):
-            userprofile = UserProfile.objects.create(user=instance)
-            userprofile.create_verification_token()
-            userprofile.save()
 
 
 @receiver(pre_save, sender=Match)
@@ -44,9 +37,6 @@ def handle_match_completion(sender, instance, created, **kwargs):
     """Handle match completion tasks"""
     # Only process if winner was just set
     if not getattr(instance, "_winner_just_set", False):
-        return
-
-    if not instance.winner:
         return
 
     # 1. Auto-confirm if needed
