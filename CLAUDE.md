@@ -32,9 +32,9 @@ docker compose -f compose.prod.yml up --build -d
 ├── ttstats/                          # Django project root
 │   ├── manage.py                     # Django CLI
 │   ├── pingpong/                     # Main application
-│   │   ├── models.py                 # Database models (5 models)
-│   │   ├── views.py                  # View classes (14 views, ~860 lines)
-│   │   ├── forms.py                  # Form definitions (3 forms)
+│   │   ├── models.py                 # Database models (6 models)
+│   │   ├── views.py                  # View classes (16 views, ~1000 lines)
+│   │   ├── forms.py                  # Form definitions (4 forms)
 │   │   ├── urls.py                   # URL routing
 │   │   ├── signals.py                # Django signals
 │   │   ├── managers.py               # Custom QuerySet managers
@@ -109,6 +109,15 @@ docker compose -f compose.prod.yml up --build -d
 # Auto-created via signal when User is created
 ```
 
+### ScheduledMatch (`pingpong/models.py`)
+```python
+# Fields: player1, player2, scheduled_date, scheduled_time, location, notes,
+#         created_at, created_by, notification_sent
+# Methods: user_can_view(user), user_can_edit(user), scheduled_datetime (property)
+# Manager: ScheduledMatchManager (row-level security based on user)
+# Ordering: by scheduled_date, scheduled_time
+```
+
 ## URL Routes
 
 ### Authentication
@@ -126,6 +135,12 @@ docker compose -f compose.prod.yml up --build -d
 | GET | `/pingpong/` | DashboardView | Main dashboard |
 | GET | `/pingpong/leaderboard/` | LeaderboardView | Player rankings |
 | GET | `/pingpong/head-to-head/` | HeadToHeadStatsView | Player comparison |
+| GET | `/pingpong/calendar/` | CalendarView | Calendar with scheduled/past matches |
+
+### Scheduled Matches
+| Method | URL | View | Description |
+|--------|-----|------|-------------|
+| GET/POST | `/pingpong/matches/schedule/` | ScheduledMatchCreateView | Schedule future match |
 
 ### Players
 | Method | URL | View | Description |
@@ -169,6 +184,8 @@ docker compose -f compose.prod.yml up --build -d
 | ~780 | `CustomLoginView` | LoginView | Custom login logic |
 | ~820 | `EmailVerifyView` | View | Email verification |
 | ~850 | `match_confirm` | Function | Confirm match participation |
+| ~870 | `ScheduledMatchCreateView` | CreateView | Schedule future match |
+| ~960 | `CalendarView` | TemplateView | Calendar view with matches |
 
 ## Forms Reference (`pingpong/forms.py`)
 
@@ -185,6 +202,11 @@ docker compose -f compose.prod.yml up --build -d
 - Combined User + Player creation
 - Generates email verification token
 - Auto-creates Player record linked to User
+
+### ScheduledMatchForm
+- Validates player1 != player2
+- Validates scheduled_date is today or in the future
+- Links to ScheduledMatch model
 
 ## Signals (`pingpong/signals.py`)
 
@@ -215,6 +237,8 @@ docker compose -f compose.prod.yml up --build -d
 | `game_form.html` | ~266 | Score entry |
 | `head_to_head.html` | ~536 | Player comparison |
 | `leaderboard.html` | ~200 | Rankings table |
+| `calendar.html` | ~185 | Calendar view with scheduled matches |
+| `scheduled_match_form.html` | ~140 | Schedule a future match |
 
 ## Business Logic
 
@@ -239,6 +263,13 @@ docker compose -f compose.prod.yml up --build -d
 3. Email sent with verification link
 4. User clicks link -> verified & auto-logged in
 5. Unverified users cannot log in
+
+### Scheduled Matches
+1. User clicks "Create Match" dropdown -> "Schedule Match"
+2. Fills in date, time, location, and opponent
+3. Both players receive email notification
+4. Match appears in calendar view
+5. When match is played, user records it from Matches page
 
 ## Testing
 
@@ -342,9 +373,10 @@ python manage.py migrate                     # Apply migrations
 python manage.py showmigrations              # List migrations
 ```
 
-Current migrations (7 total):
+Current migrations (8 total):
 1. `0001_initial` - Initial schema
 2. `0002-0004` - Location field adjustments
 3. `0005` - best_of field adjustment
 4. `0006` - Match confirmation fields
 5. `0007` - UserProfile model
+6. `0008` - ScheduledMatch model

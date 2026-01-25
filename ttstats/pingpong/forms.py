@@ -2,7 +2,7 @@ from django import forms
 from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.models import User
 
-from .models import Game, Match, Player
+from .models import Game, Match, Player, ScheduledMatch
 
 
 class MatchForm(forms.ModelForm):
@@ -111,5 +111,57 @@ class PlayerRegistrationForm(UserCreationForm):
                 nickname=self.cleaned_data.get('nickname', ''),
                 playing_style=self.cleaned_data['playing_style']
             )
-        
+
         return user
+
+
+class ScheduledMatchForm(forms.ModelForm):
+    """Form for scheduling a future match"""
+
+    class Meta:
+        model = ScheduledMatch
+        fields = ['player1', 'player2', 'scheduled_date', 'scheduled_time', 'location', 'notes']
+        widgets = {
+            'scheduled_date': forms.DateInput(attrs={
+                'type': 'date',
+                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
+            }),
+            'scheduled_time': forms.TimeInput(attrs={
+                'type': 'time',
+                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
+            }),
+            'player1': forms.Select(attrs={
+                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
+            }),
+            'player2': forms.Select(attrs={
+                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
+            }),
+            'location': forms.Select(attrs={
+                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
+            }),
+            'notes': forms.Textarea(attrs={
+                'class': 'flex min-h-[80px] w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm',
+                'rows': 3,
+                'placeholder': 'Any additional notes about the scheduled match...'
+            }),
+        }
+
+    def clean(self):
+        """Validate the form"""
+        cleaned_data = super().clean()
+        player1 = cleaned_data.get('player1')
+        player2 = cleaned_data.get('player2')
+        scheduled_date = cleaned_data.get('scheduled_date')
+
+        # Ensure players are different
+        if player1 and player2 and player1 == player2:
+            raise forms.ValidationError("Player 1 and Player 2 must be different!")
+
+        # Ensure date is in the future
+        if scheduled_date:
+            from django.utils import timezone
+            today = timezone.now().date()
+            if scheduled_date < today:
+                raise forms.ValidationError("Scheduled date must be today or in the future!")
+
+        return cleaned_data
