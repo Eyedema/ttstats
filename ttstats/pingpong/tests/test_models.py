@@ -172,6 +172,15 @@ class MatchModelTest(TestCase):
     
     def test_singles_match_creation(self):
         """Test creating a match"""
+        self.user1.profile.email_verified = True
+        self.user1.profile.save()
+        self.user2.profile.email_verified = True
+        self.user2.profile.save()
+        self.user3.profile.email_verified = True
+        self.user3.profile.save()
+        self.user4.profile.email_verified = True
+        self.user4.profile.save()
+
         date_played = timezone.now() - timedelta(days=1)
         match = Match.objects.create(
             is_double=False,
@@ -197,6 +206,15 @@ class MatchModelTest(TestCase):
 
     def test_doubles_match_creation(self):
         """Test creating a match"""
+        self.user1.profile.email_verified = True
+        self.user1.profile.save()
+        self.user2.profile.email_verified = True
+        self.user2.profile.save()
+        self.user3.profile.email_verified = True
+        self.user3.profile.save()
+        self.user4.profile.email_verified = True
+        self.user4.profile.save()
+
         date_played = timezone.now() - timedelta(days=1)
         match = Match.objects.create(
             is_double=True,
@@ -270,6 +288,15 @@ class MatchModelTest(TestCase):
 
     def test_doubles_match_confirmed_property(self):
         """Test match_confirmed property"""
+        self.user1.profile.email_verified = True
+        self.user1.profile.save()
+        self.user2.profile.email_verified = True
+        self.user2.profile.save()
+        self.user3.profile.email_verified = True
+        self.user3.profile.save()
+        self.user4.profile.email_verified = True
+        self.user4.profile.save()
+
         match = Match.objects.create(
             team1=self.team_double1,
             team2=self.team_double2

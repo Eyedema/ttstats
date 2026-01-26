@@ -25,9 +25,8 @@ def track_match_winner_change(sender, instance, **kwargs):
         return
 
     try:
-        old_match = sender.objects.annotate(winner_count=Count('winner')).get(pk=instance.pk)
-        # M2M: controlla se era vuoto
-        instance._winner_just_set = old_match.winner_count == 0
+        old_match = sender.objects.get(pk=instance.pk)
+        instance._winner_just_set = (old_match.winner_id is None)
     except sender.DoesNotExist:
         instance._winner_just_set = False
 
@@ -36,7 +35,7 @@ def track_match_winner_change(sender, instance, **kwargs):
 def handle_match_completion(sender, instance, created, **kwargs):
     """Handle match completion tasks"""
     # Only process if winner was just set
-    if not getattr(instance, "_winner_just_set", False):
+    if not getattr(instance, "_winner_just_set", False) or not instance.winner:
         return
 
     # 1. Auto-confirm if needed
@@ -49,7 +48,12 @@ def handle_match_completion(sender, instance, created, **kwargs):
         return
 
     # 2. Send confirmation emails (only to verified users who need to confirm)
-    pending_players = instance.get_unverified_players()
-    for player in pending_players:
-        if player.user and player.user.email:
+    for player in (instance.team1.players.all() | instance.team2.players.all()):
+        if (
+                player.user
+                and player.user.email
+                and hasattr(player.user, 'profile')
+                and player.user.profile.email_verified
+                and player.id not in [c.player_id for c in instance.confirmations.all()]
+        ):
             send_match_confirmation_email(instance, player)

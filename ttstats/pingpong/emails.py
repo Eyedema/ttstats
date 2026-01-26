@@ -27,7 +27,7 @@ def send_match_confirmation_email(match, player):
         return
 
     # Determine result for this player
-    if player in match.winner.all():
+    if player in match.winner.players.all():
         result = "won"
         emoji = "🎉"
         if player in match.team1.players.all():

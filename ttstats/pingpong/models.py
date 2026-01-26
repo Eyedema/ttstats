@@ -171,16 +171,36 @@ class Match(models.Model):
     @property
     def team1_confirmed(self):
         """All Team 1 members have confirmed"""
-        team1_ids = {p.id for p in self.team1.players.all()}
+        team1_players = self.team1.players.all()
+        team1_ids = {p.id for p in team1_players}
         confirmed_ids = {c.id for c in self.confirmations.all()}
-        return team1_ids.issubset(confirmed_ids)
+
+        if team1_ids.issubset(confirmed_ids):
+            return True
+
+        all_unverified = all(
+            not (p.user and p.user.profile.email_verified)
+            for p in team1_players
+        )
+
+        return all_unverified
 
     @property
     def team2_confirmed(self):
         """All Team 2 members have confirmed"""
-        team2_ids = {p.id for p in self.team2.players.all()}
+        team2_players = self.team2.players.all()
+        team2_ids = {p.id for p in team2_players}
         confirmed_ids = {c.id for c in self.confirmations.all()}
-        return team2_ids.issubset(confirmed_ids)
+
+        if team2_ids.issubset(confirmed_ids):
+            return True
+
+        all_unverified = all(
+            not (p.user and p.user.profile.email_verified)
+            for p in team2_players
+        )
+
+        return all_unverified
 
     @property
     def match_confirmed(self):
@@ -191,13 +211,19 @@ class Match(models.Model):
         if not self.winner or self.match_confirmed:
             return False
 
-        all_players = (self.team1.players.all() | self.team2.players.all())
+        team1_all_unverified = True
+        for player in self.team1.players.all():
+            if player.user and player.user.profile.email_verified:
+                team1_all_unverified = False
+                break
 
-        for player in all_players:
-            if not player.user or not player.user.profile.email_verified:
-                return True
+        team2_all_unverified = True
+        for player in self.team2.players.all():
+            if player.user and player.user.profile.email_verified:
+                team2_all_unverified = False
+                break
 
-        return False
+        return team1_all_unverified or team2_all_unverified
 
     def get_unverified_players(self):
         unverified = []
