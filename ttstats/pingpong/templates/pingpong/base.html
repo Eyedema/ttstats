@@ -150,7 +150,7 @@
 </head>
 
 <body class="bg-background text-foreground">
-    
+
     <div class="flex min-h-screen">
         <!-- Sidebar -->
         <aside
@@ -166,7 +166,8 @@
 
             <!-- User info -->
             <div class="p-4 border-b">
-                <div class="flex items-center gap-3 p-3 bg-secondary rounded-lg">
+                <a href="{% url 'pingpong:player_detail' user.player.pk %}"
+                    class="flex items-center gap-3 p-3 bg-secondary rounded-lg hover:bg-secondary/80 transition-colors cursor-pointer">
                     <div
                         class="w-10 h-10 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-semibold">
                         {{ user.username|slice:":1"|upper }}
@@ -175,8 +176,11 @@
                         <p class="font-semibold truncate text-sm">{{ user.username }}</p>
                         <p class="text-xs text-muted-foreground truncate">{{ user.email }}</p>
                     </div>
-                </div>
+                    <img src="{% static 'pingpong/icons/chevron-right.svg' %}" class="w-4 h-4 text-muted-foreground"
+                        alt="">
+                </a>
             </div>
+
 
             <!-- Navigation Menu -->
             <nav class="flex-1 p-4">
@@ -197,19 +201,26 @@
                     </li>
                     <li>
                         <a href="{% url 'pingpong:match_list' %}"
-                           class="flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors {% if request.resolver_match.url_name == 'match_list' or request.resolver_match.url_name == 'match_detail' %}bg-secondary text-secondary-foreground{% else %}text-muted-foreground hover:bg-secondary hover:text-secondary-foreground{% endif %}">
+                            class="flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors {% if request.resolver_match.url_name == 'match_list' or request.resolver_match.url_name == 'match_detail' %}bg-secondary text-secondary-foreground{% else %}text-muted-foreground hover:bg-secondary hover:text-secondary-foreground{% endif %}">
                             <span class="flex items-center gap-3">
                                 <img src="{% static 'pingpong/icons/clipboard-list.svg' %}" class="w-5 h-5" alt="">
                                 <span>Matches</span>
                             </span>
                             {% if pending_matches_count %}
-                            <span class="inline-flex items-center justify-center rounded-full bg-destructive/10 text-destructive min-w-[20px] h-5 px-1.5 text-xs font-semibold">
+                            <span
+                                class="inline-flex items-center justify-center rounded-full bg-destructive/10 text-destructive min-w-[20px] h-5 px-1.5 text-xs font-semibold">
                                 {{ pending_matches_count }}
                             </span>
                             {% endif %}
                         </a>
                     </li>
-                    <!-- In the sidebar navigation, add after Matches -->
+                    <li>
+                        <a href="{% url 'pingpong:calendar' %}"
+                            class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors {% if request.resolver_match.url_name == 'calendar' or request.resolver_match.url_name == 'match_schedule' %}bg-secondary text-secondary-foreground{% else %}text-muted-foreground hover:bg-secondary hover:text-secondary-foreground{% endif %}">
+                            <img src="{% static 'pingpong/icons/calendar.svg' %}" class="w-5 h-5" alt="">
+                            Calendar
+                        </a>
+                    </li>
                     <li>
                         <a href="{% url 'pingpong:leaderboard' %}"
                             class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors {% if request.resolver_match.url_name == 'leaderboard' %}bg-secondary text-secondary-foreground{% else %}text-muted-foreground hover:bg-secondary hover:text-secondary-foreground{% endif %}">
@@ -314,7 +325,13 @@
                                 Matches
                             </a>
                         </li>
-                        <!-- In the sidebar navigation, add after Matches -->
+                        <li>
+                            <a href="{% url 'pingpong:calendar' %}"
+                                class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium hover:bg-secondary">
+                                <img src="{% static 'pingpong/icons/calendar.svg' %}" class="w-5 h-5" alt="">
+                                Calendar
+                            </a>
+                        </li>
                         <li>
                             <a href="{% url 'pingpong:leaderboard' %}"
                                 class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors {% if request.resolver_match.url_name == 'leaderboard' %}bg-secondary text-secondary-foreground{% else %}text-muted-foreground hover:bg-secondary hover:text-secondary-foreground{% endif %}">
@@ -357,9 +374,9 @@
         <!-- Main content -->
         <main class="flex-1 lg:ml-64 bg-muted/30 mt-16 lg:mt-0">
             <div class="p-6">
-                <!-- Messages -->                
+                <!-- Messages -->
                 {% include 'pingpong/_messages.html' %}
-                
+
                 {% block content %}{% endblock %}
             </div>
         </main>

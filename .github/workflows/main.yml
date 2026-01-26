@@ -1,12 +1,129 @@
-name: Deploy to VPS
+name: CI/CD Pipeline
 
 on:
   push:
     branches: [ "master" ]
+  pull_request:
+    branches: [ "**" ]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
 
 jobs:
-  deploy:
+  test:
+    name: Run Tests & Coverage
     runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          # Ensure pytest and plugins are installed if not in requirements.txt
+          pip install pytest pytest-django pytest-cov
+
+      - name: Run tests with pytest
+        env:
+          DJANGO_SETTINGS_MODULE: ttstats.settings
+          SECRET_KEY: "test-secret-key-for-ci-only"
+        run: |
+          cd ttstats
+          # Running pytest as defined in your script
+          pytest --cov=pingpong --cov-config=../.coveragerc --cov-report=term --cov-report=html -v
+
+      - name: Generate coverage summary
+        id: coverage
+        run: |
+          cd ttstats
+          # Generate plain text report for the PR comment parsing
+          coverage report > coverage_report.txt
+
+          # Add to GitHub step summary
+          echo "## 📊 Test Coverage Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat coverage_report.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+          # Extract coverage percentage (keeping % sign for display)
+          COVERAGE=$(coverage report | grep TOTAL | awk '{print $4}')
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Total Coverage:** $COVERAGE" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "📥 Download the detailed HTML report from the artifacts section below." >> $GITHUB_STEP_SUMMARY
+
+          # Console output
+          echo ""
+          echo "📊 Coverage Report:"
+          echo "===================="
+          cat coverage_report.txt
+          echo ""
+          echo "✅ Total Coverage: $COVERAGE"
+
+          # Save for next step
+          echo "coverage=$COVERAGE" >> $GITHUB_OUTPUT
+
+      - name: Comment coverage on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const coverageReport = fs.readFileSync('ttstats/coverage_report.txt', 'utf8');
+            const coverage = '${{ steps.coverage.outputs.coverage }}';
+            
+            const comment = `## 📊 Test Coverage Report
+            **Total Coverage:** ${coverage}
+            
+            \`\`\`
+            ${coverageReport}
+            \`\`\`
+            
+            📥 Download detailed HTML report
+            The full HTML coverage report is available in the **Artifacts** section of this workflow run.
+            Click on "coverage-report" to download and view locally.
+            
+            ✅ All tests passed!`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+
+      - name: Upload coverage HTML report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: ttstats/htmlcov/
+          retention-days: 30
+
+  deploy:
+    name: Deploy to VPS
+    needs: test
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    
     steps:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@master
@@ -19,3 +136,8 @@ jobs:
             cd ${{ secrets.WORK_DIR }}
             git pull
             docker compose -f compose.prod.yml up -d --build
+            docker compose -f compose.prod.yml exec -T web python manage.py migrate
+            docker compose -f compose.prod.yml exec -T web python manage.py collectstatic --noinput
+
+      - name: Deployment status
+        run: echo "✅ Deployment to VPS completed successfully!"

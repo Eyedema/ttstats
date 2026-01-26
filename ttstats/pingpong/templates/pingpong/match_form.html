@@ -34,7 +34,7 @@
     {% elif not object and not user_player %}
     <div class="rounded-lg border-l-4 border-destructive bg-destructive/10 p-4">
         <div class="flex items-start gap-3">
-            <img src="{% static 'pingpong/icons/alert-circle.svg' %}" class="w-5 h-5 text-destructive mt-0.5 flex-shrink-0" alt="">
+            <img src="{% static 'pingpong/icons/circle-alert.svg' %}" class="w-5 h-5 text-destructive mt-0.5 flex-shrink-0" alt="">
             <div>
                 <p class="text-sm font-semibold text-destructive mb-1">
                     No Player Profile Found
@@ -118,7 +118,7 @@
             {% if form.non_field_errors %}
             <div class="rounded-lg border border-destructive bg-destructive/10 p-4 mb-6">
                 <div class="flex items-start gap-3">
-                    <img src="{% static 'pingpong/icons/alert-circle.svg' %}" class="w-5 h-5 text-destructive flex-shrink-0" alt="">
+                    <img src="{% static 'pingpong/icons/circle-alert.svg' %}" class="w-5 h-5 text-destructive flex-shrink-0" alt="">
                     <span class="font-medium text-sm text-destructive">{{ form.non_field_errors }}</span>
                 </div>
             </div>

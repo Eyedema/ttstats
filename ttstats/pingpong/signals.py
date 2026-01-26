@@ -14,27 +14,16 @@ def create_user_profile(sender, instance, created, **kwargs):
         userprofile = UserProfile.objects.create(user=instance)
         userprofile.create_verification_token()
         userprofile.save()
-    else:
-        # Ensure profile exists even for existing users
-        # (in case they were created before signal was added)
-        if not hasattr(instance, 'profile'):
-            userprofile = UserProfile.objects.create(user=instance)
-            userprofile.create_verification_token()
-            userprofile.save()
 
 
 @receiver(pre_save, sender=Match)
 def track_match_winner_change(sender, instance, **kwargs):
     """Remember if winner is being set for the first time"""
     if instance.pk:  # Match already exists in DB
-        try:
-            old_match = Match.objects.get(pk=instance.pk)
-            # Compare: was None, now has value?
-            instance._winner_just_set = (
-                old_match.winner is None and instance.winner is not None
-            )
-        except Match.DoesNotExist:
-            instance._winner_just_set = False
+        old_match = Match.objects.get(pk=instance.pk)
+        instance._winner_just_set = (
+            old_match.winner is None and instance.winner is not None
+        )
     else:  # New match
         instance._winner_just_set = False
 
@@ -44,9 +33,6 @@ def handle_match_completion(sender, instance, created, **kwargs):
     """Handle match completion tasks"""
     # Only process if winner was just set
     if not getattr(instance, "_winner_just_set", False):
-        return
-
-    if not instance.winner:
         return
 
     # 1. Auto-confirm if needed

@@ -25,3 +25,11 @@ docker-compose.override.yml
 *.swo
 
 .DS_Store
+
+# Coverage
+.coverage
+.coverage
+htmlcov/
+.coverage.*
+.codanna
+.fastembed_cache

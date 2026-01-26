@@ -1,7 +1,10 @@
-asgiref
+asgiref==3.11.0
+coverage==7.13.1
 Django==6.0
-sqlparse
-whitenoise
-psycopg2-binary
-gunicorn
-whitenoise
+factory-boy==3.3.1
+faker==33.3.1
+pytest==8.3.4
+pytest-django==4.9.0
+sqlparse==0.5.5
+whitenoise==6.11.0
+pytest-cov
