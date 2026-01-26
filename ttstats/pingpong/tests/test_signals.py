@@ -1,178 +1,129 @@
-from django.contrib.auth.models import User
-from django.test import TestCase
+import pytest
 from django.core import mail
 
-from pingpong.models import Player, Match, Game, UserProfile
+from pingpong.models import Match, Player, UserProfile
+from .conftest import GameFactory, MatchFactory, PlayerFactory, UserFactory
 
 
-class UserProfileSignalTest(TestCase):
-    """Tests for user profile creation signal"""
-
+@pytest.mark.django_db
+class TestCreateUserProfileSignal:
     def test_profile_created_on_user_creation(self):
-        """Test that UserProfile is created when User is created"""
-        user = User.objects.create_user(
-            username="newuser", email="new@example.com", password="password123"
-        )
+        user = UserFactory()
+        assert hasattr(user, "profile")
+        assert isinstance(user.profile, UserProfile)
 
-        # Profile should exist
-        self.assertTrue(hasattr(user, "profile"))
-        self.assertIsInstance(user.profile, UserProfile)
-
-        # Verification token should be created
-        self.assertNotEqual(user.profile.email_verification_token, "")
-        self.assertIsNotNone(user.profile.email_verification_sent_at)
+    def test_verification_token_generated(self):
+        user = UserFactory()
+        assert user.profile.email_verification_token != ""
+        assert len(user.profile.email_verification_token) == 32
+        assert user.profile.email_verification_sent_at is not None
 
 
-class MatchCompletionSignalTest(TestCase):
-    """Tests for match completion signal (winner set)"""
+@pytest.mark.django_db
+class TestTrackMatchWinnerChange:
+    def test_new_match_winner_just_set_false(self):
+        m = MatchFactory()
+        assert getattr(m, "_winner_just_set", False) is False
 
-    def setUp(self):
-        """Set up test data"""
-        self.user1 = User.objects.create_user(
-            username="player1", email="p1@example.com", password="pass"
-        )
-        self.user2 = User.objects.create_user(
-            username="player2", email="p2@example.com", password="pass"
-        )
-        self.player1 = Player.objects.create(user=self.user1, name="Player 1")
-        self.player2 = Player.objects.create(user=self.user2, name="Player 2")
+    def test_winner_set_first_time(self):
+        m = MatchFactory(best_of=3)
+        # Add enough games to trigger winner
+        GameFactory(match=m, game_number=1, player1_score=11, player2_score=5)
+        GameFactory(match=m, game_number=2, player1_score=11, player2_score=9)
+        m.refresh_from_db()
+        assert m.winner is not None
 
-        # Clear any emails from user creation
-        mail.outbox = []
+    def test_winner_unchanged_no_retrigger(self):
+        m = MatchFactory()
+        m.player1.user.profile.email_verified = True
+        m.player1.user.profile.save()
+        m.player2.user.profile.email_verified = True
+        m.player2.user.profile.save()
+        mail.outbox.clear()
 
-    def test_auto_confirm_for_unverified_users(self):
-        """Test match is auto-confirmed when users are unverified"""
-        # Ensure users are not verified
-        self.user1.profile.email_verified = False
-        self.user1.profile.save()
-        self.user2.profile.email_verified = False
-        self.user2.profile.save()
+        # Set winner via games
+        GameFactory(match=m, game_number=1, player1_score=11, player2_score=5)
+        GameFactory(match=m, game_number=2, player1_score=11, player2_score=9)
+        GameFactory(match=m, game_number=3, player1_score=11, player2_score=7)
+        m.refresh_from_db()
+        initial_email_count = len(mail.outbox)
 
-        # Create match without winner
-        match = Match.objects.create(
-            player1=self.player1, player2=self.player2, best_of=5
-        )
+        # Re-save without changing winner
+        m.notes = "Updated"
+        m.save()
+        assert len(mail.outbox) == initial_email_count
 
-        # Add games to set winner (triggers signal)
-        Game.objects.create(
-            match=match, game_number=1, player1_score=11, player2_score=5
-        )
-        Game.objects.create(
-            match=match, game_number=2, player1_score=11, player2_score=9
-        )
-        Game.objects.create(
-            match=match, game_number=3, player1_score=11, player2_score=7
-        )
 
-        match.refresh_from_db()
+@pytest.mark.django_db
+class TestHandleMatchCompletion:
+    def _make_verified_match(self):
+        m = MatchFactory()
+        m.player1.user.profile.email_verified = True
+        m.player1.user.profile.save()
+        m.player2.user.profile.email_verified = True
+        m.player2.user.profile.save()
+        mail.outbox.clear()
+        return m
 
-        # Should be auto-confirmed
-        self.assertTrue(match.player1_confirmed)
-        self.assertTrue(match.player2_confirmed)
+    def _make_unverified_match(self):
+        m = MatchFactory()
+        m.player1.user.profile.email_verified = False
+        m.player1.user.profile.save()
+        m.player2.user.profile.email_verified = False
+        m.player2.user.profile.save()
+        mail.outbox.clear()
+        return m
 
-        # No emails should be sent
-        self.assertEqual(len(mail.outbox), 0)
+    def _add_winning_games(self, m):
+        GameFactory(match=m, game_number=1, player1_score=11, player2_score=5)
+        GameFactory(match=m, game_number=2, player1_score=11, player2_score=9)
+        GameFactory(match=m, game_number=3, player1_score=11, player2_score=7)
 
-    def test_send_emails_for_verified_users(self):
-        """Test confirmation emails sent when both users are verified"""
-        # Mark users as verified
-        self.user1.profile.email_verified = True
-        self.user1.profile.save()
-        self.user2.profile.email_verified = True
-        self.user2.profile.save()
+    def test_auto_confirm_for_unverified(self):
+        m = self._make_unverified_match()
+        self._add_winning_games(m)
+        m.refresh_from_db()
+        assert m.player1_confirmed is True
+        assert m.player2_confirmed is True
+        assert len(mail.outbox) == 0
 
-        # Create match
-        match = Match.objects.create(
-            player1=self.player1, player2=self.player2, best_of=5
-        )
+    def test_emails_sent_for_verified(self):
+        m = self._make_verified_match()
+        self._add_winning_games(m)
+        m.refresh_from_db()
+        assert m.player1_confirmed is False
+        assert m.player2_confirmed is False
+        assert len(mail.outbox) == 2
+        recipients = {e.to[0] for e in mail.outbox}
+        assert m.player1.user.email in recipients
+        assert m.player2.user.email in recipients
 
-        # Set winner (triggers signal)
-        Game.objects.create(
-            match=match, game_number=1, player1_score=11, player2_score=5
-        )
-        Game.objects.create(
-            match=match, game_number=2, player1_score=11, player2_score=9
-        )
-        Game.objects.create(
-            match=match, game_number=3, player1_score=11, player2_score=7
-        )
+    def test_auto_confirm_mixed_verified(self):
+        m = MatchFactory()
+        m.player1.user.profile.email_verified = True
+        m.player1.user.profile.save()
+        m.player2.user.profile.email_verified = False
+        m.player2.user.profile.save()
+        mail.outbox.clear()
 
-        match.refresh_from_db()
+        self._add_winning_games(m)
+        m.refresh_from_db()
+        assert m.player1_confirmed is True
+        assert m.player2_confirmed is True
+        assert len(mail.outbox) == 0
 
-        self.assertFalse(match.player1_confirmed)
-        self.assertFalse(match.player2_confirmed)
+    def test_no_action_without_winner(self):
+        m = self._make_verified_match()
+        m.notes = "Some notes"
+        m.save()
+        assert len(mail.outbox) == 0
 
-        # Two emails should be sent (one to each player)
-        self.assertEqual(len(mail.outbox), 2)
-
-        # Check emails were sent to correct recipients
-        recipients = [email.to[0] for email in mail.outbox]
-        self.assertIn(self.user1.email, recipients)
-        self.assertIn(self.user2.email, recipients)
-
-    def test_no_emails_for_one_verified_one_unverified(self):
-        """Test auto-confirm when one player is verified, one is not"""
-        # Only player1 verified
-        self.user1.profile.email_verified = True
-        self.user1.profile.save()
-        self.user2.profile.email_verified = False
-        self.user2.profile.save()
-
-        match = Match.objects.create(
-            player1=self.player1, player2=self.player2, best_of=5
-        )
-
-        Game.objects.create(
-            match=match, game_number=1, player1_score=11, player2_score=5
-        )
-        Game.objects.create(
-            match=match, game_number=2, player1_score=11, player2_score=9
-        )
-        Game.objects.create(
-            match=match, game_number=3, player1_score=11, player2_score=7
-        )
-
-        match.refresh_from_db()
-
-        self.assertTrue(match.player1_confirmed)
-        self.assertTrue(match.player2_confirmed)
-
-        self.assertEqual(len(mail.outbox), 0)
-    
-    def test_match_saved_without_winner(self):
-        """Test signal doesn't trigger when match is saved without setting winner"""
-        self.user1.profile.email_verified = True
-        self.user1.profile.save()
-        self.user2.profile.email_verified = True
-        self.user2.profile.save()
-
-        match = Match.objects.create(
-            player1=self.player1,
-            player2=self.player2,
-            best_of=5,
-        )
-
-        match.notes = "Some notes"
-        match.save()
-
-        self.assertEqual(len(mail.outbox), 0)
-
-    def test_signal_not_triggered_when_winner_unchanged(self):
-        """Test signal doesn't trigger when updating match without changing winner"""
-        self.user1.profile.email_verified = True
-        self.user1.profile.save()
-        self.user2.profile.email_verified = True
-        self.user2.profile.save()
-
-        match = Match.objects.create(
-            player1=self.player1,
-            player2=self.player2,
-            winner=self.player1,  # Already has winner
-        )
-
-        # Update match without changing winner
-        match.notes = "Updated notes"
-        match.save()
-
-        # No emails should be sent
-        self.assertEqual(len(mail.outbox), 0)
+    def test_no_double_emails(self):
+        m = self._make_verified_match()
+        self._add_winning_games(m)
+        initial = len(mail.outbox)
+        # Save again without changing winner
+        m.refresh_from_db()
+        m.notes = "Extra note"
+        m.save()
+        assert len(mail.outbox) == initial
