@@ -171,7 +171,7 @@ class Match(models.Model):
     @property
     def team1_confirmed(self):
         """All Team 1 members have confirmed"""
-        team1_players = self.team1.players.all()
+        team1_players = self.team1.players.filter(user__profile__email_verified=True)
         team1_ids = {p.id for p in team1_players}
         confirmed_ids = {c.id for c in self.confirmations.all()}
 
@@ -180,7 +180,7 @@ class Match(models.Model):
 
         all_unverified = all(
             not (p.user and p.user.profile.email_verified)
-            for p in team1_players
+            for p in team1_players.all()
         )
 
         return all_unverified
@@ -188,7 +188,7 @@ class Match(models.Model):
     @property
     def team2_confirmed(self):
         """All Team 2 members have confirmed"""
-        team2_players = self.team2.players.all()
+        team2_players = self.team2.players.filter(user__profile__email_verified=True)
         team2_ids = {p.id for p in team2_players}
         confirmed_ids = {c.id for c in self.confirmations.all()}
 
@@ -197,7 +197,7 @@ class Match(models.Model):
 
         all_unverified = all(
             not (p.user and p.user.profile.email_verified)
-            for p in team2_players
+            for p in team2_players.all()
         )
 
         return all_unverified

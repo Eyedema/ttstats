@@ -323,6 +323,37 @@ class MatchModelTest(TestCase):
         match.confirmations.set([self.player1, self.player2, self.player3, self.player4])
         match.refresh_from_db()
         self.assertTrue(match.match_confirmed)
+
+    def test_doubles_team_match_confirmed_property_mixed_players(self):
+        """Test match_confirmed property"""
+        self.user1.profile.email_verified = True
+        self.user1.profile.save()
+        self.user2.profile.email_verified = False
+        self.user2.profile.save()
+        self.user3.profile.email_verified = True
+        self.user3.profile.save()
+        self.user4.profile.email_verified = False
+        self.user4.profile.save()
+
+        match = Match.objects.create(
+            team1=self.team_double1,
+            team2=self.team_double2
+        )
+        # Initially not confirmed
+        self.assertFalse(match.match_confirmed)
+
+        # Only player1 confirmed
+        match.confirmations.set([self.player1])
+        match.refresh_from_db()
+        self.assertTrue(match.team1_confirmed)
+        self.assertFalse(match.match_confirmed)
+
+        # Everyone confirmed
+        match.confirmations.set([self.player1, self.player3])
+        match.refresh_from_db()
+        self.assertTrue(match.team1_confirmed)
+        self.assertTrue(match.team2_confirmed)
+        self.assertTrue(match.match_confirmed)
     
     def test_player_scores_empty_match(self):
         """Test player scores for match with no games"""
