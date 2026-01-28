@@ -1,11 +1,10 @@
 from django.contrib.auth.models import User
-
-from .emails import send_match_confirmation_email
-from .models import Match
 from django.db.models.signals import post_save, pre_save
 from django.dispatch import receiver
+from django_otp_webauthn.models import WebAuthnCredential
 
-from .models import UserProfile
+from .emails import send_match_confirmation_email, send_passkey_registered_email
+from .models import Match, UserProfile
 
 
 @receiver(post_save, sender=User)
@@ -56,3 +55,10 @@ def handle_match_completion(sender, instance, created, **kwargs):
             and not instance.player2_confirmed
         ):
             send_match_confirmation_email(instance, instance.player2, instance.player1)
+
+
+@receiver(post_save, sender=WebAuthnCredential)
+def notify_passkey_registered(sender, instance, created, **kwargs):
+    """Send email when new passkey is registered"""
+    if created:
+        send_passkey_registered_email(instance.user, instance.name)

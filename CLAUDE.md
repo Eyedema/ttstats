@@ -6,7 +6,8 @@
 - **Stack:** Django 6.0, PostgreSQL 16, Tailwind CSS, Docker
 - **Python Version:** 3.12
 - **Main App:** `ttstats/pingpong/`
-- **Test Framework:** pytest + pytest-django + factory-boy
+- **Test Framework:** pytest + pytest-django + factory-boy 
+- **Virtual environment folder to use for python:** `.venv/`
 
 ## Common Commands
 
@@ -15,6 +16,7 @@
 docker compose -f compose.dev.yml up --build       # Start dev environment
 docker compose -f compose.dev.yml exec web python manage.py migrate  # Run migrations
 docker compose -f compose.dev.yml exec web python manage.py createsuperuser
+
 
 # Testing (always use pytest, never Django's manage.py test)
 cd /path/to/ttstats && python -m pytest --tb=short -q          # Run all tests
@@ -27,6 +29,7 @@ cd /path/to/ttstats && python -m pytest --tb=long -x           # Stop on first f
 cd ttstats && coverage run -m pytest && coverage report         # Run with coverage
 cd ttstats && coverage html                                     # Generate HTML report
 
+
 # Production
 docker compose -f compose.prod.yml up --build -d
 ```
@@ -35,7 +38,7 @@ docker compose -f compose.prod.yml up --build -d
 
 ```
 /home/user/ttstats/
-├── pytest.ini                        # Pytest configuration (DO NOT use manage.py test)
+ ├── pytest.ini                        # Pytest configuration (DO NOT use manage.py test) 
 ├── requirements.txt                  # Python dependencies
 ├── ttstats/                          # Django project root
 │   ├── manage.py                     # Django CLI
@@ -53,6 +56,7 @@ docker compose -f compose.prod.yml up --build -d
 │   │   ├── templates/pingpong/       # Django templates
 │   │   ├── templates/registration/   # Auth templates
 │   │   ├── static/pingpong/icons/    # SVG icons (800+)
+
 │   │   └── tests/                    # Test suite (pytest + factory-boy)
 │   │       ├── conftest.py           # Factories + shared fixtures
 │   │       ├── test_models.py        # Model tests
@@ -63,6 +67,7 @@ docker compose -f compose.prod.yml up --build -d
 │   │       ├── test_emails.py        # Email utility tests
 │   │       ├── test_middleware.py    # Middleware tests
 │   │       └── test_context_processors.py  # Context processor tests
+
 │   └── ttstats/                      # Django configuration
 │       ├── settings/
 │       │   ├── base.py               # Base settings
@@ -79,10 +84,11 @@ docker compose -f compose.prod.yml up --build -d
 ├── .env.dev                          # Dev environment vars
 ├── .env.prod.example                 # Prod env template
 ├── .github/workflows/main.yml        # CI/CD pipeline
-└── .coveragerc                       # Coverage config
+ └── .coveragerc                       # Coverage config 
 ```
 
 ---
+
 
 ## Testing Strategy & Rules
 
@@ -206,6 +212,7 @@ These integration tests simulate real user sessions. They catch regressions wher
 
 **When adding a new feature**, also add an integration test covering its primary happy path alongside the unit tests.
 
+
 ---
 
 ## Database Models
@@ -318,6 +325,7 @@ These integration tests simulate real user sessions. They catch regressions wher
 | `create_user_profile` | User post_save (created=True) | Creates UserProfile + verification token |
 | `track_match_winner_change` | Match pre_save | Sets `_winner_just_set` flag if winner goes from None to set |
 | `handle_match_completion` | Match post_save | If `_winner_just_set`: auto-confirm (unverified players) OR send confirmation emails (verified players) |
+| `notify_passkey_registered` | WebAuthnCredential post_save (created=True) | Sends email notification when new passkey is registered |
 
 ## Business Logic
 
@@ -354,7 +362,7 @@ These integration tests simulate real user sessions. They catch regressions wher
 ## Templates
 
 ### Base Template Constraint
-`base.html` line 169 unconditionally renders `{% url 'pingpong:player_detail' user.player.pk %}`. This means **every authenticated user must have a linked Player profile** or the page will crash with `NoReverseMatch`. This affects both production and test code.
+`base.html` line 169 unconditionally renders `{% url 'pingpong:player_detail' user.player.pk %}`. This means **every authenticated user must have a linked Player profile** or the page will crash with `NoReverseMatch`.  This affects both production and test code. 
 
 ### Key Templates
 | Template | Purpose |
@@ -408,6 +416,8 @@ docker compose -f compose.prod.yml up --build -d   # Gunicorn (3 workers)
 5. Upload HTML coverage artifact
 
 ### On Master Push (if tests pass):
+
+### On Master Push:
 1. SSH to VPS
 2. Pull latest code
 3. Rebuild and restart containers
@@ -418,12 +428,16 @@ docker compose -f compose.prod.yml up --build -d   # Gunicorn (3 workers)
 Django==6.0
 asgiref==3.11.0
 coverage==7.13.1
+django-otp==1.5.4
+django-otp-webauthn==0.3.0
 factory-boy==3.3.1
 faker==33.3.1
 pytest==8.3.4
 pytest-django==4.9.0
 sqlparse==0.5.5
 whitenoise==6.11.0
+pytest-cov
+
 ```
 
 ## Key Files Quick Reference
@@ -461,3 +475,139 @@ Current migrations (8 total):
 4. `0006` - Match confirmation fields
 5. `0007` - UserProfile model
 6. `0008` - ScheduledMatch model
+
+## Passkey Authentication
+
+TTStats supports passkey (WebAuthn/FIDO2) authentication for existing users as an optional login method.
+
+### Features
+- **Passwordless login:** Use biometrics (Face ID, Touch ID, Windows Hello) or security keys (YubiKey, etc.)
+- **Optional:** Traditional password authentication remains available
+- **Multiple passkeys:** Users can register multiple devices
+- **Security notifications:** Email alerts when passkeys are added/removed
+- **Admin visibility:** Staff can see passkey counts and manage credentials
+
+### Stack
+- **django-otp:** MFA framework (v1.5.4+)
+- **django-otp-webauthn:** WebAuthn implementation (v0.3.0+)
+- **py_webauthn:** FIDO2 library (installed automatically)
+
+### User Flow
+1. User logs in with password
+2. Navigates to "Manage Passkeys" (`/pingpong/passkeys/`)
+3. Clicks "Register Passkey" button
+4. Browser prompts for biometric/security key confirmation
+5. Passkey registered and linked to user account
+6. User can now log in with passkey (passwordless) on future visits
+
+### Files Added/Modified
+| File | Purpose |
+|------|---------|
+| `requirements.txt` | Added django-otp and django-otp-webauthn |
+| `settings/base.py` | Added INSTALLED_APPS, MIDDLEWARE, AUTHENTICATION_BACKENDS, WebAuthn config |
+| `settings/prod.py` | Production WebAuthn origins |
+| `pingpong/urls.py` | Passkey management URL + WebAuthn endpoints |
+| `pingpong/views.py` | PasskeyManagementView (GET: show credentials, POST: delete) |
+| `pingpong/admin.py` | CustomUserAdmin with passkey count display + PasskeyInline |
+| `pingpong/signals.py` | notify_passkey_registered signal |
+| `pingpong/emails.py` | send_passkey_registered_email, send_passkey_deleted_email |
+| `templates/registration/login.html` | Passkey login button + WebAuthn scripts |
+| `templates/pingpong/base.html` | Passkey link in navigation |
+| `templates/pingpong/passkey_management.html` | NEW: Passkey management page |
+| `tests/test_passkey_views.py` | NEW: Unit tests for passkey views |
+| `tests/test_passkey_integration.py` | NEW: Integration tests |
+| `tests/test_passkey_emails.py` | NEW: Email notification tests |
+| `tests/test_passkey_admin.py` | NEW: Admin interface tests |
+
+
+### URL Routes
+| Method | URL | View | Description |
+|--------|-----|------|-------------|
+| GET/POST | `/pingpong/passkeys/` | PasskeyManagementView | Manage user's passkeys |
+| POST | `/pingpong/webauthn/register/` | Library view | Register new passkey |
+| POST | `/pingpong/webauthn/authenticate/` | Library view | Authenticate with passkey |
+
+### Security Features
+1. **Origin validation:** Only allowed domains can register passkeys (prevents phishing)
+2. **Replay attack prevention:** Sign counter increments with each use
+3. **User verification:** Passkeys require biometric/PIN confirmation
+4. **Email notifications:** Users alerted when passkeys are added/removed
+5. **Public key cryptography:** Private keys never leave user's device
+
+### Testing Passkeys
+```bash
+# Unit tests (view logic, CRUD operations)
+python -m pytest ttstats/pingpong/tests/test_passkey_views.py -v
+
+# Integration tests (page rendering, auth flow)
+python -m pytest ttstats/pingpong/tests/test_passkey_integration.py -v
+
+# Email notification tests
+python -m pytest ttstats/pingpong/tests/test_passkey_emails.py -v
+
+# Admin interface tests
+python -m pytest ttstats/pingpong/tests/test_passkey_admin.py -v
+
+# Run all passkey tests
+python -m pytest ttstats/pingpong/tests/test_passkey*.py -v
+```
+
+**Note:** Full WebAuthn ceremony testing (actual biometric prompts) requires browser automation (Selenium). The provided tests cover view logic, email notifications, and page rendering.
+
+
+### Browser Compatibility
+- Chrome 67+ ✓
+- Firefox 60+ ✓
+- Safari 13+ ✓
+- Edge 18+ ✓
+
+### Configuration
+**Development:**
+- `OTP_WEBAUTHN_RP_ID = "localhost"`
+- `OTP_WEBAUTHN_ALLOWED_ORIGINS = ["http://localhost:8000"]`
+- **IMPORTANT:** Always access dev server via `localhost:8000`, NOT `127.0.0.1:8000`
+- WebAuthn rejects IP addresses (except localhost) for security reasons
+
+**Production:**
+- `OTP_WEBAUTHN_RP_ID = os.environ.get("SITE_DOMAIN")`
+- `OTP_WEBAUTHN_ALLOWED_ORIGINS = [f"https://{os.environ.get('SITE_DOMAIN')}"]`
+- HTTPS is required (WebAuthn doesn't work on plain HTTP in production)
+
+### Known Gotchas
+1. **Use localhost, not 127.0.0.1:** WebAuthn requires a valid domain name. IP addresses are not allowed (except localhost). Always access the dev server via `http://localhost:8000`, NOT `http://127.0.0.1:8000`
+2. **HTTPS required in production:** WebAuthn only works on HTTPS (except localhost)
+3. **Origin must match:** `OTP_WEBAUTHN_RP_ID` must match your domain exactly
+4. **Button IDs are required:** The library's JavaScript expects specific element IDs:
+   - Registration: `passkey-register-button`, `passkey-register-status-message`, `passkey-registration-placeholder`
+   - Authentication: `passkey-verification-button`, `passkey-verification-status-message`, `passkey-verification-placeholder`
+5. **Template structure:** Must include `<template id="...-available-template">` and `<template id="...-unavailable-template">` elements
+6. **Try/except import:** `PasskeyManagementView` handles missing `django_otp_webauthn` gracefully
+7. **Email notifications:** Triggered via Django signals on credential creation/deletion
+8. **Admin inline:** Staff can view passkey metadata but cannot add passkeys through admin (security requirement)
+
+### Email Notifications
+| Event | Email Subject | Trigger |
+|-------|---------------|---------|
+| Passkey registered | "New Passkey Registered - TTStats" | WebAuthnCredential post_save (created=True) |
+| Passkey deleted | "Passkey Removed - TTStats" | PasskeyManagementView POST (before delete) |
+
+Both emails include:
+- Device name
+- Link to passkey management page
+- Security warning if not authorized
+- Suggestion to contact support
+
+### Admin Interface
+Staff can view passkey information in User admin:
+- **List view:** Shows passkey count per user
+- **Edit view:** Inline showing passkey name, created date, sign count
+- **Can delete:** Staff can remove passkeys if needed (e.g., lost device)
+- **Cannot add:** Passkeys must be registered through the UI, not admin
+
+### Future Enhancements
+1. **Recovery codes:** Generate backup codes if user loses device
+2. **TOTP support:** Add authenticator app 2FA
+3. **Passkey-only accounts:** Allow users to disable password entirely
+4. **Device management:** Show last used date, device type detection
+5. **Browser extension support:** Test with 1Password, Bitwarden passkey managers
+6. **Usage analytics:** Track which auth method users prefer
