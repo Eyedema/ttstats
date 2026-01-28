@@ -5,7 +5,7 @@ from django.test import Client
 from django.urls import reverse
 from django.utils import timezone
 
-from pingpong.models import Game, Match, Player, ScheduledMatch
+from pingpong.models import EloHistory, Game, Match, Player, ScheduledMatch
 from .conftest import (
     GameFactory,
     LocationFactory,
@@ -775,3 +775,79 @@ class TestCalendarView:
                     assert len(day["matches"]) >= 1
                     found = True
         assert found
+
+
+# ===========================================================================
+# Match Confirmation Elo Update
+# ===========================================================================
+
+
+@pytest.mark.django_db
+class TestMatchConfirmEloUpdate:
+    """Test that Elo updates when matches are confirmed via the UI"""
+
+    def test_elo_updates_on_second_confirmation(self):
+        """Elo should update when second player confirms via match_confirm view"""
+        # Setup: Create verified users with players
+        user1 = UserFactory(username='player1', email='p1@test.com')
+        user1.profile.email_verified = True
+        user1.profile.save()
+        player1 = PlayerFactory(user=user1, elo_rating=1500, matches_for_elo=25)
+
+        user2 = UserFactory(username='player2', email='p2@test.com')
+        user2.profile.email_verified = True
+        user2.profile.save()
+        player2 = PlayerFactory(user=user2, elo_rating=1500, matches_for_elo=25)
+
+        # Create match with winner
+        match = MatchFactory(player1=player1, player2=player2, best_of=5)
+        GameFactory(match=match, game_number=1, player1_score=11, player2_score=5)
+        GameFactory(match=match, game_number=2, player1_score=11, player2_score=7)
+        GameFactory(match=match, game_number=3, player1_score=11, player2_score=9)
+        match.refresh_from_db()
+
+        # Verify winner is set but not confirmed
+        assert match.winner == player1
+        assert not match.player1_confirmed
+        assert not match.player2_confirmed
+        assert EloHistory.objects.count() == 0
+
+        # Player 1 confirms via UI
+        c = Client()
+        c.force_login(user1)
+        response = c.post(reverse('pingpong:match_confirm', args=[match.pk]))
+        assert response.status_code == 302
+
+        match.refresh_from_db()
+        player1.refresh_from_db()
+        assert match.player1_confirmed
+        assert not match.player2_confirmed
+        # Elo should NOT update yet (only one confirmation)
+        assert player1.elo_rating == 1500
+        assert EloHistory.objects.count() == 0
+
+        # Player 2 confirms via UI (second confirmation - should trigger Elo)
+        c.force_login(user2)
+        response = c.post(reverse('pingpong:match_confirm', args=[match.pk]))
+        assert response.status_code == 302
+
+        match.refresh_from_db()
+        player1.refresh_from_db()
+        player2.refresh_from_db()
+
+        # NOW: Both confirmed, Elo should update
+        assert match.player1_confirmed
+        assert match.player2_confirmed
+        assert match.match_confirmed
+
+        # CRITICAL: Elo should be updated
+        assert player1.elo_rating > 1500, f"Winner Elo should increase, got {player1.elo_rating}"
+        assert player2.elo_rating < 1500, f"Loser Elo should decrease, got {player2.elo_rating}"
+
+        # CRITICAL: Elo history should exist
+        assert EloHistory.objects.count() == 2, "Should have 2 Elo history entries"
+
+        history_p1 = EloHistory.objects.get(match=match, player=player1)
+        assert history_p1.old_rating == 1500
+        assert history_p1.new_rating == player1.elo_rating
+        assert history_p1.rating_change > 0

@@ -47,6 +47,20 @@ class Player(models.Model):
     notes = models.TextField(blank=True, help_text="Strengths, weaknesses, etc.")
     created_at = models.DateTimeField(auto_now_add=True)
 
+    # Elo rating fields
+    elo_rating = models.IntegerField(
+        default=1500,
+        help_text="Current Elo rating"
+    )
+    elo_peak = models.IntegerField(
+        default=1500,
+        help_text="All-time highest Elo rating"
+    )
+    matches_for_elo = models.IntegerField(
+        default=0,
+        help_text="Number of confirmed matches that affected Elo (for new player boost)"
+    )
+
     objects = PlayerManager()
 
     def user_can_edit(self, user):
@@ -294,3 +308,34 @@ class ScheduledMatch(models.Model):
     def user_can_edit(self, user):
         """Check if user can edit this scheduled match"""
         return self.user_can_view(user)
+
+
+class EloHistory(models.Model):
+    """Track Elo rating changes for each player in each match"""
+
+    match = models.ForeignKey(
+        Match,
+        on_delete=models.CASCADE,
+        related_name='elo_history'
+    )
+    player = models.ForeignKey(
+        Player,
+        on_delete=models.CASCADE,
+        related_name='elo_history'
+    )
+    old_rating = models.IntegerField(help_text="Elo before match")
+    new_rating = models.IntegerField(help_text="Elo after match")
+    rating_change = models.IntegerField(help_text="Elo change (can be negative)")
+    k_factor = models.FloatField(help_text="K-factor used in calculation")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = "Elo History"
+        verbose_name_plural = "Elo Histories"
+        # Prevent duplicate entries
+        unique_together = ('match', 'player')
+
+    def __str__(self):
+        sign = '+' if self.rating_change >= 0 else ''
+        return f"{self.player} {sign}{self.rating_change} ({self.match})"

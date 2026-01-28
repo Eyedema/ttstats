@@ -5,6 +5,7 @@ from django_otp_webauthn.models import WebAuthnCredential
 
 from .emails import send_match_confirmation_email, send_passkey_registered_email
 from .models import Match, UserProfile
+from .elo import update_player_elo
 
 
 @receiver(post_save, sender=User)
@@ -39,6 +40,8 @@ def handle_match_completion(sender, instance, created, **kwargs):
         Match.objects.filter(pk=instance.pk).update(
             player1_confirmed=True, player2_confirmed=True
         )
+        # Reload instance to get updated confirmation fields
+        instance.refresh_from_db()
 
     # 2. Send confirmation emails (only to verified users who need to confirm)
     else:
@@ -55,6 +58,26 @@ def handle_match_completion(sender, instance, created, **kwargs):
             and not instance.player2_confirmed
         ):
             send_match_confirmation_email(instance, instance.player2, instance.player1)
+
+    # 3. Update Elo ratings (only runs if confirmed)
+    update_player_elo(instance)
+
+
+@receiver(post_save, sender=Match)
+def update_elo_on_confirmation(sender, instance, created, **kwargs):
+    """Update Elo ratings when match is confirmed"""
+    # Skip if this is being triggered by handle_match_completion
+    # (to avoid double-processing when winner is just set)
+    if getattr(instance, "_winner_just_set", False):
+        return
+
+    # IMPORTANT: Refresh instance to ensure we have the latest confirmation
+    # field values from the database. This fixes the issue where manual
+    # confirmations via the match_confirm view don't trigger Elo updates.
+    instance.refresh_from_db()
+
+    # Try to update Elo (has guards inside, safe to call anytime)
+    update_player_elo(instance)
 
 
 @receiver(post_save, sender=WebAuthnCredential)
