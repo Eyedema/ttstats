@@ -26,4 +26,6 @@ urlpatterns = [
     path('accounts/login/', CustomLoginView.as_view(), name='login'),
     path('accounts/', include('django.contrib.auth.urls')),
     path('pingpong/', include('pingpong.urls')),
+    # WebAuthn URLs (must be at root level for namespace to work)
+    path('webauthn/', include(('django_otp_webauthn.urls', 'otp_webauthn'))),
 ]
