@@ -11,11 +11,29 @@
             <h2 class="text-2xl md:text-3xl font-bold tracking-tight">Match History</h2>
             <p class="text-muted-foreground mt-1 text-sm md:text-base">All recorded matches</p>
         </div>
-        <a href="{% url 'pingpong:match_add' %}"
-            class="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors min-h-[44px]">
-            <img src="{% static 'pingpong/icons/plus.svg' %}" class="w-4 h-4 invert" alt="">
-            Record New Match
-        </a>
+        <div class="relative" x-data="{ open: false }">
+            <button @click="open = !open"
+                class="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors min-h-[44px]">
+                <img src="{% static 'pingpong/icons/plus.svg' %}" class="w-4 h-4 invert" alt="">
+                Create Match
+                <img src="{% static 'pingpong/icons/chevron-down.svg' %}" class="w-4 h-4 invert" alt="">
+            </button>
+            <div x-show="open" @click.away="open = false" x-transition
+                class="absolute right-0 mt-2 w-48 rounded-md shadow-lg bg-white ring-1 ring-black ring-opacity-5 z-10">
+                <div class="py-1">
+                    <a href="{% url 'pingpong:match_add' %}"
+                        class="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
+                        <img src="{% static 'pingpong/icons/clipboard-list.svg' %}" class="w-4 h-4" alt="">
+                        Record Match
+                    </a>
+                    <a href="{% url 'pingpong:match_schedule' %}"
+                        class="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
+                        <img src="{% static 'pingpong/icons/calendar-plus.svg' %}" class="w-4 h-4" alt="">
+                        Schedule Match
+                    </a>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- Stats Cards -->
@@ -357,12 +375,21 @@
     <div class="rounded-lg border bg-white p-12 md:p-16 text-center">
         <img src="{% static 'pingpong/icons/clipboard-list.svg' %}" class="w-16 h-16 mx-auto text-muted-foreground mb-4 opacity-30" alt="">
         <h3 class="text-xl font-semibold mb-2">No Matches Yet</h3>
-        <p class="text-muted-foreground mb-6 text-sm md:text-base">Start tracking your table tennis matches by recording your first match!</p>
-        <a href="{% url 'pingpong:match_add' %}" class="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors min-h-[44px]">
-            <img src="{% static 'pingpong/icons/plus.svg' %}" class="w-4 h-4 invert" alt="">
-            Record First Match
-        </a>
+        <p class="text-muted-foreground mb-6 text-sm md:text-base">Start tracking your table tennis matches by recording or scheduling your first match!</p>
+        <div class="flex flex-col sm:flex-row gap-3 justify-center">
+            <a href="{% url 'pingpong:match_add' %}" class="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors min-h-[44px]">
+                <img src="{% static 'pingpong/icons/plus.svg' %}" class="w-4 h-4 invert" alt="">
+                Record Match
+            </a>
+            <a href="{% url 'pingpong:match_schedule' %}" class="inline-flex items-center justify-center gap-2 rounded-md border bg-white px-4 py-2.5 text-sm font-medium hover:bg-secondary transition-colors min-h-[44px]">
+                <img src="{% static 'pingpong/icons/calendar-plus.svg' %}" class="w-4 h-4" alt="">
+                Schedule Match
+            </a>
+        </div>
     </div>
     {% endif %}
 </div>
+
+<!-- Alpine.js for dropdown -->
+<script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
 {% endblock %}

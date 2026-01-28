@@ -121,3 +121,95 @@ Table Tennis Tracker Team
         )
     except Exception as e:
         print(f"❌ Email send error: {e}")
+
+
+def send_scheduled_match_email(scheduled_match, player):
+    """
+    Send notification email to a player about a scheduled match.
+
+    Args:
+        scheduled_match: ScheduledMatch instance
+        player: Player who is being notified
+    """
+    user = player.user
+    if not user or not user.email:
+        return
+
+    # Build absolute URL
+    protocol = getattr(settings, "SITE_PROTOCOL", "http")
+    domain = getattr(settings, "SITE_DOMAIN", "localhost:8000")
+    calendar_url = f"{protocol}://{domain}/pingpong/calendar/"
+
+    # Format date and time
+    date_str = scheduled_match.scheduled_date.strftime("%A, %B %d, %Y")
+    time_str = scheduled_match.scheduled_time.strftime("%I:%M %p")
+    location_str = scheduled_match.location.name if scheduled_match.location else "TBD"
+
+    subject = f"🏓 Match Scheduled - {date_str}"
+
+    message = f"""Hi {player.name},
+
+A match has been scheduled for you!
+
+📅 Match Details:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Opponent: {scheduled_match.team2.name}
+  Date: {date_str}
+  Time: {time_str}
+  Location: {location_str}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📆 View your calendar:
+{calendar_url}
+
+Good luck!
+Table Tennis Tracker Team
+"""
+
+    html_message = f"""
+    <html>
+    <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2>🏓 Match Scheduled!</h2>
+        <p>Hi {player.name},</p>
+        <p>A match has been scheduled for you!</p>
+
+        <div style="background: #f3f4f6; padding: 20px; border-radius: 8px; margin: 20px 0;">
+            <h3 style="margin-top: 0;">📅 Match Details</h3>
+            <p style="margin: 5px 0;"><strong>You:</strong> {scheduled_match.team1.name}</p>
+            <p style="margin: 5px 0;"><strong>Opponent:</strong> {scheduled_match.team2.name}</p>
+            <p style="margin: 5px 0;">📆 <strong>Date:</strong> {date_str}</p>
+            <p style="margin: 5px 0;">🕐 <strong>Time:</strong> {time_str}</p>
+            <p style="margin: 5px 0;">📍 <strong>Location:</strong> {location_str}</p>
+        </div>
+
+        <a href="{calendar_url}"
+           style="display: inline-block; background: #2563eb; color: white; padding: 12px 24px;
+                  text-decoration: none; border-radius: 6px; font-weight: bold;">
+            📆 View Calendar
+        </a>
+
+        <p style="margin-top: 30px;">Good luck!<br>Table Tennis Tracker Team</p>
+    </body>
+    </html>
+    """
+
+    # Print to console for development
+    print(f"\n{'=' * 60}")
+    print(f"📧 SCHEDULED MATCH EMAIL TO: {user.email}")
+    print(f"   Match: {scheduled_match.team1} vs {scheduled_match.team2}")
+    print(f"   Date: {date_str} at {time_str}")
+    print(f"   Location: {location_str}")
+    print(f"{'=' * 60}\n")
+
+    # Send email
+    try:
+        send_mail(
+            subject=subject,
+            message=message,
+            html_message=html_message,
+            from_email="noreply@tabletennis.com",
+            recipient_list=[user.email],
+            fail_silently=True,
+        )
+    except Exception as e:
+        print(f"❌ Email send error: {e}")

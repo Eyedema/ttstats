@@ -20,8 +20,9 @@ from django.views.generic import (
     UpdateView,
 )
 
-from .forms import GameForm, MatchEditForm, MatchForm, PlayerRegistrationForm
-from .models import Game, Location, Match, Player, UserProfile, MatchConfirmation
+from .forms import GameForm, MatchEditForm, MatchForm, PlayerRegistrationForm, ScheduledMatchForm
+from .models import Game, Location, Match, Player, UserProfile, MatchConfirmation, ScheduledMatch
+from .emails import send_scheduled_match_email
 
 
 # Create your views here.
@@ -860,6 +861,207 @@ class EmailResendVerificationView(LoginRequiredMixin, View):
         if hasattr(request.user, "player"):
             return redirect("pingpong:player_detail", pk=request.user.player.pk)
         return redirect("pingpong:dashboard")
+
+
+class ScheduledMatchCreateView(LoginRequiredMixin, CreateView):
+    """View to schedule a future match"""
+
+    model = ScheduledMatch
+    form_class = ScheduledMatchForm
+    template_name = "pingpong/scheduled_match_form.html"
+    success_url = reverse_lazy("pingpong:calendar")
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["locations"] = Location.objects.all()
+        context["is_staff"] = self.request.user.is_staff
+        try:
+            context["user_player"] = self.request.user.player
+        except AttributeError:
+            context["user_player"] = None
+        return context
+
+    def get_form(self, form_class=None):
+        """Customize form based on user permissions"""
+        form = super().get_form(form_class)
+        user = self.request.user
+
+        if not user.is_staff:
+            try:
+                user_player = user.player
+
+                # Pre-select and lock user as player1
+                form.fields["player1"].initial = user_player
+                form.fields["player1"].disabled = True
+                form.fields["player1"].widget.attrs.update(
+                    {"class": "bg-muted cursor-not-allowed"}
+                )
+                form.fields["player1"].help_text = "You are automatically set as Player 1"
+
+                # Limit player2 choices to exclude the user
+                form.fields["player2"].queryset = Player.objects.exclude(pk=user_player.pk)
+
+            except Player.DoesNotExist:
+                messages.error(
+                    self.request,
+                    "You must have a player profile to schedule matches. Please contact an administrator.",
+                )
+                form.fields["player1"].disabled = True
+                form.fields["player2"].disabled = True
+
+        return form
+
+    def form_valid(self, form):
+        """Save the scheduled match and send notifications"""
+        user = self.request.user
+        player1 = form.cleaned_data["player1"]
+        player2 = form.cleaned_data["player2"]
+
+        # Non-staff users must be participants
+        if not user.is_staff:
+            try:
+                user_player = user.player
+                if player1 != user_player and player2 != user_player:
+                    messages.error(
+                        self.request, "You can only schedule matches you participate in!"
+                    )
+                    return self.form_invalid(form)
+
+                if player1 != user_player:
+                    messages.error(
+                        self.request, "You must be Player 1 in matches you schedule!"
+                    )
+                    return self.form_invalid(form)
+
+                form.instance.created_by = user_player
+
+            except Player.DoesNotExist:
+                messages.error(
+                    self.request, "You must have a player profile to schedule matches."
+                )
+                return self.form_invalid(form)
+
+        # Save the scheduled match
+        self.object = form.save()
+        scheduled_match = self.object
+
+        # Send notification emails to both players
+        send_scheduled_match_email(scheduled_match, player1)
+        send_scheduled_match_email(scheduled_match, player2)
+
+        # Mark notification as sent
+        scheduled_match.notification_sent = True
+        scheduled_match.save()
+
+        messages.success(
+            self.request,
+            f"Match scheduled for {scheduled_match.scheduled_date.strftime('%B %d, %Y')}! Notifications sent to both players.",
+        )
+
+        # Redirect to calendar showing the month of the scheduled match
+        return redirect(
+            f"{reverse_lazy('pingpong:calendar')}?year={scheduled_match.scheduled_date.year}&month={scheduled_match.scheduled_date.month}"
+        )
+
+
+class CalendarView(LoginRequiredMixin, TemplateView):
+    """Display calendar view of scheduled and past matches"""
+
+    template_name = "pingpong/calendar.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        from django.utils import timezone
+        import calendar
+        from datetime import date
+
+        # Get month/year from query params or use current
+        today = timezone.now().date()
+        year = int(self.request.GET.get("year", today.year))
+        month = int(self.request.GET.get("month", today.month))
+
+        # Create current date for the selected month
+        current_date = date(year, month, 1)
+
+        # Calculate previous/next month as date objects (for template .month/.year access)
+        if month == 1:
+            prev_month = date(year - 1, 12, 1)
+        else:
+            prev_month = date(year, month - 1, 1)
+
+        if month == 12:
+            next_month = date(year + 1, 1, 1)
+        else:
+            next_month = date(year, month + 1, 1)
+
+        # Get user's player
+        try:
+            user_player = self.request.user.player
+        except AttributeError:
+            user_player = None
+
+        # Get scheduled matches for this month
+        scheduled_matches = ScheduledMatch.objects.filter(
+            scheduled_date__year=year,
+            scheduled_date__month=month,
+        ).order_by("scheduled_date", "scheduled_time")
+
+        # Get completed matches for this month
+        completed_matches = Match.objects.filter(
+            date_played__year=year,
+            date_played__month=month,
+        ).order_by("date_played")
+
+        # Organize matches by day
+        matches_by_day = {}
+        for sm in scheduled_matches:
+            day = sm.scheduled_date.day
+            if day not in matches_by_day:
+                matches_by_day[day] = []
+            sm.is_scheduled = True
+            matches_by_day[day].append(sm)
+
+        for m in completed_matches:
+            day = m.date_played.day
+            if day not in matches_by_day:
+                matches_by_day[day] = []
+            m.is_scheduled = False
+            matches_by_day[day].append(m)
+
+        # Build calendar weeks structure for the template
+        cal = calendar.Calendar(firstweekday=6)  # Sunday first
+        calendar_weeks = []
+        for week in cal.monthdatescalendar(year, month):
+            week_data = []
+            for day_date in week:
+                day_matches = matches_by_day.get(day_date.day, []) if day_date.month == month else []
+                week_data.append({
+                    'day': day_date.day,
+                    'date': day_date,
+                    'is_other_month': day_date.month != month,
+                    'is_today': day_date == today,
+                    'matches': day_matches,
+                })
+            calendar_weeks.append(week_data)
+
+        # Get upcoming scheduled matches (all future)
+        upcoming_matches = ScheduledMatch.objects.filter(
+            scheduled_date__gte=today
+        ).order_by("scheduled_date", "scheduled_time")[:5]
+
+        context.update(
+            {
+                "current_date": current_date,
+                "prev_month": prev_month,
+                "next_month": next_month,
+                "today": today,
+                "calendar_weeks": calendar_weeks,
+                "upcoming_matches": upcoming_matches,
+                "user_player": user_player,
+            }
+        )
+
+        return context
 
 
 class CustomLoginView(LoginView):

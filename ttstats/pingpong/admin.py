@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Player, Match, Game, Location, UserProfile, MatchConfirmation, Team
+from .models import Player, Match, Game, Location, UserProfile, MatchConfirmation, Team, ScheduledMatch
 
 admin.site.register(Player)
 admin.site.register(Match)
@@ -8,3 +8,4 @@ admin.site.register(Location)
 admin.site.register(UserProfile)
 admin.site.register(Team)
 admin.site.register(MatchConfirmation)
+admin.site.register(ScheduledMatch)

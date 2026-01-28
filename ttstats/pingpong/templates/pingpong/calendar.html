@@ -1,0 +1,160 @@
+{% extends "pingpong/base.html" %}
+{% load static %}
+{% load calendar_tags %}
+
+{% block title %}Calendar - Table Tennis Tracker{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto space-y-6">
+    <!-- Back button -->
+    <div>
+        <a href="{% url 'pingpong:match_list' %}" class="inline-flex items-center gap-2 text-sm font-medium hover:underline">
+            <img src="{% static 'pingpong/icons/arrow-left.svg' %}" class="w-4 h-4" alt="">
+            Back to Matches
+        </a>
+    </div>
+
+    <!-- Header Section -->
+    <div class="rounded-lg border bg-white">
+        <div class="p-6">
+            <div class="flex items-center gap-4 mb-6 pb-6 border-b">
+                <div class="w-14 h-14 rounded-full bg-primary text-primary-foreground flex items-center justify-center">
+                    <img src="{% static 'pingpong/icons/calendar.svg' %}" class="w-6 h-6 invert" alt="">
+                </div>
+                <div>
+                    <h2 class="text-2xl font-bold">Match Calendar</h2>
+                    <p class="text-sm text-muted-foreground">View scheduled and past matches</p>
+                </div>
+            </div>
+
+            <!-- Calendar Navigation -->
+            <div class="flex items-center justify-between mb-6">
+                <a href="{% url 'pingpong:calendar' %}?month={{ prev_month.month }}&year={{ prev_month.year }}"
+                   class="inline-flex items-center gap-2 rounded-md border bg-white px-4 py-2 text-sm font-medium hover:bg-secondary transition-colors">
+                    <img src="{% static 'pingpong/icons/chevron-left.svg' %}" class="w-4 h-4" alt="">
+                    Previous
+                </a>
+                <h3 class="text-lg font-semibold">{{ current_date|date:"F Y" }}</h3>
+                <a href="{% url 'pingpong:calendar' %}?month={{ next_month.month }}&year={{ next_month.year }}"
+                   class="inline-flex items-center gap-2 rounded-md border bg-white px-4 py-2 text-sm font-medium hover:bg-secondary transition-colors">
+                    Next
+                    <img src="{% static 'pingpong/icons/chevron-right.svg' %}" class="w-4 h-4" alt="">
+                </a>
+            </div>
+
+            <!-- Calendar Grid -->
+            <div class="border rounded-lg overflow-hidden">
+                <div class="grid grid-cols-7 bg-muted/50">
+                    <div class="p-3 text-center text-sm font-medium border-r">Sun</div>
+                    <div class="p-3 text-center text-sm font-medium border-r">Mon</div>
+                    <div class="p-3 text-center text-sm font-medium border-r">Tue</div>
+                    <div class="p-3 text-center text-sm font-medium border-r">Wed</div>
+                    <div class="p-3 text-center text-sm font-medium border-r">Thu</div>
+                    <div class="p-3 text-center text-sm font-medium border-r">Fri</div>
+                    <div class="p-3 text-center text-sm font-medium">Sat</div>
+                </div>
+                <div class="grid grid-cols-7">
+                    {% for week in calendar_weeks %}
+                        {% for day in week %}
+                        <div class="min-h-[100px] p-2 border-r border-b {% if day.is_other_month %}bg-muted/20{% else %}bg-white{% endif %} {% if day.is_today %}ring-2 ring-primary ring-inset{% endif %}">
+                            <div class="text-sm {% if day.is_other_month %}text-muted-foreground{% else %}font-medium{% endif %} mb-2">
+                                {{ day.day }}
+                            </div>
+                            {% for match in day.matches %}
+                            {% if match.is_scheduled %}
+                            <div class="block text-xs p-1 mb-1 rounded bg-primary/10 text-primary" title="Scheduled: {{ match.player1 }} vs {{ match.player2 }}">
+                                {{ match.player1.name|slice:":10" }} vs {{ match.player2.name|slice:":10" }}
+                            </div>
+                            {% else %}
+                            <a href="{% url 'pingpong:match_detail' match.pk %}"
+                               class="block text-xs p-1 mb-1 rounded bg-secondary hover:bg-secondary/80 transition-colors">
+                                {{ match.player1.name|slice:":10" }} vs {{ match.player2.name|slice:":10" }}
+                            </a>
+                            {% endif %}
+                            {% endfor %}
+                        </div>
+                        {% endfor %}
+                    {% endfor %}
+                </div>
+            </div>
+
+            <!-- Action Buttons -->
+            <div class="flex gap-3 justify-end mt-6 pt-6 border-t">
+                <a href="{% url 'pingpong:match_schedule' %}" 
+                   class="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors">
+                    <img src="{% static 'pingpong/icons/calendar-plus.svg' %}" class="w-4 h-4 invert" alt="">
+                    Schedule Match
+                </a>
+                <a href="{% url 'pingpong:match_add' %}" 
+                   class="inline-flex items-center justify-center gap-2 rounded-md border bg-white px-4 py-2 text-sm font-medium hover:bg-secondary transition-colors">
+                    <img src="{% static 'pingpong/icons/clipboard-list.svg' %}" class="w-4 h-4" alt="">
+                    Record Match
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Upcoming Matches Section -->
+    {% if upcoming_matches %}
+    <div class="rounded-lg border bg-white p-6">
+        <div class="flex items-center gap-2 mb-4">
+            <img src="{% static 'pingpong/icons/calendar-check.svg' %}" class="w-5 h-5" alt="">
+            <h3 class="text-lg font-semibold">Upcoming Matches</h3>
+        </div>
+        <div class="space-y-3">
+            {% for match in upcoming_matches %}
+            <div class="block p-4 rounded-lg border bg-primary/5">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="font-medium">{{ match.player1 }} vs {{ match.player2 }}</p>
+                        <p class="text-sm text-muted-foreground">
+                            {{ match.scheduled_date|date:"F d, Y" }} at {{ match.scheduled_time|time:"H:i" }}
+                            {% if match.location %} - {{ match.location }}{% endif %}
+                        </p>
+                    </div>
+                    <span class="text-xs font-medium text-primary bg-primary/10 px-2 py-1 rounded">Scheduled</span>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% else %}
+    <div class="rounded-lg border border-dashed border-muted-foreground/25 bg-muted/30 p-8 text-center">
+        <img src="{% static 'pingpong/icons/calendar.svg' %}" class="w-12 h-12 mx-auto mb-3 opacity-50" alt="">
+        <p class="text-sm text-muted-foreground mb-4">No upcoming matches</p>
+        <div class="flex gap-3 justify-center">
+            <a href="{% url 'pingpong:match_schedule' %}" 
+               class="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors">
+                <img src="{% static 'pingpong/icons/calendar-plus.svg' %}" class="w-4 h-4 invert" alt="">
+                Schedule a Match
+            </a>
+            <a href="{% url 'pingpong:match_add' %}" 
+               class="inline-flex items-center gap-2 rounded-md border bg-white px-4 py-2 text-sm font-medium hover:bg-secondary transition-colors">
+                <img src="{% static 'pingpong/icons/clipboard-list.svg' %}" class="w-4 h-4" alt="">
+                Record a Match
+            </a>
+            <a href="{% url 'pingpong:match_list' %}" 
+               class="inline-flex items-center gap-2 rounded-md border bg-white px-4 py-2 text-sm font-medium hover:bg-secondary transition-colors">
+                <img src="{% static 'pingpong/icons/list.svg' %}" class="w-4 h-4" alt="">
+                View All Matches
+            </a>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Help Card -->
+    <div class="rounded-lg border border-primary/20 bg-primary/5 p-4">
+        <div class="flex gap-3">
+            <img src="{% static 'pingpong/icons/info.svg' %}" class="w-5 h-5 text-primary flex-shrink-0" alt="">
+            <div>
+                <h3 class="font-semibold text-sm mb-1">Calendar Tips</h3>
+                <ul class="text-sm text-muted-foreground space-y-1 list-disc list-inside">
+                    <li>Click on any match to view details</li>
+                    <li>Scheduled matches appear in blue, completed matches in gray</li>
+                    <li>Navigate between months using the Previous/Next buttons</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

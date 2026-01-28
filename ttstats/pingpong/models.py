@@ -5,7 +5,7 @@ from django.contrib.auth.models import User
 from django.db import models
 from django.utils import timezone
 
-from .managers import GameManager, MatchManager, PlayerManager
+from .managers import GameManager, MatchManager, PlayerManager, ScheduledMatchManager
 
 
 class Location(models.Model):
@@ -323,3 +323,62 @@ class UserProfile(models.Model):
 
     def __str__(self):
         return f"Profile of {self.user.username}"
+
+
+class ScheduledMatch(models.Model):
+    """A match scheduled for the future"""
+
+    team1 = models.ForeignKey(
+        Team, on_delete=models.CASCADE, related_name="scheduled_matches_as_team1"
+    )
+    team2 = models.ForeignKey(
+        Team, on_delete=models.CASCADE, related_name="scheduled_matches_as_team22"
+    )
+    scheduled_date = models.DateField(help_text="Date of the scheduled match")
+    scheduled_time = models.TimeField(help_text="Time of the scheduled match")
+    location = models.ForeignKey(
+        Location, on_delete=models.SET_NULL, null=True, blank=True
+    )
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    created_by = models.ForeignKey(
+        Player,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="scheduled_matches_created",
+    )
+
+    # Track if emails were sent
+    notification_sent = models.BooleanField(default=False)
+
+    objects = ScheduledMatchManager()
+
+    class Meta:
+        ordering = ["scheduled_date", "scheduled_time"]
+        verbose_name = "Scheduled Match"
+        verbose_name_plural = "Scheduled Matches"
+
+    def __str__(self):
+        return f"{self.team1} vs {self.team2} - {self.scheduled_date} at {self.scheduled_time}"
+
+    @property
+    def scheduled_datetime(self):
+        """Combine date and time into a datetime object"""
+        from datetime import datetime
+        return datetime.combine(self.scheduled_date, self.scheduled_time)
+
+    def user_can_view(self, user):
+        """Check if user can view this scheduled match"""
+        if not user or not user.is_authenticated:
+            return False
+        if user.is_staff or user.is_superuser:
+            return True
+        try:
+            return user in (self.team1.players.all() | self.team2.players.all())
+        except AttributeError:
+            return False
+
+    def user_can_edit(self, user):
+        """Check if user can edit this scheduled match"""
+        return self.user_can_view(user)
