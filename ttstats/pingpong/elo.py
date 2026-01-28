@@ -92,8 +92,8 @@ def update_player_elo(match):
     # Note: In support_doubles branch, this will need refactoring to:
     #   player1 = match.team1.players.first()
     #   player2 = match.team2.players.first()
-    player1 = match.player1
-    player2 = match.player2
+    player1 = match.team1.players.first()
+    player2 = match.team2.players.first()
 
     # Get current ratings
     r1 = player1.elo_rating
@@ -104,7 +104,7 @@ def update_player_elo(match):
     e2 = 1 - e1  # Probabilities sum to 1
 
     # Actual scores (1 = win, 0 = loss)
-    s1 = 1 if match.winner == player1 else 0
+    s1 = 1 if match.winner.players.first() == player1 else 0
     s2 = 1 - s1
 
     # Calculate K-factors (can be different for each player due to experience)
