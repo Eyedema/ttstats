@@ -59,6 +59,22 @@ class MatchDetailView(LoginRequiredMixin, DetailView):
     model = Match
     paginate_by = 10
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        match = self.get_object()
+
+        # Get Elo changes for this match
+        elo_changes = match.elo_history.select_related('player').all()
+
+        # Pass separate elo changes for easier template access
+        for change in elo_changes:
+            if change.player == match.player1:
+                context['player1_elo_change'] = change
+            elif change.player == match.player2:
+                context['player2_elo_change'] = change
+
+        return context
+
 
 class PlayerDetailView(LoginRequiredMixin, DetailView):
     """View to show details of a single player"""
@@ -448,12 +464,14 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
                     "wins": wins,
                     "losses": losses,
                     "win_rate": win_rate,
+                    "elo_rating": player.elo_rating,
+                    "elo_peak": player.elo_peak,
                 }
             )
 
-        # Sort by win rate (desc), then by total wins (desc), then by total matches (desc)
+        # Sort by Elo rating (desc), then by total wins (desc), then by win rate (desc)
         player_stats.sort(
-            key=lambda x: (x["win_rate"], x["wins"], x["total_matches"]), reverse=True
+            key=lambda x: (x["elo_rating"], x["wins"], x["win_rate"]), reverse=True
         )
 
         context["player_stats"] = player_stats

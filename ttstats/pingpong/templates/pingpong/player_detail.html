@@ -75,7 +75,7 @@
     </div>
 
     <!-- Statistics Grid -->
-    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
+    <div class="grid grid-cols-2 lg:grid-cols-3 gap-3 md:gap-4">
         <div class="rounded-lg border bg-white p-4 md:p-6">
             <div class="flex items-center justify-between">
                 <div>
@@ -106,6 +106,28 @@
                     <p class="text-xs text-muted-foreground mt-1">Defeats</p>
                 </div>
                 <img src="{% static 'pingpong/icons/circle-x.svg' %}" class="w-6 h-6 md:w-8 md:h-8 text-destructive flex-shrink-0" alt="">
+            </div>
+        </div>
+
+        <div class="rounded-lg border bg-white p-4 md:p-6">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="text-xs md:text-sm font-medium text-muted-foreground">Elo Rating</p>
+                    <p class="text-xl md:text-2xl font-bold text-primary mt-1">{{ player.elo_rating }}</p>
+                    <p class="text-xs text-muted-foreground mt-1">Current skill</p>
+                </div>
+                <img src="{% static 'pingpong/icons/trending-up.svg' %}" class="w-6 h-6 md:w-8 md:h-8 text-primary flex-shrink-0" alt="">
+            </div>
+        </div>
+
+        <div class="rounded-lg border bg-white p-4 md:p-6">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="text-xs md:text-sm font-medium text-muted-foreground">Peak Elo</p>
+                    <p class="text-xl md:text-2xl font-bold text-warning mt-1">{{ player.elo_peak }}</p>
+                    <p class="text-xs text-muted-foreground mt-1">All-time best</p>
+                </div>
+                <img src="{% static 'pingpong/icons/award.svg' %}" class="w-6 h-6 md:w-8 md:h-8 text-warning flex-shrink-0" alt="">
             </div>
         </div>
 

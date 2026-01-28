@@ -119,6 +119,12 @@
                             Winner
                         </div>
                         {% endif %}
+                        {% if player1_elo_change %}
+                        <div class="flex items-center gap-1 text-xs {% if player1_elo_change.rating_change > 0 %}text-success{% else %}text-destructive{% endif %} mt-1">
+                            <span class="font-semibold">{% if player1_elo_change.rating_change > 0 %}+{% endif %}{{ player1_elo_change.rating_change }}</span>
+                            Elo
+                        </div>
+                        {% endif %}
                     </div>
                 </div>
                 <div class="text-5xl font-bold">{{ match.player1_score }}</div>
@@ -157,6 +163,12 @@
                             Winner
                         </div>
                         {% endif %}
+                        {% if player2_elo_change %}
+                        <div class="flex items-center gap-1 text-xs {% if player2_elo_change.rating_change > 0 %}text-success{% else %}text-destructive{% endif %} mt-1">
+                            <span class="font-semibold">{% if player2_elo_change.rating_change > 0 %}+{% endif %}{{ player2_elo_change.rating_change }}</span>
+                            Elo
+                        </div>
+                        {% endif %}
                     </div>
                 </div>
                 <div class="text-5xl font-bold">{{ match.player2_score }}</div>
@@ -181,6 +193,11 @@
                             <div class="flex items-center gap-1 text-xs text-success font-bold">
                                 <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-3 h-3" alt="">
                                 WINNER
+                            </div>
+                            {% endif %}
+                            {% if player1_elo_change %}
+                            <div class="flex items-center gap-1 text-xs {% if player1_elo_change.rating_change > 0 %}text-success{% else %}text-destructive{% endif %} font-semibold mt-1">
+                                {% if player1_elo_change.rating_change > 0 %}+{% endif %}{{ player1_elo_change.rating_change }} Elo
                             </div>
                             {% endif %}
                         </div>
@@ -224,6 +241,11 @@
                             <div class="flex items-center gap-1 text-xs text-success font-bold">
                                 <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-3 h-3" alt="">
                                 WINNER
+                            </div>
+                            {% endif %}
+                            {% if player2_elo_change %}
+                            <div class="flex items-center gap-1 text-xs {% if player2_elo_change.rating_change > 0 %}text-success{% else %}text-destructive{% endif %} font-semibold mt-1">
+                                {% if player2_elo_change.rating_change > 0 %}+{% endif %}{{ player2_elo_change.rating_change }} Elo
                             </div>
                             {% endif %}
                         </div>

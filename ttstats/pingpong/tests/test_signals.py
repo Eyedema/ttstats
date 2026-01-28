@@ -127,3 +127,85 @@ class TestHandleMatchCompletion:
         m.notes = "Extra note"
         m.save()
         assert len(mail.outbox) == initial
+
+
+@pytest.mark.django_db
+class TestMatchCompletionSignalElo:
+    """Test Elo update in handle_match_completion signal"""
+
+    def test_elo_updated_on_match_confirmation(self):
+        """Elo should be updated when match is confirmed by both players"""
+        from django.core import mail
+        from ..models import EloHistory
+        
+        p1 = PlayerFactory(with_user=True, elo_rating=1500, matches_for_elo=25)
+        p2 = PlayerFactory(with_user=True, elo_rating=1500, matches_for_elo=25)
+        
+        # Verify both players' emails
+        p1.user.profile.email_verified = True
+        p1.user.profile.save()
+        p2.user.profile.email_verified = True
+        p2.user.profile.save()
+
+        match = MatchFactory(player1=p1, player2=p2, best_of=5)
+
+        # Complete match
+        GameFactory(match=match, game_number=1, player1_score=11, player2_score=5)
+        GameFactory(match=match, game_number=2, player1_score=11, player2_score=7)
+        GameFactory(match=match, game_number=3, player1_score=11, player2_score=9)
+        match.refresh_from_db()
+
+        # First confirmation (no Elo update yet)
+        match.player1_confirmed = True
+        match.save()
+
+        p1.refresh_from_db()
+        assert p1.elo_rating == 1500  # No change yet
+
+        # Second confirmation (triggers Elo update)
+        match.player2_confirmed = True
+        match.save()
+
+        p1.refresh_from_db()
+        p2.refresh_from_db()
+
+        # Winner should gain Elo
+        assert p1.elo_rating > 1500
+        # Loser should lose Elo
+        assert p2.elo_rating < 1500
+        # History should be created
+        assert EloHistory.objects.filter(match=match).count() == 2
+
+    def test_elo_updated_on_auto_confirm(self):
+        """Elo should be updated when match is auto-confirmed"""
+        from ..models import EloHistory
+        
+        # Create unverified players
+        p1 = PlayerFactory(with_user=True, elo_rating=1500, matches_for_elo=25)
+        p2 = PlayerFactory(with_user=True, elo_rating=1500, matches_for_elo=25)
+        
+        # Make them unverified
+        p1.user.profile.email_verified = False
+        p1.user.profile.save()
+        p2.user.profile.email_verified = False
+        p2.user.profile.save()
+
+        match = MatchFactory(player1=p1, player2=p2, best_of=5)
+
+        # Complete match (should auto-confirm and update Elo)
+        GameFactory(match=match, game_number=1, player1_score=11, player2_score=5)
+        GameFactory(match=match, game_number=2, player1_score=11, player2_score=7)
+        GameFactory(match=match, game_number=3, player1_score=11, player2_score=9)
+        match.refresh_from_db()
+
+        p1.refresh_from_db()
+        p2.refresh_from_db()
+
+        # Should be auto-confirmed
+        assert match.player1_confirmed is True
+        assert match.player2_confirmed is True
+        
+        # Elo should be updated
+        assert p1.elo_rating > 1500
+        assert p2.elo_rating < 1500
+        assert EloHistory.objects.filter(match=match).count() == 2
