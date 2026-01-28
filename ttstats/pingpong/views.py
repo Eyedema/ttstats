@@ -22,7 +22,12 @@ from django.views.generic import (
 
 from .forms import GameForm, MatchEditForm, MatchForm, PlayerRegistrationForm, ScheduledMatchForm
 from .models import Game, Location, Match, Player, ScheduledMatch, UserProfile
-from .emails import send_scheduled_match_email
+from .emails import send_scheduled_match_email, send_passkey_deleted_email
+
+try:
+    from django_otp_webauthn.models import WebAuthnCredential
+except ImportError:
+    WebAuthnCredential = None
 
 
 # Create your views here.
@@ -1059,3 +1064,38 @@ class CustomLoginView(LoginView):
 
         messages.success(self.request, f"Welcome back, {user.username}!")
         return super().form_valid(form)
+
+
+class PasskeyManagementView(LoginRequiredMixin, View):
+    """View for users to manage their passkeys"""
+    template_name = "pingpong/passkey_management.html"
+
+    def get(self, request):
+        if WebAuthnCredential is None:
+            messages.error(request, "Passkey functionality is not available.")
+            return redirect("pingpong:dashboard")
+
+        credentials = WebAuthnCredential.objects.filter(user=request.user)
+        return render(request, self.template_name, {
+            'credentials': credentials
+        })
+
+    def post(self, request):
+        if WebAuthnCredential is None:
+            messages.error(request, "Passkey functionality is not available.")
+            return redirect("pingpong:dashboard")
+
+        credential_id = request.POST.get('credential_id')
+        credential = get_object_or_404(
+            WebAuthnCredential,
+            pk=credential_id,
+            user=request.user
+        )
+
+        # Send notification email before deleting
+        device_name = credential.name
+        send_passkey_deleted_email(request.user, device_name)
+
+        credential.delete()
+        messages.success(request, f"Passkey '{device_name}' deleted")
+        return redirect('pingpong:passkey_management')

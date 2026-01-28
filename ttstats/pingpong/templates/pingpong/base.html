@@ -252,6 +252,13 @@
                     </li>
                     {% endif %}
                     <li>
+                        <a href="{% url 'pingpong:passkey_management' %}"
+                            class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors {% if request.resolver_match.url_name == 'passkey_management' %}bg-secondary text-secondary-foreground{% else %}text-muted-foreground hover:bg-secondary hover:text-secondary-foreground{% endif %}">
+                            <img src="{% static 'pingpong/icons/key.svg' %}" class="w-5 h-5" alt="">
+                            Passkeys
+                        </a>
+                    </li>
+                    <li>
                         <form method="post" action="{% url 'logout' %}" class="w-full">
                             {% csrf_token %}
                             <button type="submit"

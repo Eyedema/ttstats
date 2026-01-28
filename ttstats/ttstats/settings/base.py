@@ -29,16 +29,21 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'django_otp',
+    'django_otp.plugins.otp_static',
+    'django_otp.plugins.otp_totp',
+    'django_otp_webauthn',
     'pingpong'
 ]
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
-    'whitenoise.middleware.WhiteNoiseMiddleware', 
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'django_otp.middleware.OTPMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'ttstats.middleware.CurrentUserMiddleware',
@@ -112,3 +117,19 @@ STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
 LOGOUT_REDIRECT_URL = '/pingpong/'
 ADMIN_LOGOUT_URL = '/accounts/logout/'
+
+# Authentication backends (for passkey + password login)
+AUTHENTICATION_BACKENDS = [
+    'django_otp_webauthn.backends.WebAuthnBackend',  # Passkey login
+    'django.contrib.auth.backends.ModelBackend',     # Traditional password login
+]
+
+# WebAuthn configuration
+OTP_WEBAUTHN_RP_NAME = "TTStats"
+# RP_ID must be a valid domain (not IP address)
+# For development: use 'localhost', for production: use your domain
+# Setting to None will auto-detect from request hostname
+OTP_WEBAUTHN_RP_ID = "localhost"
+OTP_WEBAUTHN_ALLOWED_ORIGINS = [
+    "http://localhost:8000",  # Must match RP_ID
+]
