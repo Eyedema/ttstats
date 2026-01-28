@@ -7,7 +7,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('pingpong', '0008_scheduledmatch'),
+        ('pingpong', '0013_scheduledmatch_to_teams'),
     ]
 
     operations = [
