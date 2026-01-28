@@ -3,7 +3,7 @@ from datetime import date, time, datetime
 from django.contrib.auth.models import AnonymousUser, User
 from django.db import IntegrityError
 
-from pingpong.models import Game, Location, Match, Player, ScheduledMatch, UserProfile
+from pingpong.models import Game, Location, Match, Player, ScheduledMatch, UserProfile, EloHistory
 from .conftest import (
     GameFactory,
     LocationFactory,
@@ -359,7 +359,7 @@ class TestGame:
         m = MatchFactory()
         g = Game(match=m, game_number=1, player1_score=13, player2_score=11)
         g.save()
-        assert g.winner is m.player1
+        assert g.winner == m.player1
 
     def test_unique_together_constraint(self):
         m = MatchFactory()
@@ -524,3 +524,114 @@ class TestScheduledMatch:
         sm = ScheduledMatchFactory(player1=p1, player2=p2)
         other = UserFactory()
         assert sm.user_can_view(other) is False
+
+
+@pytest.mark.django_db
+class TestPlayerEloFields:
+    """Test Player Elo rating fields"""
+
+    def test_default_elo_rating(self):
+        """New players should start with Elo 1500"""
+        player = PlayerFactory()
+        assert player.elo_rating == 1500
+
+    def test_default_elo_peak(self):
+        """New players should have peak Elo of 1500"""
+        player = PlayerFactory()
+        assert player.elo_peak == 1500
+
+    def test_default_matches_for_elo(self):
+        """New players should have 0 matches for Elo"""
+        player = PlayerFactory()
+        assert player.matches_for_elo == 0
+
+    def test_custom_elo_rating(self):
+        """Player can be created with custom Elo"""
+        player = PlayerFactory(elo_rating=1650, elo_peak=1700, matches_for_elo=50)
+        assert player.elo_rating == 1650
+        assert player.elo_peak == 1700
+        assert player.matches_for_elo == 50
+
+
+@pytest.mark.django_db
+class TestEloHistory:
+    """Test EloHistory model"""
+
+    def test_create_elo_history(self):
+        """EloHistory can be created with all required fields"""
+        match = MatchFactory()
+        player = match.player1
+
+        history = EloHistory.objects.create(
+            match=match,
+            player=player,
+            old_rating=1500,
+            new_rating=1516,
+            rating_change=16,
+            k_factor=32.0,
+        )
+
+        assert history.match == match
+        assert history.player == player
+        assert history.old_rating == 1500
+        assert history.new_rating == 1516
+        assert history.rating_change == 16
+        assert history.k_factor == 32.0
+
+    def test_elo_history_str(self):
+        """EloHistory __str__ should show player, change, and match"""
+        match = MatchFactory()
+        player = match.player1
+
+        history = EloHistory.objects.create(
+            match=match,
+            player=player,
+            old_rating=1500,
+            new_rating=1516,
+            rating_change=16,
+            k_factor=32.0,
+        )
+
+        assert str(history) == f"{player} +16 ({match})"
+
+    def test_elo_history_negative_change(self):
+        """EloHistory __str__ should handle negative changes"""
+        match = MatchFactory()
+        player = match.player2
+
+        history = EloHistory.objects.create(
+            match=match,
+            player=player,
+            old_rating=1500,
+            new_rating=1484,
+            rating_change=-16,
+            k_factor=32.0,
+        )
+
+        assert str(history) == f"{player} -16 ({match})"
+
+    def test_unique_together_constraint(self):
+        """Cannot create duplicate EloHistory for same match + player"""
+        from django.db import IntegrityError
+        
+        match = MatchFactory()
+        player = match.player1
+
+        EloHistory.objects.create(
+            match=match,
+            player=player,
+            old_rating=1500,
+            new_rating=1516,
+            rating_change=16,
+            k_factor=32.0,
+        )
+
+        with pytest.raises(IntegrityError):
+            EloHistory.objects.create(
+                match=match,
+                player=player,
+                old_rating=1500,
+                new_rating=1520,
+                rating_change=20,
+                k_factor=32.0,
+            )

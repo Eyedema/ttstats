@@ -2,7 +2,7 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import User
 from django_otp_webauthn.models import WebAuthnCredential
-from .models import Player, Match, Game, Location, UserProfile, ScheduledMatch
+from .models import Player, Match, Game, Location, UserProfile, ScheduledMatch, EloHistory
 
 # Unregister the default User admin
 admin.site.unregister(User)
@@ -35,7 +35,30 @@ class CustomUserAdmin(BaseUserAdmin):
     passkey_count.short_description = 'Passkeys'
 
 
-admin.site.register(Player)
+@admin.register(Player)
+class PlayerAdmin(admin.ModelAdmin):
+    """Custom Player admin with Elo rating information"""
+    list_display = ('name', 'nickname', 'elo_rating', 'elo_peak', 'matches_for_elo', 'user', 'created_at')
+    list_filter = ('playing_style', 'created_at')
+    search_fields = ('name', 'nickname', 'user__username')
+    readonly_fields = ('created_at', 'elo_rating', 'elo_peak', 'matches_for_elo')  # Elo is auto-calculated
+
+
+@admin.register(EloHistory)
+class EloHistoryAdmin(admin.ModelAdmin):
+    """Elo History admin (read-only)"""
+    list_display = ('player', 'match', 'old_rating', 'new_rating', 'rating_change', 'k_factor', 'created_at')
+    list_filter = ('created_at', 'player')
+    search_fields = ('player__name', 'match__id')
+    readonly_fields = ('match', 'player', 'old_rating', 'new_rating', 'rating_change', 'k_factor', 'created_at')
+
+    def has_add_permission(self, request):
+        return False  # Elo history is auto-generated
+
+    def has_change_permission(self, request, obj=None):
+        return False  # Elo history is immutable
+
+
 admin.site.register(Match)
 admin.site.register(Game)
 admin.site.register(Location)
