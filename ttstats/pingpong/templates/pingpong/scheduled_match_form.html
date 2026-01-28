@@ -13,6 +13,38 @@
         </a>
     </div>
 
+        <!-- Permission Info Banner (for non-staff users creating new matches) -->
+    {% if not object and not is_staff and user_player %}
+    <div class="rounded-lg border-l-4 border-primary bg-primary/10 p-4">
+        <div class="flex items-start gap-3">
+            <img src="{% static 'pingpong/icons/info.svg' %}" class="w-5 h-5 text-primary mt-0.5 flex-shrink-0" alt="">
+            <div>
+                <p class="text-sm font-semibold text-primary mb-1">
+                    Scheduling match as: {{ user_player.name }}
+                </p>
+                <p class="text-xs text-muted-foreground">
+                    You are automatically set as <strong>Player 1</strong>. Select your opponent as Player 2.
+                    You cannot schedule matches for other players.
+                </p>
+            </div>
+        </div>
+    </div>
+    {% elif not object and not user_player %}
+    <div class="rounded-lg border-l-4 border-destructive bg-destructive/10 p-4">
+        <div class="flex items-start gap-3">
+            <img src="{% static 'pingpong/icons/circle-alert.svg' %}" class="w-5 h-5 text-destructive mt-0.5 flex-shrink-0" alt="">
+            <div>
+                <p class="text-sm font-semibold text-destructive mb-1">
+                    No Player Profile Found
+                </p>
+                <p class="text-xs text-muted-foreground">
+                    You need a player profile to create matches. Please contact an administrator.
+                </p>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
     <!-- Form Card -->
     <div class="rounded-lg border bg-white">
         <div class="p-6">
@@ -47,25 +79,29 @@
 
                 <!-- Players Section -->
                 <div class="space-y-4">
-                    <h3 class="text-sm font-medium text-muted-foreground uppercase tracking-wider">Players</h3>
-
+                    <h3 class="text-base md:text-lg font-semibold flex items-center gap-2">
+                        <img src="{% static 'pingpong/icons/users.svg' %}" class="w-5 h-5" alt="">
+                        Players
+                    </h3>
                     <div class="grid gap-4 md:grid-cols-2">
                         <!-- Player 1 -->
                         <div class="space-y-2">
                             <label for="{{ form.player1.id_for_label }}" class="text-sm font-medium leading-none">
-                                Player 1 {% if not is_staff %}<span class="text-muted-foreground">(You)</span>{% endif %}
+                                Player 1 {% if not is_staff %}<span class="text-muted-foreground">(You)</span><span class="text-destructive">*</span>{% endif %}
                             </label>
                             <select 
                                 name="player1" 
                                 id="{{ form.player1.id_for_label }}"
-                                class="flex h-10 w-full rounded-md border border-input bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.player1.errors %}border-destructive{% endif %}"
-                            >
+                                class="flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.player1.errors %}border-destructive{% endif %} {% if form.player1.field.disabled %}bg-muted cursor-not-allowed{% endif %}"
+                                required
+                                {% if form.player1.field.disabled %}disabled{% endif %}
+                                >
                                 {% for value, label in form.player1.field.choices %}
                                 <option value="{{ value }}" {% if form.player1.value == value or form.player1.value|stringformat:"s" == value|stringformat:"s" %}selected{% endif %}>{{ label }}</option>
                                 {% endfor %}
                             </select>
                             {% if form.player1.help_text %}
-                            <p class="text-xs text-muted-foreground">{{ form.player1.help_text }}</p>
+                            <p class="text-xs md:text-sm text-muted-foreground">{{ form.player1.help_text }}</p>
                             {% endif %}
                             {% if form.player1.errors %}
                             <p class="text-sm text-destructive">{{ form.player1.errors.0 }}</p>
@@ -75,12 +111,12 @@
                         <!-- Player 2 -->
                         <div class="space-y-2">
                             <label for="{{ form.player2.id_for_label }}" class="text-sm font-medium leading-none">
-                                Player 2 <span class="text-muted-foreground">(Opponent)</span>
+                                Player 2 <span class="text-muted-foreground">(Opponent)</span><span class="text-destructive">*</span>
                             </label>
                             <select 
                                 name="player2" 
                                 id="{{ form.player2.id_for_label }}"
-                                class="flex h-10 w-full rounded-md border border-input bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.player2.errors %}border-destructive{% endif %}"
+                                class="flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.player2.errors %}border-destructive{% endif %}"
                                 required
                             >
                                 {% for value, label in form.player2.field.choices %}
@@ -96,8 +132,10 @@
 
                 <!-- Date & Time Fields -->
                 <div class="space-y-4">
-                    <h3 class="text-sm font-medium text-muted-foreground uppercase tracking-wider">When</h3>
-                    <div class="grid gap-4 md:grid-cols-2">
+                    <h3 class="text-base md:text-lg font-semibold flex items-center gap-2">
+                        <img src="{% static 'pingpong/icons/file-text.svg' %}" class="w-5 h-5" alt="">
+                        Match Details
+                    </h3>                    <div class="grid gap-4 md:grid-cols-2">
                         <div class="space-y-2">
                             <label class="text-sm font-medium leading-none" for="id_scheduled_date">
                                 Date <span class="text-destructive">*</span>
@@ -135,8 +173,10 @@
 
                 <!-- Location Section -->
                 <div class="space-y-4">
-                    <h3 class="text-sm font-medium text-muted-foreground uppercase tracking-wider">Where</h3>
-                    <div class="space-y-2">
+                    <h3 class="text-base md:text-lg font-semibold flex items-center gap-2">
+                        <img src="{% static 'pingpong/icons/map-pin.svg' %}" class="w-5 h-5" alt="">
+                        Additional Details
+                    </h3>                    <div class="space-y-2">
                         <div class="flex items-center justify-between">
                             <label class="text-sm font-medium leading-none" for="id_location">Location</label>
                             <span class="text-xs text-muted-foreground">Optional</span>
@@ -163,7 +203,6 @@
 
                 <!-- Notes Section -->
                 <div class="space-y-4">
-                    <h3 class="text-sm font-medium text-muted-foreground uppercase tracking-wider">Additional Info</h3>
                     <div class="space-y-2">
                         <div class="flex items-center justify-between">
                             <label for="{{ form.notes.id_for_label }}" class="text-sm font-medium leading-none">Notes</label>
@@ -212,7 +251,6 @@
                 <ul class="text-sm text-muted-foreground space-y-1 list-disc list-inside">
                     <li>Both players will receive an email notification about the scheduled match</li>
                     <li>The match will appear in your calendar</li>
-                    <li>When the match is played, you can record the result from the Matches page</li>
                 </ul>
             </div>
         </div>

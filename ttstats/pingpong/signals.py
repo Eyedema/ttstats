@@ -1,12 +1,13 @@
 from django.contrib.auth.models import User
 from django.db.models import Count
 
-from .emails import send_match_confirmation_email
-from .models import Match, MatchConfirmation
 from django.db.models.signals import post_save, pre_save
 from django.dispatch import receiver
+from django_otp_webauthn.models import WebAuthnCredential
 
-from .models import UserProfile
+from .emails import send_match_confirmation_email, send_passkey_registered_email
+from .models import Match, MatchConfirmation, UserProfile
+from .elo import update_player_elo
 
 
 @receiver(post_save, sender=User)
@@ -15,6 +16,13 @@ def create_user_profile(sender, instance, created, **kwargs):
         userprofile = UserProfile.objects.create(user=instance)
         userprofile.create_verification_token()
         userprofile.save()
+    else:
+        # Ensure profile exists even for existing users
+        # (in case they were created before signal was added)
+        if not hasattr(instance, 'profile'):
+            userprofile = UserProfile.objects.create(user=instance)
+            userprofile.create_verification_token()
+            userprofile.save()
 
 
 @receiver(pre_save, sender=Match)
@@ -45,6 +53,8 @@ def handle_match_completion(sender, instance, created, **kwargs):
             [MatchConfirmation(match=instance, player=player) for player in all_players],
             ignore_conflicts=True
         )
+        # Reload instance to get updated confirmation fields
+        instance.refresh_from_db()
         return
 
     # 2. Send confirmation emails (only to verified users who need to confirm)
@@ -57,3 +67,30 @@ def handle_match_completion(sender, instance, created, **kwargs):
                 and player.id not in [c.player_id for c in instance.confirmations.all()]
         ):
             send_match_confirmation_email(instance, player)
+
+    # 3. Update Elo ratings (only runs if confirmed)
+    update_player_elo(instance)
+
+
+@receiver(post_save, sender=Match)
+def update_elo_on_confirmation(sender, instance, created, **kwargs):
+    """Update Elo ratings when match is confirmed"""
+    # Skip if this is being triggered by handle_match_completion
+    # (to avoid double-processing when winner is just set)
+    if getattr(instance, "_winner_just_set", False):
+        return
+
+    # IMPORTANT: Refresh instance to ensure we have the latest confirmation
+    # field values from the database. This fixes the issue where manual
+    # confirmations via the match_confirm view don't trigger Elo updates.
+    instance.refresh_from_db()
+
+    # Try to update Elo (has guards inside, safe to call anytime)
+    update_player_elo(instance)
+
+
+@receiver(post_save, sender=WebAuthnCredential)
+def notify_passkey_registered(sender, instance, created, **kwargs):
+    """Send email when new passkey is registered"""
+    if created:
+        send_passkey_registered_email(instance.user, instance.name)

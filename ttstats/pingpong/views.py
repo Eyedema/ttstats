@@ -22,7 +22,12 @@ from django.views.generic import (
 
 from .forms import GameForm, MatchEditForm, MatchForm, PlayerRegistrationForm, ScheduledMatchForm
 from .models import Game, Location, Match, Player, UserProfile, MatchConfirmation, ScheduledMatch
-from .emails import send_scheduled_match_email
+from .emails import send_scheduled_match_email, send_passkey_deleted_email
+
+try:
+    from django_otp_webauthn.models import WebAuthnCredential
+except ImportError:
+    WebAuthnCredential = None
 
 
 # Create your views here.
@@ -53,6 +58,22 @@ class MatchDetailView(LoginRequiredMixin, DetailView):
     context_object_name = "match"
     model = Match
     paginate_by = 10
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        match = self.get_object()
+
+        # Get Elo changes for this match
+        elo_changes = match.elo_history.select_related('player').all()
+
+        # Pass separate elo changes for easier template access
+        for change in elo_changes:
+            if change.player in match.team1.players.all():
+                context['player1_elo_change'] = change
+            elif change.player == match.team2.players.all():
+                context['player2_elo_change'] = change
+
+        return context
 
 
 class PlayerDetailView(LoginRequiredMixin, DetailView):
@@ -462,10 +483,17 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
                     (player.wins or 0) / (player.total_matches or 1) * 100
             )
 
-        player_stats = sorted(
-            player_stats,
-            key=lambda p: (p.win_rate, p.wins, p.total_matches),
-            reverse=True
+            player_stats.append(
+                {
+                    "player": player,
+                    "elo_rating": player.elo_rating,
+                    "elo_peak": player.elo_peak,
+                }
+            )
+
+        # Sort by Elo rating (desc), then by total wins (desc), then by win rate (desc)
+        player_stats.sort(
+            key=lambda x: (x["elo_rating"], x["wins"], x["win_rate"]), reverse=True
         )
 
         context["player_stats"] = player_stats
@@ -1092,3 +1120,38 @@ class CustomLoginView(LoginView):
 
         messages.success(self.request, f"Welcome back, {user.username}!")
         return super().form_valid(form)
+
+
+class PasskeyManagementView(LoginRequiredMixin, View):
+    """View for users to manage their passkeys"""
+    template_name = "pingpong/passkey_management.html"
+
+    def get(self, request):
+        if WebAuthnCredential is None:
+            messages.error(request, "Passkey functionality is not available.")
+            return redirect("pingpong:dashboard")
+
+        credentials = WebAuthnCredential.objects.filter(user=request.user)
+        return render(request, self.template_name, {
+            'credentials': credentials
+        })
+
+    def post(self, request):
+        if WebAuthnCredential is None:
+            messages.error(request, "Passkey functionality is not available.")
+            return redirect("pingpong:dashboard")
+
+        credential_id = request.POST.get('credential_id')
+        credential = get_object_or_404(
+            WebAuthnCredential,
+            pk=credential_id,
+            user=request.user
+        )
+
+        # Send notification email before deleting
+        device_name = credential.name
+        send_passkey_deleted_email(request.user, device_name)
+
+        credential.delete()
+        messages.success(request, f"Passkey '{device_name}' deleted")
+        return redirect('pingpong:passkey_management')

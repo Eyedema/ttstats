@@ -47,6 +47,20 @@ class Player(models.Model):
     notes = models.TextField(blank=True, help_text="Strengths, weaknesses, etc.")
     created_at = models.DateTimeField(auto_now_add=True)
 
+    # Elo rating fields
+    elo_rating = models.IntegerField(
+        default=1500,
+        help_text="Current Elo rating"
+    )
+    elo_peak = models.IntegerField(
+        default=1500,
+        help_text="All-time highest Elo rating"
+    )
+    matches_for_elo = models.IntegerField(
+        default=0,
+        help_text="Number of confirmed matches that affected Elo (for new player boost)"
+    )
+
     objects = PlayerManager()
 
     def user_can_edit(self, user):

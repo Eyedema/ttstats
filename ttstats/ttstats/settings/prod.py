@@ -25,7 +25,7 @@ DATABASES = {
 }
 # Security settings for production
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')  # Important!
-SECURE_SSL_REDIRECT = False  # Let nginx handle redirects, not Django
+SECURE_SSL_REDIRECT = True
 
 # Security settings for production
 SECURE_SSL_REDIRECT = True
@@ -73,3 +73,9 @@ DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', '')
 
 SITE_PROTOCOL = 'https'
 SITE_DOMAIN = os.environ.get('SITE_DOMAIN')
+
+# WebAuthn configuration for production
+OTP_WEBAUTHN_RP_ID = os.environ.get("SITE_DOMAIN")
+OTP_WEBAUTHN_ALLOWED_ORIGINS = [
+    f"https://{os.environ.get('SITE_DOMAIN')}"
+]

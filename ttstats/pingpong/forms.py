@@ -58,7 +58,7 @@ class MatchForm(forms.ModelForm):
         player2 = cleaned_data.get('player2')
         player3 = cleaned_data.get('player3')
         player4 = cleaned_data.get('player4')
-        
+
         # Ensure players are different
         if player1 and player2 and player1 == player2:
             raise forms.ValidationError("Player 1 and Player 2 must be different!")
@@ -71,7 +71,7 @@ class MatchForm(forms.ModelForm):
 
         if player2 and player3 and player2 == player3:
             raise forms.ValidationError("Player 2 and Player 3 must be different!")
-        
+
         return cleaned_data
 
 
@@ -135,7 +135,7 @@ class PlayerRegistrationForm(UserCreationForm):
                 nickname=self.cleaned_data.get('nickname', ''),
                 playing_style=self.cleaned_data['playing_style']
             )
-
+        
         return user
 
 

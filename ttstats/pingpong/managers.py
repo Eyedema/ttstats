@@ -69,23 +69,23 @@ class GameManager(models.Manager):
     """
     Games are visible if their parent match is visible.
     """
-
+    
     def get_queryset(self):
         """Filter games based on match visibility"""
         from ttstats.middleware import get_current_user
-
+        
         qs = super().get_queryset()
         user = get_current_user()
-
+        
         if not user:
             return qs
-
+        
         if not user.is_authenticated:
             return qs.none()
-
+        
         if user.is_staff or user.is_superuser:
             return qs
-
+        
         # Filter to games from matches user can see
         try:
             user_player = user.player
