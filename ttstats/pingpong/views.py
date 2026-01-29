@@ -70,7 +70,7 @@ class MatchDetailView(LoginRequiredMixin, DetailView):
         for change in elo_changes:
             if change.player in match.team1.players.all():
                 context['player1_elo_change'] = change
-            elif change.player == match.team2.players.all():
+            elif change.player in match.team2.players.all():
                 context['player2_elo_change'] = change
 
         return context
@@ -128,7 +128,7 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
         longest_win = longest_loss = win_streak = loss_streak = 0
 
         for match in matches:
-            player_won = match.winner.filter(players=self.object).exists()
+            player_won = self.object in match.winner.players.all()
 
             if player_won:
                 if streak_type != 'win':
@@ -507,7 +507,7 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
 
-        player_stats = Player.objects.annotate(
+        player_stats_qs = Player.objects.annotate(
             total_matches=Count(
                 'teams__matches_as_team1',
                 filter=Q(teams__matches_as_team1__team1_confirmed=True,
@@ -531,7 +531,8 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
             )
         ).select_related('user')
 
-        for player in player_stats:
+        player_stats = []
+        for player in player_stats_qs:
             player.losses = (player.total_matches or 0) - (player.wins or 0)
             player.win_rate = (
                     (player.wins or 0) / (player.total_matches or 1) * 100
@@ -540,6 +541,11 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
             player_stats.append(
                 {
                     "player": player,
+                    "total_matches": player.total_matches,
+                    "total_games": player.total_games,
+                    "wins": player.wins,
+                    "losses": player.losses,
+                    "win_rate": player.win_rate,
                     "elo_rating": player.elo_rating,
                     "elo_peak": player.elo_peak,
                 }
