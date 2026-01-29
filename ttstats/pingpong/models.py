@@ -346,7 +346,7 @@ class ScheduledMatch(models.Model):
         Team, on_delete=models.CASCADE, related_name="scheduled_matches_as_team1"
     )
     team2 = models.ForeignKey(
-        Team, on_delete=models.CASCADE, related_name="scheduled_matches_as_team22"
+        Team, on_delete=models.CASCADE, related_name="scheduled_matches_as_team2"
     )
     scheduled_date = models.DateField(help_text="Date of the scheduled match")
     scheduled_time = models.TimeField(help_text="Time of the scheduled match")
