@@ -22,89 +22,306 @@ The codebase has been migrated from a 1v1-only table tennis tracking system to s
 
 **Migration Strategy:** The migrations use data migration functions to create Team objects from existing player relationships and preserve historical data.
 
-**UI/UX Strategy (IMPORTANT):** The future UI will allow users to:
-1. Toggle between singles (1v1) and doubles (2v2) matches
-2. Select individual players to form teams (not pre-existing teams)
+---
+
+## UI/UX Strategy and Form Architecture
+
+### User Experience Goals
+
+**Match Creation Flow:**
+1. User toggles between singles (1v1) and doubles (2v2) using `is_double` dropdown
+2. User selects individual players from dropdowns (not pre-existing teams)
 3. For singles: Select 2 players
 4. For doubles: Select 4 players (2 per team)
-5. Teams will be created programmatically from player selections
+5. Teams are created programmatically from player selections in the view's `form_valid()` method
 
-**Form Architecture:** To support this UX:
-- Forms will have `player1`, `player2`, `player3`, `player4` fields for player selection
-- Forms will NOT expose `team1`/`team2` directly (these are created programmatically)
-- The view's `form_valid()` or a custom `save()` method will create Team objects from selected players
-- Team creation logic: For singles, create single-player teams; for doubles, create two-player teams
+**Player Selection Rules:**
+1. **Non-staff users:**
+   - ALWAYS locked as Player 1 (pre-filled, disabled field)
+   - Cannot change Player 1 selection
+   - Can only select Player 2 (singles) or Players 2, 3, 4 (doubles)
+2. **Staff users:**
+   - Can select any players for all positions
+   - No restrictions
+
+**Dynamic Dropdown Behavior (REQUIRED):**
+- As players are selected, other dropdowns should dynamically exclude already-selected players
+- Example: If user selects "Alice" as Player 2, then Player 3 and Player 4 dropdowns should not show "Alice"
+- This prevents duplicate player selections and improves UX
+- **Implementation:** Requires JavaScript to update dropdown options in real-time
+
+### Form Architecture
+
+**CRITICAL: Forms use player1-4 fields, NOT team1/team2**
+
+```
+MatchForm:
+  - Exposes: player1, player2, player3, player4 (ModelChoiceField instances)
+  - Does NOT expose: team1, team2 (these are model fields but NOT form fields)
+  - player3 and player4 are optional (required=False) for singles matches
+
+ScheduledMatchForm:
+  - Exposes: player1, player2 (ModelChoiceField instances)
+  - Does NOT expose: team1, team2
+  - Singles matches only (no is_double field)
+```
+
+**Team Creation Workflow:**
+1. User submits form with player selections (player1, player2, optionally player3/player4)
+2. Form validation ensures all selected players are unique
+3. View's `form_valid()` method creates Team objects from selected players:
+   - Singles: Create 2 teams with 1 player each
+   - Doubles: Create 2 teams with 2 players each
+4. View assigns created teams to `match.team1` and `match.team2`
+5. Match is saved with team relationships
+
+**Why this approach:**
+- Supports the UX goal of selecting individual players via dropdowns
+- Maintains team-based data model for 2v2 support
+- Keeps forms simple (no complex team selection UI)
+- Teams are implementation detail, not exposed to users
 
 ---
 
 ## Critical Issues (Will Break the App)
 
-### 1. **forms.py - Completely Broken Form Structure** ⚠️ BLOCKING
+### 1. **forms.py - Missing Field Declarations** ⚠️ BLOCKING
 
 **Location:** `ttstats/pingpong/forms.py`
 
 **Issues:**
-- Line 11: `MatchForm.Meta.fields` references `['is_double', 'team1', 'team2', ...]` but the widgets section (lines 13-52) still defines widgets for non-existent `player1`, `player2`, `player3`, `player4` fields
-- Lines 24-35: Widget definitions for `player1`, `player2`, `player3`, `player4` will cause KeyError
-- Lines 54-75: `MatchForm.clean()` method validates `player1`, `player2`, `player3`, `player4` which don't exist in cleaned_data
+- Line 11: `MatchForm.Meta.fields` includes `['team1', 'team2', ...]` but per the form architecture, **forms should NOT expose team1/team2 fields** - these are created programmatically in the view
+- Lines 24-35: Widget definitions for `player1`, `player2`, `player3`, `player4` exist but **these fields are not declared as form fields**
+- Lines 54-75: `MatchForm.clean()` validates `player1`, `player2`, `player3`, `player4` which don't exist in `cleaned_data` because fields weren't declared
+- Line 147: `ScheduledMatchForm.Meta.fields` includes `['team1', 'team2', ...]` - should use player1/player2
+- Lines 157-162: `ScheduledMatchForm` widgets reference `player1`/`player2` that aren't declared
 - Lines 176-182: `ScheduledMatchForm.clean()` validates `player1`/`player2` that don't exist
-- Lines 157-162: `ScheduledMatchForm` widgets reference `player1`/`player2` fields
 
-**Why It Breaks:** Django will raise `KeyError` or `FieldError` when trying to access/validate non-existent form fields. Users cannot create or edit matches.
+**Why It Breaks:**
+- Django will raise `KeyError` when trying to access `cleaned_data['player1']` in `clean()` method
+- Form submission will fail because player data isn't captured
+- Team creation in view will fail because player data isn't available
 
 **Action Required:**
-- Add player1, player2, player3, player4 as ModelChoiceField (queryset=Player.objects.all())
-- Make player3, player4 optional (required=False) for singles matches
-- Remove team1, team2 from Meta.fields (will be created in view)
-- Fix is_double widget (should be Select, not ChoiceField)
-- Update all widget definitions to reference player1-4 (fix the existing ones)
-- Rewrite `MatchForm.clean()` to:
-  - Validate all 4 players are unique (if doubles)
-  - Validate player1 != player2 (if singles)
-  - Validate player3 and player4 are None/blank for singles matches
-- For ScheduledMatchForm: Same approach (player1/player2 fields, create teams in view)
+
+**For MatchForm:**
+1. **Declare player fields explicitly** (outside of Meta.fields, since they're not model fields):
+   ```python
+   player1 = forms.ModelChoiceField(
+       queryset=Player.objects.all(),
+       required=True,
+       widget=forms.Select(attrs={'class': '...'})
+   )
+   player2 = forms.ModelChoiceField(
+       queryset=Player.objects.all(),
+       required=True,
+       widget=forms.Select(attrs={'class': '...'})
+   )
+   player3 = forms.ModelChoiceField(
+       queryset=Player.objects.all(),
+       required=False,  # Optional for singles
+       widget=forms.Select(attrs={'class': '...'})
+   )
+   player4 = forms.ModelChoiceField(
+       queryset=Player.objects.all(),
+       required=False,  # Optional for singles
+       widget=forms.Select(attrs={'class': '...'})
+   )
+   ```
+
+2. **Update Meta.fields** to remove team1/team2:
+   ```python
+   fields = ['is_double', 'date_played', 'location', 'match_type', 'best_of', 'notes']
+   ```
+
+3. **Remove player1-4 from widgets dict** (lines 24-35) since they're now declared as fields with widgets
+
+4. **Fix is_double widget** - should be `Select`, not `ChoiceField`:
+   ```python
+   'is_double': forms.Select(
+       choices=[('False', 'Single'), ('True', 'Double')],
+       attrs={'class': '...'}
+   )
+   ```
+
+5. **Update clean() method validation** (already correct, just needs fields to exist):
+   - Validates all 4 players are unique (for doubles)
+   - Validates player1 != player2 (for singles)
+   - Should also validate player3/player4 are None for singles matches
+
+**For ScheduledMatchForm:**
+1. **Declare player1 and player2 fields** (same pattern as MatchForm)
+2. **Update Meta.fields** to remove team1/team2:
+   ```python
+   fields = ['scheduled_date', 'scheduled_time', 'location', 'notes']
+   ```
+3. **Remove player1/player2 from widgets dict** (lines 157-162)
+4. **Keep existing clean() validation** (lines 176-182, already correct logic)
 
 ---
 
-### 2. **views.py - MatchCreateView Still Uses Old Field Names** ⚠️ BLOCKING
+### 2. **views.py - MatchCreateView Missing Team Creation Logic** ⚠️ BLOCKING
 
 **Location:** `ttstats/pingpong/views.py:291-417`
 
-**Issues:**
-- Line 366: `form.is_double = (form.cleaned_data.get('is_double') == 'True')` - Sets attribute on form instead of instance
-- Lines 367-370: Accesses `player1`, `player2`, `player3`, `player4` from cleaned_data which don't exist anymore
-- Lines 372-374: References undefined `form.player3` and `form.player4`
-- Line 384: Uses bitwise OR `|` instead of logical `or` operator
-- Lines 396-407: Validation logic assumes player1/player2 fields exist
-- Lines 326-348: `get_form()` tries to access and disable `player1`, `player2`, `player3`, `player4` fields
+**Current State Analysis:**
+- Lines 326-348: `get_form()` correctly tries to work with player1-4 fields ✓
+- Line 326-327: Correctly locks player1 for non-staff users ✓
+- Lines 336-348: Correctly limits player2/3/4 querysets to exclude current user ✓
+- Lines 367-370: Correctly extracts player1-4 from `cleaned_data` ✓
 
-**Why It Breaks:** `KeyError` when accessing `cleaned_data['player1']`. Form customization fails. Non-staff users cannot create matches.
+**Issues:**
+- Line 366: `form.is_double = ...` - Sets attribute on form instead of variable
+- Lines 372-374: Sets `form.player3 = None` instead of variable
+- Line 384: Uses bitwise OR `|` instead of logical `or`
+- **MISSING:** Team creation logic! The view extracts players but never creates Team objects
+- **MISSING:** Assignment of created teams to `match.team1` and `match.team2`
+
+**Why It Breaks:**
+- Match is saved without team1/team2, causing IntegrityError (NOT NULL constraint)
+- Player selections are lost because teams aren't created
 
 **Action Required:**
-- Refactor `form_valid()` to work with team1/team2 instead of individual players
-- For non-staff users, create teams dynamically from the selected players
-- Update validation to ensure teams don't have overlapping players
-- Fix bitwise OR to logical OR on line 384
-- Refactor `get_form()` to work with new team-based structure
-- Consider UI/UX: How do non-staff users select team members? May need custom widget or multi-step form
+
+1. **Fix form_valid() to create teams from selected players:**
+   ```python
+   def form_valid(self, form):
+       user = self.request.user
+       is_double = (form.cleaned_data.get('is_double') == 'True')
+       player1 = form.cleaned_data["player1"]
+       player2 = form.cleaned_data["player2"]
+       player3 = form.cleaned_data.get("player3")  # Optional
+       player4 = form.cleaned_data.get("player4")  # Optional
+
+       # Validation for singles matches
+       if not is_double:
+           if player3 or player4:
+               messages.error(self.request, "Singles matches cannot have Player 3 or Player 4!")
+               return self.form_invalid(form)
+
+       # Validation for doubles matches
+       if is_double:
+           if not player3 or not player4:
+               messages.error(self.request, "Doubles matches require all 4 players!")
+               return self.form_invalid(form)
+
+           # Ensure all 4 players are unique
+           players = [player1, player2, player3, player4]
+           if len(set(players)) != 4:
+               messages.error(self.request, "All players must be different!")
+               return self.form_invalid(form)
+
+       # Ensure player1 != player2
+       if player1 == player2:
+           messages.error(self.request, "Player 1 and Player 2 must be different!")
+           return self.form_invalid(form)
+
+       # Non-staff validation
+       if not user.is_staff:
+           try:
+               user_player = user.player
+               if player1 != user_player:
+                   messages.error(self.request, "You must be Player 1!")
+                   return self.form_invalid(form)
+           except Player.DoesNotExist:
+               messages.error(self.request, "No player profile!")
+               return self.form_invalid(form)
+
+       # Create Team objects
+       from .models import Team
+
+       if is_double:
+           # Create 2-player teams
+           team1 = Team.objects.create(name=f"{player1.name} & {player3.name}")
+           team1.players.add(player1, player3)
+
+           team2 = Team.objects.create(name=f"{player2.name} & {player4.name}")
+           team2.players.add(player2, player4)
+       else:
+           # Create 1-player teams
+           team1 = Team.objects.create(name=player1.name)
+           team1.players.add(player1)
+
+           team2 = Team.objects.create(name=player2.name)
+           team2.players.add(player2)
+
+       # Assign teams to match instance (don't save yet)
+       form.instance.team1 = team1
+       form.instance.team2 = team2
+       form.instance.is_double = is_double
+
+       messages.success(self.request, "Match created successfully!")
+       return super().form_valid(form)  # This saves the match
+   ```
+
+2. **Fix bitwise OR on line 384:** Change `|` to `or`
+
+3. **Consider:** The view's `get_form()` method is already correct - it locks player1 for non-staff and limits querysets. Keep this logic.
 
 ---
 
-### 3. **views.py - ScheduledMatchCreateView Uses Old Fields** ⚠️ BLOCKING
+### 3. **views.py - ScheduledMatchCreateView Missing Team Creation** ⚠️ BLOCKING
 
 **Location:** `ttstats/pingpong/views.py:894-993`
 
-**Issues:**
-- Lines 922-930: `get_form()` references `player1` and `player2` fields that don't exist
-- Lines 945-962: `form_valid()` accesses `player1` and `player2` from cleaned_data
-- Lines 977-978: Sends emails using player1/player2 variables that won't exist
+**Current State Analysis:**
+- Lines 922-927: `get_form()` correctly locks player1 for non-staff ✓
+- Lines 930: Correctly limits player2 queryset ✓
+- Lines 945-946: Correctly extracts player1/player2 from `cleaned_data` ✓
 
-**Why It Breaks:** `KeyError` when accessing non-existent fields. Scheduled matches cannot be created.
+**Issues:**
+- **MISSING:** Team creation logic (same as MatchCreateView)
+- **MISSING:** Assignment of teams to `scheduled_match.team1` and `scheduled_match.team2`
+- Lines 977-978: Tries to send emails using player1/player2 variables (correct, but scheduled_match won't have team1/team2 set)
 
 **Action Required:**
-- Update `get_form()` to work with team1/team2 fields
-- Update `form_valid()` to extract players from teams or work with teams directly
-- Update email sending logic to iterate over team.players.all()
+
+1. **Add team creation in form_valid() before line 973** (before `form.save()`):
+   ```python
+   def form_valid(self, form):
+       user = self.request.user
+       player1 = form.cleaned_data["player1"]
+       player2 = form.cleaned_data["player2"]
+
+       # Validation
+       if player1 == player2:
+           messages.error(self.request, "Players must be different!")
+           return self.form_invalid(form)
+
+       # Non-staff validation
+       if not user.is_staff:
+           try:
+               user_player = user.player
+               if player1 != user_player:
+                   messages.error(self.request, "You must be Player 1!")
+                   return self.form_invalid(form)
+               form.instance.created_by = user_player
+           except Player.DoesNotExist:
+               messages.error(self.request, "No player profile!")
+               return self.form_invalid(form)
+
+       # Create 1-player teams (scheduled matches are singles only)
+       from .models import Team
+       team1 = Team.objects.create(name=player1.name)
+       team1.players.add(player1)
+
+       team2 = Team.objects.create(name=player2.name)
+       team2.players.add(player2)
+
+       # Assign teams to scheduled match
+       form.instance.team1 = team1
+       form.instance.team2 = team2
+
+       # Save the scheduled match
+       self.object = form.save()
+       scheduled_match = self.object
+
+       # Send emails (keep existing logic)
+       send_scheduled_match_email(scheduled_match, player1)
+       send_scheduled_match_email(scheduled_match, player2)
+
+       # ... rest of method
+   ```
 
 ---
 
@@ -115,353 +332,293 @@ The codebase has been migrated from a 1v1-only table tennis tracking system to s
 **Issues:**
 - Lines 33-34: `visible_to()` filters by `Q(player1=user_player) | Q(player2=user_player)` but these fields were removed in migration 0010
 
-**Why It Breaks:** `FieldError: Cannot resolve keyword 'player1' into field`. All match queries for non-staff users will fail.
+**Why It Breaks:**
+- `FieldError: Cannot resolve keyword 'player1' into field`
+- All match queries for non-staff users will fail
+- Dashboard, leaderboard, and match list views will crash
 
 **Action Required:**
-- Update filter to use: `Q(team1__players=user_player) | Q(team2__players=user_player)`
+- Update filter to use team relationships:
+  ```python
+  Q(team1__players=user_player) | Q(team2__players=user_player)
+  ```
 
 ---
 
-### 5. **models.py - Typo in Related Name** 🐛 BUG
+### 5. **templates - Add JavaScript for Dynamic Dropdowns** ⚠️ HIGH PRIORITY
+
+**Location:** `ttstats/pingpong/templates/pingpong/match_form.html` (and `scheduled_match_form.html`)
+
+**Current State:** Static dropdowns show all players (except current user for non-staff)
+
+**Required Behavior:**
+- When user selects Player 2, Player 3 and Player 4 dropdowns should exclude Player 2
+- When user selects Player 3, Player 4 dropdown should exclude Player 2 and Player 3
+- When user changes selections, dropdowns should update immediately
+- For non-staff users, Player 1 is locked (already implemented)
+
+**Action Required:**
+
+Add JavaScript to template (after form):
+
+```html
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const player1Select = document.querySelector('[name="player1"]');
+    const player2Select = document.querySelector('[name="player2"]');
+    const player3Select = document.querySelector('[name="player3"]');
+    const player4Select = document.querySelector('[name="player4"]');
+
+    // Store original options
+    const allPlayers = {
+        player2: Array.from(player2Select.options).map(opt => ({value: opt.value, text: opt.text})),
+        player3: Array.from(player3Select.options).map(opt => ({value: opt.value, text: opt.text})),
+        player4: Array.from(player4Select.options).map(opt => ({value: opt.value, text: opt.text}))
+    };
+
+    function updateDropdowns() {
+        const selectedPlayers = new Set([
+            player1Select.value,
+            player2Select.value,
+            player3Select?.value,
+            player4Select?.value
+        ].filter(v => v));  // Remove empty values
+
+        // Update player2 (exclude player1)
+        updateDropdown(player2Select, allPlayers.player2, new Set([player1Select.value]));
+
+        // Update player3 (exclude player1, player2)
+        if (player3Select) {
+            updateDropdown(player3Select, allPlayers.player3, new Set([player1Select.value, player2Select.value]));
+        }
+
+        // Update player4 (exclude player1, player2, player3)
+        if (player4Select) {
+            updateDropdown(player4Select, allPlayers.player4, new Set([player1Select.value, player2Select.value, player3Select?.value].filter(v => v)));
+        }
+    }
+
+    function updateDropdown(selectEl, allOptions, excludeValues) {
+        const currentValue = selectEl.value;
+        selectEl.innerHTML = '<option value="">---------</option>';
+
+        allOptions.forEach(opt => {
+            if (!excludeValues.has(opt.value) || opt.value === currentValue) {
+                const option = document.createElement('option');
+                option.value = opt.value;
+                option.text = opt.text;
+                if (opt.value === currentValue) {
+                    option.selected = true;
+                }
+                selectEl.appendChild(option);
+            }
+        });
+    }
+
+    // Attach event listeners
+    if (player1Select) player1Select.addEventListener('change', updateDropdowns);
+    if (player2Select) player2Select.addEventListener('change', updateDropdowns);
+    if (player3Select) player3Select.addEventListener('change', updateDropdowns);
+    if (player4Select) player4Select.addEventListener('change', updateDropdowns);
+
+    // Initial update
+    updateDropdowns();
+});
+</script>
+```
+
+**For ScheduledMatchForm:** Similar logic but only for player2 (exclude player1)
+
+---
+
+## Non-Critical Issues
+
+### 6. **models.py - Typo in Related Name** 🐛 BUG
 
 **Location:** `ttstats/pingpong/models.py:349`
 
-**Issue:**
-- `ScheduledMatch.team2` has `related_name="scheduled_matches_as_team22"` (double "2")
-- Should be `scheduled_matches_as_team2`
-
-**Why It Breaks:** Doesn't break immediately, but creates inconsistent related_name pattern and could cause confusion when accessing reverse relationships.
+**Issue:** `ScheduledMatch.team2` has `related_name="scheduled_matches_as_team22"` (double "2")
 
 **Action Required:**
-- Fix related_name to `scheduled_matches_as_team2`
-- Requires a migration to change the related_name (though related_name is metadata, might not require data migration)
+- Fix to `scheduled_matches_as_team2`
+- Create migration
 
 ---
 
-## Logical/Architecture Warnings
+### 7. **views.py - MatchDetailView Incorrect Player Check** ⚠️ LOGIC ERROR
 
-### 6. **views.py - MatchDetailView Incorrect Player Check** ⚠️ LOGIC ERROR
+**Location:** `ttstats/pingpong/views.py:73`
 
-**Location:** `ttstats/pingpong/views.py:62-76`
+**Issue:** `elif change.player == match.team2.players.all():` compares Player to QuerySet
 
-**Issue:**
-- Line 73: `elif change.player == match.team2.players.all():` compares a single Player to a QuerySet
-- Should use `in` operator: `elif change.player in match.team2.players.all():`
-
-**Impact:** Elo changes for team2 players will never display in the template context because the condition always fails.
-
-**Action Required:**
-- Change line 73 to use `in` operator for proper membership check
+**Action Required:** Change to `elif change.player in match.team2.players.all():`
 
 ---
 
-### 7. **views.py - PlayerDetailView Winner Filter** ⚠️ LOGIC ERROR
+### 8. **views.py - PlayerDetailView Winner Filter** ⚠️ LOGIC ERROR
 
-**Location:** `ttstats/pingpong/views.py:79-158`
+**Location:** `ttstats/pingpong/views.py:131`
 
-**Issue:**
-- Line 131: `player_won = match.winner.filter(players=self.object).exists()`
-- `match.winner` is now a ForeignKey to Team, not a QuerySet, so `.filter()` will raise AttributeError
+**Issue:** `match.winner.filter(players=self.object).exists()` - winner is ForeignKey, not QuerySet
 
-**Impact:** Streak calculation will crash when trying to determine if player won a match.
-
-**Action Required:**
-- Change to: `player_won = self.object in match.winner.players.all()` or `match.winner.players.filter(pk=self.object.pk).exists()`
+**Action Required:** Change to `self.object in match.winner.players.all()`
 
 ---
 
-### 8. **views.py - LeaderboardView Incorrect Data Structure** ⚠️ LOGIC ERROR
+### 9. **views.py - LeaderboardView Data Structure** ⚠️ LOGIC ERROR
 
-**Location:** `ttstats/pingpong/views.py:448-500`
+**Location:** `ttstats/pingpong/views.py:486-492`
 
-**Issue:**
-- Line 456: `player_stats` is initialized as a QuerySet from `Player.objects.annotate(...)`
-- Lines 486-492: The code tries to append dictionaries to `player_stats` which is a QuerySet, not a list
-- This will raise `AttributeError: 'QuerySet' object has no attribute 'append'`
+**Issue:** Tries to append to QuerySet
 
-**Impact:** Leaderboard page will crash with 500 error.
-
-**Action Required:**
-- The logic seems confused - the annotations already add the stats to each player object
-- The append section should be removed OR player_stats should be converted to a list first
-- Clarify intended behavior: Are we sorting Player objects or dictionaries?
+**Action Required:** Convert to list or remove append logic
 
 ---
 
-### 9. **views.py - HeadToHeadStatsView Unsafe .first() Calls** ⚠️ POTENTIAL RUNTIME ERROR
+### 10. **views.py - HeadToHeadStatsView Unsafe .first()** ⚠️ POTENTIAL ERROR
 
-**Location:** `ttstats/pingpong/views.py:503-743`
+**Location:** `ttstats/pingpong/views.py:570, 647, 649, 656, 660`
 
-**Issues:**
-- Lines 570, 647, 649, 656, 660: Multiple `.first()` calls on `team.players` without null checks
-- If a team has no players (orphaned Team object), `.first()` returns None and comparisons will fail
+**Issue:** No null checks for `.first()` calls
 
-**Impact:** Could cause NoneType comparison errors if data integrity is compromised.
-
-**Action Required:**
-- Add null checks or use `.get()` with try/except
-- Consider data integrity constraints: Can a Team exist without players? Should we add a constraint?
+**Action Required:** Add null checks or data integrity constraints
 
 ---
 
-### 10. **emails.py - Potential Attribute Access Issue** ⚠️ MINOR
+### 11. **emails.py - Team Name Display** ⚠️ MINOR
 
 **Location:** `ttstats/pingpong/emails.py:156`
 
-**Issue:**
-- Line 156: `opponent_name = f"{scheduled_match.team2.name}"`
-- If team2.name is blank, Team.__str__() generates name from players, but here we directly access `.name` which might be empty string
+**Issue:** Direct `.name` access instead of `__str__()` method
 
-**Impact:** Email might show empty opponent name instead of generated "Player1 and Player2" format.
-
-**Action Required:**
-- Change to `opponent_name = str(scheduled_match.team2)` to use the __str__ method
+**Action Required:** Change to `str(scheduled_match.team2)`
 
 ---
 
-### 11. **forms.py - Widget Type Error** ⚠️ BLOCKING
-
-**Location:** `ttstats/pingpong/forms.py:13-19`
-
-**Issue:**
-- Lines 13-19: `is_double` widget is assigned to `forms.ChoiceField(...)` but widgets expect a widget instance, not a field
-- Should be: `'is_double': forms.Select(choices=[...], attrs={...})`
-
-**Why It Breaks:** TypeError when rendering form - widgets dict expects Widget instances, not Field instances.
-
-**Action Required:**
-- Replace ChoiceField with Select widget
-- Move choices to the field definition in Meta or as a separate field override
-
----
-
-### 12. **views.py - GameCreateView Winner Display Logic** ⚠️ UX ISSUE
+### 12. **views.py - GameCreateView Grammar** ⚠️ UX ISSUE
 
 **Location:** `ttstats/pingpong/views.py:273`
 
-**Issue:**
-- Line 273: Comment indicates uncertainty about verb conjugation for teams
-- `f"{self.match.winner} wins"` - grammatically incorrect if winner is a team like "Alice and Bob wins" should be "win"
+**Issue:** "Alice and Bob wins" should be "win"
 
-**Impact:** Poor UX, grammatically incorrect success messages.
-
-**Action Required:**
-- Implement smart conjugation: Check if `match.is_double`, use "win" for teams, "wins" for individuals
-- Or use neutral phrasing: "Victory for {self.match.winner}!" or "{self.match.winner} won!"
-
----
-
-### 13. **Migration Safety - Missing Related Name Fix** ⚠️ CONSISTENCY
-
-**Location:** `ttstats/pingpong/models.py:289`
-
-**Issue:**
-- Line 289: Comment `# TODO: before it was won_games, search and replace it!`
-- The related_name was changed from `won_games` to `games_won` but the comment suggests this might not be reflected everywhere
-
-**Impact:** If templates or code still reference `team.won_games`, they'll raise AttributeError.
-
-**Action Required:**
-- Search entire codebase for `won_games` references
-- Update any remaining references to `games_won`
-- Remove TODO comment after verification
+**Action Required:** Implement smart conjugation based on `is_double`
 
 ---
 
 ## Proposed Action Plan
 
-### Phase 1: Fix Blocking Form Issues (Priority: CRITICAL)
-**Files:** `forms.py`
+### Phase 1: Fix Critical Form Issues (BLOCKING)
+**Estimated Time:** 2-3 hours
 
-1. **MatchForm Widget Cleanup**
-   - Remove all player1-4 widget definitions
-   - Add team1, team2 Select widgets with proper CSS classes
-   - Update is_double widget from ChoiceField to Select widget
+1. **Update MatchForm** (forms.py):
+   - Declare player1, player2, player3, player4 as explicit ModelChoiceField instances
+   - Remove team1, team2 from Meta.fields
+   - Remove player1-4 from widgets dict (now in field definitions)
+   - Fix is_double widget (Select, not ChoiceField)
+   - Verify clean() method works with declared fields
 
-2. **MatchForm Validation Rewrite**
-   - Rewrite clean() method to validate team1/team2 exist and are different
-   - For doubles matches, add validation that each team has exactly 2 unique players
-   - For singles matches, validate each team has exactly 1 player
-   - Ensure all 4 players (in doubles) or 2 players (in singles) are unique
+2. **Update ScheduledMatchForm** (forms.py):
+   - Declare player1, player2 as explicit ModelChoiceField instances
+   - Remove team1, team2 from Meta.fields
+   - Remove player1-2 from widgets dict
 
-3. **ScheduledMatchForm Updates**
-   - Remove player1/player2 widgets
-   - Add team1/team2 widgets
-   - Update clean() to validate team1/team2 instead of player1/player2
+### Phase 2: Fix Critical View Issues (BLOCKING)
+**Estimated Time:** 3-4 hours
 
-### Phase 2: Fix Blocking View Issues (Priority: CRITICAL)
-**Files:** `views.py`
+3. **Add team creation to MatchCreateView.form_valid()**:
+   - Extract player selections from cleaned_data
+   - Create Team objects (1-player for singles, 2-player for doubles)
+   - Assign teams to form.instance.team1 and form.instance.team2
+   - Fix bitwise OR to logical OR
 
-4. **MatchCreateView.get_form() Refactor**
-   - Remove all references to player1-4 fields
-   - For non-staff users: Decide on UX approach for team creation
-     - Option A: Hidden team creation (create teams on-the-fly in form_valid)
-     - Option B: Add team selection/creation to form
-   - If keeping player-level selection, add logic to create teams from selected players in form_valid()
+4. **Add team creation to ScheduledMatchCreateView.form_valid()**:
+   - Create 1-player teams from player1/player2
+   - Assign to form.instance
+   - Keep email logic
 
-5. **MatchCreateView.form_valid() Refactor**
-   - Remove player1-4 variable extraction
-   - Extract team1/team2 from cleaned_data
-   - If using player-based UI, create Team objects here and assign to match
-   - Fix bitwise OR to logical OR on line 384
-   - Update validation logic to work with teams
-   - For non-staff: validate user is in one of the teams
+5. **Fix MatchManager.visible_to()** (managers.py):
+   - Change player1/player2 filter to team1__players/team2__players
 
-6. **ScheduledMatchCreateView Refactor**
-   - Update get_form() to work with team1/team2
-   - Update form_valid() to extract teams or players from teams
-   - Update email sending to iterate over team members: `for player in scheduled_match.team1.players.all(): send_email(...)`
+### Phase 3: Add Dynamic Dropdown JavaScript (HIGH PRIORITY)
+**Estimated Time:** 2 hours
 
-7. **MatchDetailView Fix**
-   - Line 73: Change `==` to `in` for player membership check
+6. **Add JavaScript to match_form.html**:
+   - Implement dynamic dropdown filtering
+   - Test with singles and doubles toggle
+   - Test with staff and non-staff users
 
-8. **PlayerDetailView Fix**
-   - Line 131: Replace `match.winner.filter(...)` with `self.object in match.winner.players.all()`
+7. **Add JavaScript to scheduled_match_form.html**:
+   - Simpler version (only player2 excludes player1)
 
-9. **LeaderboardView Fix**
-   - Clarify intended data structure (QuerySet vs list of dicts)
-   - Either remove append logic or convert QuerySet to list first
-   - Fix sorting logic accordingly
+### Phase 4: Fix Non-Critical Issues (MEDIUM PRIORITY)
+**Estimated Time:** 2-3 hours
 
-10. **HeadToHeadStatsView Safety**
-    - Add null checks for `.first()` calls
-    - Consider using `.get()` with try/except or checking `.exists()` first
+8. Fix model typo (related_name)
+9. Fix MatchDetailView player check
+10. Fix PlayerDetailView winner filter
+11. Fix LeaderboardView data structure
+12. Add null checks to HeadToHeadStatsView
+13. Fix email team name display
+14. Implement smart grammar for winner messages
 
-11. **GameCreateView UX**
-    - Implement smart verb conjugation for winner message
-    - Check `match.is_double` and use appropriate grammar
+### Phase 5: Testing & Verification (CRITICAL)
+**Estimated Time:** 3-4 hours
 
-### Phase 3: Fix Blocking Manager Issues (Priority: CRITICAL)
-**Files:** `managers.py`
+15. **Manual Testing:**
+    - Staff creates singles match (select any 2 players)
+    - Staff creates doubles match (select any 4 players)
+    - Non-staff creates singles match (locked as player1, select player2)
+    - Non-staff creates doubles match (locked as player1, select 3 others)
+    - Verify dropdowns update dynamically
+    - Schedule matches (singles only)
+    - View match details, player profiles, leaderboard
+    - Verify emails sent correctly
 
-12. **MatchManager.visible_to() Fix**
-    - Line 33-34: Replace `Q(player1=user_player) | Q(player2=user_player)` with `Q(team1__players=user_player) | Q(team2__players=user_player)`
-
-### Phase 4: Fix Model Issues (Priority: HIGH)
-**Files:** `models.py`, new migration file
-
-13. **ScheduledMatch Related Name Typo**
-    - Change `related_name="scheduled_matches_as_team22"` to `"scheduled_matches_as_team2"`
-    - Create migration: `python manage.py makemigrations pingpong`
-    - Test migration on dev database
-
-14. **Remove TODO Comment**
-    - Search codebase for `won_games` references
-    - Update any found references to `games_won`
-    - Remove TODO comment at line 289
-
-### Phase 5: Fix Email Logic (Priority: MEDIUM)
-**Files:** `emails.py`
-
-15. **scheduled_match_email Opponent Name**
-    - Line 156: Change `scheduled_match.team2.name` to `str(scheduled_match.team2)`
-    - This ensures the Team.__str__() method is used for proper display
-
-### Phase 6: Testing & Verification (Priority: CRITICAL)
-**Files:** Various
-
-16. **Manual Testing Checklist**
-    - Staff user creates 1v1 match → success
-    - Staff user creates 2v2 match → success
-    - Non-staff user creates 1v1 match → success
-    - Non-staff user creates 2v2 match → success
-    - View match detail page → Elo changes display correctly
-    - View player detail page → Streak calculation works
-    - View leaderboard → No crashes, stats display correctly
-    - View head-to-head for two players → Stats calculate correctly
-    - Schedule a match → Emails sent correctly
-    - Confirm a match → Confirmation system works for all team members
-
-17. **Data Integrity Checks**
-    - Verify all existing matches have team1 and team2 assigned
-    - Verify no orphaned Team objects (teams with no players)
-    - Verify all Game objects have team1_score and team2_score
-    - Run: `python manage.py check` to verify no system check errors
-
-### Phase 7: Future Considerations
-**Files:** N/A (planning)
-
-18. **UX/UI Decisions Needed**
-    - How do users create/select teams for doubles matches?
-    - Should teams be persistent (reusable) or ephemeral (created per-match)?
-    - Do we need a Team management UI (list, create, edit teams)?
-    - Should team names be auto-generated or user-editable?
-
-19. **ELO System for Doubles**
-    - Current elo.py explicitly skips doubles matches (line 87-89)
-    - Need to design Elo calculation for 2v2 (average team rating? individual adjustments?)
-    - Implement calculate_elo_2v2() function
-
-20. **Test Coverage**
-    - After fixing logic errors, rebuild test suite
-    - Ensure coverage for both 1v1 and 2v2 paths
-    - Test team creation/validation thoroughly
+16. **Data Verification:**
+    - Check all matches have team1/team2
+    - Check no orphaned teams
+    - Run `python manage.py check`
 
 ---
 
 ## Execution Order
 
-**CRITICAL PATH (Must fix before app is functional):**
-1. Fix forms.py (Phase 1) - Otherwise no matches can be created
-2. Fix managers.py (Phase 3) - Otherwise non-staff users get errors
-3. Fix views.py MatchCreateView (Phase 2, items 4-5) - Otherwise match creation fails
-4. Fix views.py ScheduledMatchCreateView (Phase 2, item 6) - Otherwise scheduling fails
-5. Fix views.py other views (Phase 2, items 7-10) - Otherwise viewing matches/stats fails
+**CRITICAL PATH:**
+1. Phase 1: Fix forms (items 1-2)
+2. Phase 2: Fix views (items 3-5)
+3. Phase 5: Basic testing (item 15)
 
-**HIGH PRIORITY (Fixes bugs but app might partially work):**
-6. Fix model typo (Phase 4, item 13)
-7. Fix email logic (Phase 5)
+**HIGH PRIORITY:**
+4. Phase 3: Add JavaScript (items 6-7)
+5. Phase 5: Full testing (items 15-16)
 
-**MEDIUM PRIORITY (UX improvements):**
-8. Fix winner message grammar (Phase 2, item 11)
-9. Remove TODO comment (Phase 4, item 14)
-
-**POST-FIX (After basic functionality restored):**
-10. Manual testing (Phase 6)
-11. Future planning (Phase 7)
-
----
-
-## Estimated Complexity
-
-- **Forms fixes:** Medium complexity - Requires understanding team creation flow
-- **View fixes:** High complexity - Multiple views need refactoring, UX decisions needed
-- **Manager fix:** Low complexity - Simple query change
-- **Model fix:** Low complexity - Just a migration
-- **Testing:** High complexity - Need to test all permutations of 1v1/2v2, staff/non-staff
-
----
-
-## Notes for Implementation
-
-1. **Backwards Compatibility:** The migrations preserve historical 1v1 data by creating single-player teams. Ensure this logic is respected in all new code.
-
-2. **Team Lifecycle:** Decide if teams are ephemeral (created/destroyed with matches) or persistent (reusable entities). Current model supports persistent teams but UI doesn't expose team management.
-
-3. **Form UI Strategy:** Consider creating two separate forms (MatchForm1v1 and MatchForm2v2) or using dynamic form fields based on is_double. Current approach tries to handle both in one form which may be complex.
-
-4. **Data Validation:** Add model-level constraints to ensure:
-   - Teams in singles matches have exactly 1 player
-   - Teams in doubles matches have exactly 2 players
-   - All players in a match are unique
-
-5. **Signal Behavior:** Verify signals.py handles both 1v1 and 2v2 correctly - the current implementation iterates over team.players.all() which should work for both cases.
+**MEDIUM PRIORITY:**
+6. Phase 4: Fix non-critical issues (items 8-14)
 
 ---
 
 ## Risk Assessment
 
 **HIGH RISK:**
-- Forms and views are currently broken and will cause runtime errors
-- Manager filter will prevent non-staff users from accessing any matches
-- Without fixes, the app is non-functional for core workflows
+- Forms and views currently broken for all match creation
+- Non-staff users completely locked out (manager filter fails)
+- App is non-functional without Phase 1-2 fixes
 
 **MEDIUM RISK:**
-- Logic errors in leaderboard and player detail could cause data display issues
-- Email formatting issues are minor but affect user experience
+- Without JavaScript, users can select duplicate players (bad UX)
+- Logic errors will cause crashes in specific views
 
 **LOW RISK:**
-- Model typo is cosmetic but should be fixed for consistency
-- UX issues like grammar are polish items
+- Minor bugs and UX issues
 
-**RECOMMENDATION:** Prioritize Phase 1-3 (critical path) immediately. The app is currently in a broken state for most users. Phase 4-5 can follow shortly after. Phase 6-7 should be done before merging to master.
+**RECOMMENDATION:** Fix Phase 1-2 immediately. App is currently broken. Add Phase 3 before merging. Phase 4 can be done in follow-up PR.
+
+---
+
+## Notes
+
+1. **Team Lifecycle:** Teams are ephemeral - created per match, not reusable
+2. **Backwards Compatibility:** Migrations preserve historical 1v1 data
+3. **Non-Staff UX:** Player 1 is always locked to current user (already implemented in views)
+4. **Dynamic Dropdowns:** JavaScript required for real-time filtering (not Django form validation)
+5. **Signal Behavior:** Verify signals handle both 1v1 and 2v2 correctly
