@@ -31,7 +31,7 @@ class MatchManager(models.Manager):
         try:
             user_player = user.player
             return qs.filter(
-                Q(player1=user_player) | Q(player2=user_player)
+                Q(team1__players=user_player) | Q(team2__players=user_player)
             )
         except AttributeError:
             # User has no linked player
