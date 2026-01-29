@@ -22,6 +22,19 @@ The codebase has been migrated from a 1v1-only table tennis tracking system to s
 
 **Migration Strategy:** The migrations use data migration functions to create Team objects from existing player relationships and preserve historical data.
 
+**UI/UX Strategy (IMPORTANT):** The future UI will allow users to:
+1. Toggle between singles (1v1) and doubles (2v2) matches
+2. Select individual players to form teams (not pre-existing teams)
+3. For singles: Select 2 players
+4. For doubles: Select 4 players (2 per team)
+5. Teams will be created programmatically from player selections
+
+**Form Architecture:** To support this UX:
+- Forms will have `player1`, `player2`, `player3`, `player4` fields for player selection
+- Forms will NOT expose `team1`/`team2` directly (these are created programmatically)
+- The view's `form_valid()` or a custom `save()` method will create Team objects from selected players
+- Team creation logic: For singles, create single-player teams; for doubles, create two-player teams
+
 ---
 
 ## Critical Issues (Will Break the App)
@@ -40,13 +53,16 @@ The codebase has been migrated from a 1v1-only table tennis tracking system to s
 **Why It Breaks:** Django will raise `KeyError` or `FieldError` when trying to access/validate non-existent form fields. Users cannot create or edit matches.
 
 **Action Required:**
-- Remove all widget definitions for player1-4 fields from MatchForm
-- Add widget definitions for team1, team2 fields (Select widgets with proper CSS classes)
-- Rewrite `MatchForm.clean()` to validate team1/team2 instead of player1-4
-- For doubles validation, the form needs to check that team1 has exactly 2 players and team2 has exactly 2 players, with all 4 being unique
-- Remove player1/player2 widgets from ScheduledMatchForm
-- Add team1/team2 widgets to ScheduledMatchForm
-- Update ScheduledMatchForm.clean() to validate team1/team2
+- Add player1, player2, player3, player4 as ModelChoiceField (queryset=Player.objects.all())
+- Make player3, player4 optional (required=False) for singles matches
+- Remove team1, team2 from Meta.fields (will be created in view)
+- Fix is_double widget (should be Select, not ChoiceField)
+- Update all widget definitions to reference player1-4 (fix the existing ones)
+- Rewrite `MatchForm.clean()` to:
+  - Validate all 4 players are unique (if doubles)
+  - Validate player1 != player2 (if singles)
+  - Validate player3 and player4 are None/blank for singles matches
+- For ScheduledMatchForm: Same approach (player1/player2 fields, create teams in view)
 
 ---
 
