@@ -398,7 +398,7 @@ class MatchCreateView(LoginRequiredMixin, CreateView):
                 user_player = user.player
 
                 # Ensure user is one of the players
-                if player1 != user_player and player2 != user_player:
+                if user_player not in [player1, player2, player3, player4]:
                     messages.error(
                         self.request, "You can only create matches you participate in!"
                     )
@@ -987,7 +987,19 @@ class ScheduledMatchCreateView(LoginRequiredMixin, CreateView):
                 form.fields["player1"].help_text = "You are automatically set as Player 1"
 
                 # Limit player2 choices to exclude the user
-                form.fields["player2"].queryset = Player.objects.exclude(pk=user_player.pk)
+                form.fields["player2"].queryset = Player.objects.exclude(
+                    pk=user_player.pk
+                )
+
+                # Limit player3 choices to exclude the user
+                form.fields["player3"].queryset = Player.objects.exclude(
+                    pk=user_player.pk
+                )
+
+                # Limit player4 choices to exclude the user
+                form.fields["player4"].queryset = Player.objects.exclude(
+                    pk=user_player.pk
+                )
 
             except Player.DoesNotExist:
                 messages.error(
@@ -996,33 +1008,59 @@ class ScheduledMatchCreateView(LoginRequiredMixin, CreateView):
                 )
                 form.fields["player1"].disabled = True
                 form.fields["player2"].disabled = True
+                form.fields["player3"].disabled = True
+                form.fields["player4"].disabled = True
 
         return form
 
     def form_valid(self, form):
         """Save the scheduled match and send notifications"""
         user = self.request.user
+        is_double = (form.cleaned_data.get('is_double') == 'True')
         player1 = form.cleaned_data["player1"]
         player2 = form.cleaned_data["player2"]
+        player3 = form.cleaned_data["player3"]  # Optional
+        player4 = form.cleaned_data["player4"]  # Optional
 
-        # Validation
+        # Validation for singles matches
+        if not is_double:
+            if player3 or player4:
+                messages.error(self.request, "Singles matches cannot have Player 3 or Player 4!")
+                return self.form_invalid(form)
+
+        # Validation for doubles matches
+        if is_double:
+            if not player3 or not player4:
+                messages.error(self.request, "Doubles matches require all 4 players!")
+                return self.form_invalid(form)
+
+            # Ensure all 4 players are unique
+            players = [player1, player2, player3, player4]
+            if len(set(players)) != 4:
+                messages.error(self.request, "All players must be different!")
+                return self.form_invalid(form)
+
+        # Ensure player1 != player2
         if player1 == player2:
-            messages.error(self.request, "Players must be different!")
+            messages.error(self.request, "Player 1 and Player 2 must be different!")
             return self.form_invalid(form)
 
         # Non-staff users must be participants
         if not user.is_staff:
             try:
                 user_player = user.player
-                if player1 != user_player and player2 != user_player:
+
+                # Ensure user is one of the players
+                if user_player not in [player1, player2, player3, player4]:
                     messages.error(
-                        self.request, "You can only schedule matches you participate in!"
+                        self.request, "You can only create matches you participate in!"
                     )
                     return self.form_invalid(form)
 
+                # Force user to be player1 (prevent tampering)
                 if player1 != user_player:
                     messages.error(
-                        self.request, "You must be Player 1 in matches you schedule!"
+                        self.request, "You must be Player 1 in matches you create!"
                     )
                     return self.form_invalid(form)
 
@@ -1037,30 +1075,46 @@ class ScheduledMatchCreateView(LoginRequiredMixin, CreateView):
         # Create 1-player teams (scheduled matches are singles only)
         from .models import Team
 
-        # Create 1-player teams
-        try:
-            team1 = (Team.objects
-                     .filter(players=player1)
-                     .annotate(num_players=Count('players'))
-                     .filter(num_players=1)
-                     .get()
-                     )
-        except Team.DoesNotExist:
-            team1 = Team.objects.create()
-            team1.players.set([player1])
-            team1.save()
+        if is_double:
+            # Create 2-player teams
+            try:
+                team1 = Team.objects.filter(players=player1).filter(players=player3).get()
+            except Team.DoesNotExist:
+                team1 = Team.objects.create()
+                team1.players.set([player1, player3])
+                team1.save()
 
-        try:
-            team2 = (Team.objects
-                     .filter(players=player2)
-                     .annotate(num_players=Count('players'))
-                     .filter(num_players=1)
-                     .get()
-                     )
-        except Team.DoesNotExist:
-            team2 = Team.objects.create()
-            team2.players.set([player2])
-            team2.save()
+            try:
+                team2 = Team.objects.filter(players=player2).filter(players=player4).get()
+            except Team.DoesNotExist:
+                team2 = Team.objects.create()
+                team2.players.set([player2, player4])
+                team2.save()
+        else:
+            # Create 1-player teams
+            try:
+                team1 = (Team.objects
+                         .filter(players=player1)
+                         .annotate(num_players=Count('players'))
+                         .filter(num_players=1)
+                         .get()
+                         )
+            except Team.DoesNotExist:
+                team1 = Team.objects.create()
+                team1.players.set([player1])
+                team1.save()
+
+            try:
+                team2 = (Team.objects
+                         .filter(players=player2)
+                         .annotate(num_players=Count('players'))
+                         .filter(num_players=1)
+                         .get()
+                         )
+            except Team.DoesNotExist:
+                team2 = Team.objects.create()
+                team2.players.set([player2])
+                team2.save()
 
         # Assign teams to scheduled match
         form.instance.team1 = team1
