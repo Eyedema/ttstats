@@ -153,7 +153,7 @@ A match has been scheduled for you!
 
 📅 Match Details:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  Opponent: {scheduled_match.team2.name}
+  Opponent: {str(scheduled_match.team2)}
   Date: {date_str}
   Time: {time_str}
   Location: {location_str}
