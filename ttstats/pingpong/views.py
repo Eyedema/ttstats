@@ -999,6 +999,11 @@ class ScheduledMatchCreateView(LoginRequiredMixin, CreateView):
         player1 = form.cleaned_data["player1"]
         player2 = form.cleaned_data["player2"]
 
+        # Validation
+        if player1 == player2:
+            messages.error(self.request, "Players must be different!")
+            return self.form_invalid(form)
+
         # Non-staff users must be participants
         if not user.is_staff:
             try:
@@ -1022,6 +1027,38 @@ class ScheduledMatchCreateView(LoginRequiredMixin, CreateView):
                     self.request, "You must have a player profile to schedule matches."
                 )
                 return self.form_invalid(form)
+
+        # Create 1-player teams (scheduled matches are singles only)
+        from .models import Team
+
+        # Create 1-player teams
+        try:
+            team1 = (Team.objects
+                     .filter(players=player1)
+                     .annotate(num_players=Count('players'))
+                     .filter(num_players=1)
+                     .get()
+                     )
+        except Team.DoesNotExist:
+            team1 = Team.objects.create()
+            team1.players.set([player1])
+            team1.save()
+
+        try:
+            team2 = (Team.objects
+                     .filter(players=player2)
+                     .annotate(num_players=Count('players'))
+                     .filter(num_players=1)
+                     .get()
+                     )
+        except Team.DoesNotExist:
+            team2 = Team.objects.create()
+            team2.players.set([player2])
+            team2.save()
+
+        # Assign teams to scheduled match
+        form.instance.team1 = team1
+        form.instance.team2 = team2
 
         # Save the scheduled match
         self.object = form.save()
