@@ -6,31 +6,38 @@ from .models import Game, Match, Player, ScheduledMatch
 
 
 class MatchForm(forms.ModelForm):
+    player1 = forms.ModelChoiceField(
+    queryset=Player.objects.all(),
+    required=True,
+    widget=forms.Select(attrs={'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'})
+    )
+    player2 = forms.ModelChoiceField(
+        queryset=Player.objects.all(),
+        required=True,
+        widget=forms.Select(attrs={'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'})
+    )
+    player3 = forms.ModelChoiceField(
+        queryset=Player.objects.all(),
+        required=False,  # Optional for singles
+        widget=forms.Select(attrs={'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'})
+    )
+    player4 = forms.ModelChoiceField(
+        queryset=Player.objects.all(),
+        required=False,  # Optional for singles
+        widget=forms.Select(attrs={'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'})
+    )
     class Meta:
         model = Match
-        fields = ['is_double', 'team1', 'team2', 'date_played', 'location', 'match_type', 'best_of', 'notes']
+        fields = ['is_double', 'date_played', 'location', 'match_type', 'best_of', 'notes']
         widgets = {
-            'is_double' : forms.ChoiceField(choices=(
-                ('False', 'Single'),
-                ('True', 'Double')),
-                widget=forms.Select(attrs={
+            'is_double' : forms.Select(choices=[
+                (False, 'Single'),
+                (True, 'Double')],
+                attrs={
                     'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'}
-                )
             ),
             'date_played': forms.DateTimeInput(attrs={
                 'type': 'datetime-local',
-                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
-            }),
-            'player1': forms.Select(attrs={
-                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
-            }),
-            'player2': forms.Select(attrs={
-                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
-            }),
-            'player3': forms.Select(attrs={
-                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
-            }),
-            'player4': forms.Select(attrs={
                 'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
             }),
             'location': forms.Select(attrs={
@@ -60,18 +67,18 @@ class MatchForm(forms.ModelForm):
         player4 = cleaned_data.get('player4')
 
         # Ensure players are different
-        if player1 and player2 and player1 == player2:
-            raise forms.ValidationError("Player 1 and Player 2 must be different!")
+        players = [player1, player2, player3, player4]
+        players = [player for player in players if player]
+        if len(players) != len(set(players)):
+            raise forms.ValidationError("All players must be different!")
 
-        if player1 and player3 and player1 == player3:
-            raise forms.ValidationError("Player 1 and Player 3 must be different!")
-
-        if player1 and player4 and player1 == player4:
-            raise forms.ValidationError("Player 1 and Player 4 must be different!")
-
-        if player2 and player3 and player2 == player3:
-            raise forms.ValidationError("Player 2 and Player 3 must be different!")
-
+        # Two players for singles
+        if not cleaned_data.get('is_double') and len(players) > 2:
+            raise forms.ValidationError("Only two players are required for a doubles match!")
+        # Four players for doubles
+        if cleaned_data.get('is_double') and len(players) != 4:
+            raise forms.ValidationError("Four players are required for a doubles match!")
+            
         return cleaned_data
 
 
@@ -142,9 +149,20 @@ class PlayerRegistrationForm(UserCreationForm):
 class ScheduledMatchForm(forms.ModelForm):
     """Form for scheduling a future match"""
 
+    player1 = forms.ModelChoiceField(
+    queryset=Player.objects.all(),
+    required=True,
+    widget=forms.Select(attrs={'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'})
+    )
+    player2 = forms.ModelChoiceField(
+        queryset=Player.objects.all(),
+        required=True,
+        widget=forms.Select(attrs={'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'})
+    )
+
     class Meta:
         model = ScheduledMatch
-        fields = ['team1', 'team2', 'scheduled_date', 'scheduled_time', 'location', 'notes']
+        fields = ['scheduled_date', 'scheduled_time', 'location', 'notes']
         widgets = {
             'scheduled_date': forms.DateInput(attrs={
                 'type': 'date',
@@ -152,12 +170,6 @@ class ScheduledMatchForm(forms.ModelForm):
             }),
             'scheduled_time': forms.TimeInput(attrs={
                 'type': 'time',
-                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
-            }),
-            'player1': forms.Select(attrs={
-                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
-            }),
-            'player2': forms.Select(attrs={
                 'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
             }),
             'location': forms.Select(attrs={
