@@ -2,7 +2,7 @@
   "mcpServers": {
     "codanna": {
       "command": "codanna",
-      "args": ["serve", "--watch"]
+      "args": ["--config", ".codanna/settings.toml", "serve", "--watch"]
     }
   }
 }

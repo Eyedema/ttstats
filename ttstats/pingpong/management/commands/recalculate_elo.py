@@ -28,18 +28,22 @@ class Command(BaseCommand):
         if dry_run:
             self.stdout.write(self.style.WARNING('DRY RUN MODE - No changes will be saved'))
 
-        # Get all confirmed matches, ordered chronologically
-        matches = Match.objects.filter(
+        # Get all matches with winner, with comprehensive prefetching
+        all_matches = Match.objects.filter(
             winner__isnull=False,
-            player1_confirmed=True,
-            player2_confirmed=True,
+        ).select_related('team1', 'team2', 'winner').prefetch_related(
+            'team1__players__user__profile',
+            'team2__players__user__profile',
+            'confirmations'
         ).order_by('date_played', 'created_at')
 
         # Also filter out 2v2 matches if is_double field exists
         if hasattr(Match, 'is_double'):
-            matches = matches.filter(is_double=False)
+            all_matches = all_matches.filter(is_double=False)
 
-        match_count = matches.count()
+        # Filter to confirmed matches only (using Python property)
+        matches = [m for m in all_matches if m.match_confirmed]
+        match_count = len(matches)
 
         self.stdout.write(f'Found {match_count} confirmed matches to process')
 

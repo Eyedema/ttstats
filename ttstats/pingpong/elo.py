@@ -74,7 +74,7 @@ def update_player_elo(match):
     if not match.match_confirmed:
         logger.debug(
             f"Skipping Elo update for match {match.pk}: not confirmed "
-            f"(player1={match.player1_confirmed}, player2={match.player2_confirmed})"
+            f"(team1={match.team1_confirmed}, team2={match.team2_confirmed})"
         )
         return
 

@@ -88,29 +88,31 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
 
         player = self.get_object()
 
-        # All player matches
-        matches = Match.objects.filter(
-            Q(team1__players=player) | Q(team2__players=player),
-            match_confirmed=True
-        ).select_related('team1', 'team2').prefetch_related(
+        # Fetch all matches for player with comprehensive prefetching
+        all_matches = Match.objects.filter(
+            Q(team1__players=player) | Q(team2__players=player)
+        ).select_related('team1', 'team2', 'winner').prefetch_related(
             'team1__players',
             'team2__players',
-            'winner'
+            'team1__players__user__profile',
+            'team2__players__user__profile',
+            'confirmations'
         ).order_by('-date_played').distinct()
 
-        total_matches = matches.count()
+        # Filter to confirmed matches only (using Python property)
+        confirmed_matches = [m for m in all_matches if m.match_confirmed]
+
+        total_matches = len(confirmed_matches)
 
         # Won matches
-        wins = matches.filter(
-            winner__players=player
-        ).count()
+        wins = len([m for m in confirmed_matches if m.winner and player in m.winner.players.all()])
         losses = total_matches - wins
 
         # Calculate current streak
-        stats = self._calculate_streaks(matches)
+        stats = self._calculate_streaks(confirmed_matches)
 
         context.update({
-            'matches': matches,  # Limit per performance
+            'matches': confirmed_matches,  # List of confirmed matches
             'total_matches': total_matches,
             'wins': wins,
             'losses': losses,
@@ -168,7 +170,12 @@ class DashboardView(LoginRequiredMixin, TemplateView):
 
         # Get statistics
         total_players = Player.objects.count()
-        total_matches = Match.objects.filter(match_confirmed=True).count()
+        matches = Match.objects.prefetch_related(
+            "team1__players__user__profile",
+            "team2__players__user__profile",
+            "confirmations",
+        ).all()
+        total_matches = len([m for m in matches if m.match_confirmed])
         recent_matches = Match.objects.all().order_by("-date_played")[:5]
 
         context.update(
@@ -507,49 +514,51 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
 
-        player_stats_qs = Player.objects.annotate(
-            total_matches=Count(
-                'teams__matches_as_team1',
-                filter=Q(teams__matches_as_team1__team1_confirmed=True,
-                         teams__matches_as_team1__team2_confirmed=True),
-                distinct=True,
-            ) + Count(
-                'teams__matches_as_team2',
-                filter=Q(teams__matches_as_team2__team1_confirmed=True,
-                         teams__matches_as_team2__team2_confirmed=True),
-                distinct=True,
-            ),
-            wins=Count(
-                'teams__matches_as_team1',
-                filter=Q(teams__matches_as_team1__winner__players__id=F('id'))
-                       | Q(teams__matches_as_team2__winner__players__id=F('id')),
-                distinct=True,
-            ),
-            total_games=(
-                    Count('teams__matches_as_team1__games', distinct=True)
-                    + Count('teams__matches_as_team2__games', distinct=True)
-            )
-        ).select_related('user')
+        # Fetch all players with comprehensive prefetching
+        player_stats_qs = Player.objects.select_related('user').prefetch_related(
+            'teams',
+            'teams__matches_as_team1',
+            'teams__matches_as_team2',
+            'teams__matches_as_team1__team1__players__user__profile',
+            'teams__matches_as_team1__team2__players__user__profile',
+            'teams__matches_as_team1__confirmations',
+            'teams__matches_as_team2__team1__players__user__profile',
+            'teams__matches_as_team2__team2__players__user__profile',
+            'teams__matches_as_team2__confirmations',
+            'teams__matches_as_team1__games',
+            'teams__matches_as_team2__games',
+            'teams__matches_as_team1__winner__players',
+            'teams__matches_as_team2__winner__players'
+        )
 
+        # Calculate stats in Python
         player_stats = []
         for player in player_stats_qs:
-            player.losses = (player.total_matches or 0) - (player.wins or 0)
-            player.win_rate = (
-                    (player.wins or 0) / (player.total_matches or 1) * 100
-            )
+            # Get all matches (both teams)
+            all_matches = set()
+            for team in player.teams.all():
+                all_matches.update(team.matches_as_team1.all())
+                all_matches.update(team.matches_as_team2.all())
 
-            player_stats.append(
-                {
-                    "player": player,
-                    "total_matches": player.total_matches,
-                    "total_games": player.total_games,
-                    "wins": player.wins,
-                    "losses": player.losses,
-                    "win_rate": player.win_rate,
-                    "elo_rating": player.elo_rating,
-                    "elo_peak": player.elo_peak,
-                }
-            )
+            # Filter to confirmed only (using Python property)
+            confirmed_matches = [m for m in all_matches if m.match_confirmed]
+
+            total_matches = len(confirmed_matches)
+            wins = len([m for m in confirmed_matches if m.winner and player in m.winner.players.all()])
+            losses = total_matches - wins
+            win_rate = (wins / total_matches * 100) if total_matches > 0 else 0
+            total_games = sum(m.games.count() for m in confirmed_matches)
+
+            player_stats.append({
+                "player": player,
+                "total_matches": total_matches,
+                "total_games": total_games,
+                "wins": wins,
+                "losses": losses,
+                "win_rate": win_rate,
+                "elo_rating": player.elo_rating,
+                "elo_peak": player.elo_peak,
+            })
 
         # Sort by Elo rating (desc), then by total wins (desc), then by win rate (desc)
         player_stats.sort(
@@ -577,7 +586,7 @@ class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
             player2 = get_object_or_404(Player, pk=player2_id)
 
             # Get all matches between these players
-            matches = (
+            all_matches = (
                 Match.objects.annotate(
                     team1_player_count=Count('team1__players', distinct=True),
                     team2_player_count=Count('team2__players', distinct=True)
@@ -592,27 +601,31 @@ class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
                     Q(team1__players=player1, team2__players=player2) |
                     Q(team1__players=player2, team2__players=player1)
                 )
-                .filter(
-                    # Completamente confermati
-                    team1_confirmed=True,
-                    team2_confirmed=True
+                .select_related("team1", "team2", "winner")
+                .prefetch_related(
+                    "games",
+                    "team1__players__user__profile",
+                    "team2__players__user__profile",
+                    "confirmations"
                 )
                 .distinct()
-                .prefetch_related("games")
                 .order_by("date_played")
             )
 
-            if matches.exists():
-                # Basic stats
-                total_matches = matches.count()
-                player1_match_wins = matches.filter(
-                    Q(team1__players=player1, winner__players=player1) |
-                    Q(team2__players=player1, winner__players=player1)
-                ).count()
-                player2_match_wins = matches.filter(
-                    Q(team1__players=player2, winner__players=player2) |
-                    Q(team2__players=player2, winner__players=player2)
-                ).count()
+            # Filter to confirmed matches only (using Python property)
+            matches = [m for m in all_matches if m.match_confirmed]
+
+            if matches:
+                # Basic stats (matches is now a list, not QuerySet)
+                total_matches = len(matches)
+                player1_match_wins = len([
+                    m for m in matches
+                    if m.winner and player1 in m.winner.players.all()
+                ])
+                player2_match_wins = len([
+                    m for m in matches
+                    if m.winner and player2 in m.winner.players.all()
+                ])
 
                 # Game-level analysis
                 all_games = []
@@ -701,13 +714,15 @@ class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
                     else 0
                 )
 
-                # Recent form (last 5 matches)
-                recent_matches = list(matches.order_by("-date_played")[:5])
+                # Recent form (last 5 matches) - matches is already ordered by date_played
+                recent_matches = list(reversed(matches[-5:]))  # Get last 5 and reverse for desc order
                 player1_recent_wins = sum(
-                    1 for m in recent_matches if m.winner.players.first() == player1
+                    1 for m in recent_matches
+                    if m.winner and player1 in m.winner.players.all()
                 )
                 player2_recent_wins = sum(
-                    1 for m in recent_matches if m.winner.players.first() == player2
+                    1 for m in recent_matches
+                    if m.winner and player2 in m.winner.players.all()
                 )
 
                 # Match margins (for average margin per match chart)
@@ -788,7 +803,7 @@ class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
                             match_margins, cls=DjangoJSONEncoder
                         ),
                         "cumulative_avg_json": json.dumps(cumulative_avg),
-                        "matches": matches.order_by("-date_played"),
+                        "matches": list(reversed(matches)),  # Reverse for descending order
                     }
                 )
             else:

@@ -50,8 +50,8 @@
                     {% endif %}
                     <!-- Confirm Button (only for players in the match) -->
                     {% if user.is_authenticated and user.player and match.winner %}
-                        {% if match.player1 == user.player %}
-                            {% if match.player1_confirmed %}
+                        {% if user.player in match.team1.players.all %}
+                            {% if match.team1_confirmed %}
                                 <span class="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 rounded-md border-2 border-white/30 bg-white/50 text-primary/70 px-4 py-2.5 text-sm font-medium cursor-not-allowed min-h-[44px]">
                                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
@@ -69,8 +69,8 @@
                                     </button>
                                 </form>
                             {% endif %}
-                        {% elif match.player2 == user.player %}
-                            {% if match.player2_confirmed %}
+                        {% elif user.player in match.team2.players.all %}
+                            {% if match.team2_confirmed %}
                                 <span class="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 rounded-md border-2 border-white/30 bg-white/50 text-primary/70 px-4 py-2.5 text-sm font-medium cursor-not-allowed min-h-[44px]">
                                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>

@@ -1,6 +1,8 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import User
+from django.core.management import call_command
+from django.http import HttpResponseRedirect
 from django_otp_webauthn.models import WebAuthnCredential
 from .models import Player, Match, Game, Location, UserProfile, ScheduledMatch, EloHistory, MatchConfirmation, Team
 
@@ -51,12 +53,21 @@ class EloHistoryAdmin(admin.ModelAdmin):
     list_filter = ('created_at', 'player')
     search_fields = ('player__name', 'match__id')
     readonly_fields = ('match', 'player', 'old_rating', 'new_rating', 'rating_change', 'k_factor', 'created_at')
+    change_form_template = "admin/pingpong/EloHistory/change_form.html"
 
     def has_add_permission(self, request):
         return False  # Elo history is auto-generated
 
     def has_change_permission(self, request, obj=None):
         return False  # Elo history is immutable
+    
+    
+    def response_change(self, request, obj):
+        if "_run_command" in request.POST:
+            call_command('recalculate_elo', obj.id)
+            self.message_user(request, "Elo recalculated® successfully")
+            return HttpResponseRedirect(".")
+        return super().response_change(request, obj)
 
 
 admin.site.register(Match)
