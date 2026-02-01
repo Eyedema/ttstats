@@ -102,6 +102,18 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
         # Filter to confirmed matches only (using Python property)
         confirmed_matches = [m for m in all_matches if m.match_confirmed]
 
+        # Add p1_score, p2_score, and player_won to each match from player's perspective
+        for match in confirmed_matches:
+            if player in match.team1.players.all():
+                match.p1_score = match.team1_score
+                match.p2_score = match.team2_score
+            else:
+                match.p1_score = match.team2_score
+                match.p2_score = match.team1_score
+
+            # Check if player won (works for both 1v1 and 2v2)
+            match.player_won = match.winner and player in match.winner.players.all()
+
         total_matches = len(confirmed_matches)
 
         # Won matches
@@ -139,7 +151,7 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
                     streak_type = 'win'
                 win_streak += 1
                 current_streak = win_streak
-            elif match.winner.exists():  # Loss
+            elif match.winner:  # Loss
                 if streak_type != 'loss':
                     longest_win = max(longest_win, win_streak)
                     win_streak = loss_streak = 0
@@ -370,7 +382,7 @@ class MatchCreateView(LoginRequiredMixin, CreateView):
     def form_valid(self, form):
         """Validate that non-staff users are participants"""
         user = self.request.user
-        is_double = (form.cleaned_data.get('is_double') == 'True')
+        is_double = (form.cleaned_data.get('is_double'))
         player1 = form.cleaned_data["player1"]
         player2 = form.cleaned_data["player2"]
         player3 = form.cleaned_data["player3"]  # Optional
@@ -428,42 +440,50 @@ class MatchCreateView(LoginRequiredMixin, CreateView):
         from .models import Team
 
         if is_double:
-            # Create 2-player teams
-            try:
-                team1 = Team.objects.filter(players=player1).filter(players=player3).get()
-            except Team.DoesNotExist:
+            # Create 2-player teams (or reuse existing)
+            team1 = (Team.objects
+                     .filter(players=player1)
+                     .filter(players=player3)
+                     .annotate(num_players=Count('players'))
+                     .filter(num_players=2)
+                     .first()
+                     )
+            if not team1:
                 team1 = Team.objects.create()
                 team1.players.set([player1, player3])
                 team1.save()
 
-            try:
-                team2 = Team.objects.filter(players=player2).filter(players=player4).get()
-            except Team.DoesNotExist:
+            team2 = (Team.objects
+                     .filter(players=player2)
+                     .filter(players=player4)
+                     .annotate(num_players=Count('players'))
+                     .filter(num_players=2)
+                     .first()
+                     )
+            if not team2:
                 team2 = Team.objects.create()
                 team2.players.set([player2, player4])
                 team2.save()
         else:
-            # Create 1-player teams
-            try:
-                team1 = (Team.objects
-                         .filter(players=player1)
-                         .annotate(num_players=Count('players'))
-                         .filter(num_players=1)
-                         .get()
-                         )
-            except Team.DoesNotExist:
+            # Create 1-player teams (or reuse existing)
+            team1 = (Team.objects
+                     .filter(players=player1)
+                     .annotate(num_players=Count('players'))
+                     .filter(num_players=1)
+                     .first()
+                     )
+            if not team1:
                 team1 = Team.objects.create()
                 team1.players.set([player1])
                 team1.save()
 
-            try:
-                team2 = (Team.objects
-                         .filter(players=player2)
-                         .annotate(num_players=Count('players'))
-                         .filter(num_players=1)
-                         .get()
-                         )
-            except Team.DoesNotExist:
+            team2 = (Team.objects
+                     .filter(players=player2)
+                     .annotate(num_players=Count('players'))
+                     .filter(num_players=1)
+                     .first()
+                     )
+            if not team2:
                 team2 = Team.objects.create()
                 team2.players.set([player2])
                 team2.save()
@@ -584,6 +604,16 @@ class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
         if player1_id and player2_id:
             player1 = get_object_or_404(Player, pk=player1_id)
             player2 = get_object_or_404(Player, pk=player2_id)
+
+            # Check if any 2v2 matches exist between these players
+            has_2v2_matches = Match.objects.filter(
+                Q(team1__players=player1) | Q(team2__players=player1)
+            ).filter(
+                Q(team1__players=player2) | Q(team2__players=player2)
+            ).filter(
+                is_double=True
+            ).exists()
+            context['has_2v2_matches'] = has_2v2_matches
 
             # Get all matches between these players
             all_matches = (

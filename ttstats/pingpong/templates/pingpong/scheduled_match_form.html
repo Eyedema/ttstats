@@ -23,7 +23,7 @@
                     Scheduling match as: {{ user_player.name }}
                 </p>
                 <p class="text-xs text-muted-foreground">
-                    You are automatically set as <strong>Player 1</strong>. Select your opponent as Player 2.
+                    You are automatically set as <strong><span class="singles-only">Player 1</span><span class="doubles-only hidden">Player 1 (Team 1)</span></strong>. Select your opponent<span class="doubles-only hidden">s</span> as Player 2<span class="doubles-only hidden"> (Team 1), Player 3 & 4 (Team 2)</span>.
                     You cannot schedule matches for other players.
                 </p>
             </div>
@@ -77,18 +77,37 @@
             <form method="post" class="space-y-6">
                 {% csrf_token %}
 
+                <!-- Match Format Toggle -->
+                <div class="space-y-2">
+                    <label for="id_is_double" class="text-sm font-medium leading-none">
+                        Match Format
+                    </label>
+                    <select id="id_is_double" name="is_double"
+                            class="flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2">
+                        <option value="False" selected>Singles (1v1)</option>
+                        <option value="True">Doubles (2v2)</option>
+                    </select>
+                </div>
+
                 <!-- Players Section -->
                 <div class="space-y-4">
                     <h3 class="text-base md:text-lg font-semibold flex items-center gap-2">
                         <img src="{% static 'pingpong/icons/users.svg' %}" class="w-5 h-5" alt="">
                         Players
                     </h3>
-                    <div class="grid gap-4 md:grid-cols-2">
-                        <!-- Player 1 -->
-                        <div class="space-y-2">
-                            <label for="{{ form.player1.id_for_label }}" class="text-sm font-medium leading-none">
-                                Player 1 {% if not is_staff %}<span class="text-muted-foreground">(You)</span><span class="text-destructive">*</span>{% endif %}
-                            </label>
+
+                    <!-- Team 1 -->
+                    <div class="space-y-2">
+                        <p class="text-sm font-medium text-primary doubles-only hidden">Team 1</p>
+                        <div class="grid gap-4 md:grid-cols-2">
+                            <!-- Player 1 -->
+                            <div class="space-y-2">
+                                <label for="{{ form.player1.id_for_label }}" class="text-sm font-medium leading-none">
+                                    Player 1
+                                    {% if not is_staff %}<span class="text-muted-foreground text-xs">(You)</span>{% endif %}
+                                    <span class="text-muted-foreground text-xs doubles-only hidden">(Team 1)</span>
+                                    <span class="text-destructive">*</span>
+                                </label>
                             <select 
                                 name="player1" 
                                 id="{{ form.player1.id_for_label }}"
@@ -100,19 +119,22 @@
                                 <option value="{{ value }}" {% if form.player1.value == value or form.player1.value|stringformat:"s" == value|stringformat:"s" %}selected{% endif %}>{{ label }}</option>
                                 {% endfor %}
                             </select>
-                            {% if form.player1.help_text %}
-                            <p class="text-xs md:text-sm text-muted-foreground">{{ form.player1.help_text }}</p>
-                            {% endif %}
-                            {% if form.player1.errors %}
-                            <p class="text-sm text-destructive">{{ form.player1.errors.0 }}</p>
-                            {% endif %}
-                        </div>
+                                {% if form.player1.help_text %}
+                                <p class="text-xs md:text-sm text-muted-foreground">{{ form.player1.help_text }}</p>
+                                {% endif %}
+                                {% if form.player1.errors %}
+                                <p class="text-sm text-destructive">{{ form.player1.errors.0 }}</p>
+                                {% endif %}
+                            </div>
 
-                        <!-- Player 2 -->
-                        <div class="space-y-2">
-                            <label for="{{ form.player2.id_for_label }}" class="text-sm font-medium leading-none">
-                                Player 2 <span class="text-muted-foreground">(Opponent)</span><span class="text-destructive">*</span>
-                            </label>
+                            <!-- Player 2 -->
+                            <div class="space-y-2">
+                                <label for="{{ form.player2.id_for_label }}" class="text-sm font-medium leading-none">
+                                    Player 2
+                                    <span class="text-muted-foreground text-xs singles-only">(Opponent)</span>
+                                    <span class="text-muted-foreground text-xs doubles-only hidden">(Team 1)</span>
+                                    <span class="text-destructive">*</span>
+                                </label>
                             <select 
                                 name="player2" 
                                 id="{{ form.player2.id_for_label }}"
@@ -123,9 +145,48 @@
                                 <option value="{{ value }}" {% if form.player2.value == value or form.player2.value|stringformat:"s" == value|stringformat:"s" %}selected{% endif %}>{{ label }}</option>
                                 {% endfor %}
                             </select>
-                            {% if form.player2.errors %}
-                            <p class="text-sm text-destructive">{{ form.player2.errors.0 }}</p>
-                            {% endif %}
+                                {% if form.player2.errors %}
+                                <p class="text-sm text-destructive">{{ form.player2.errors.0 }}</p>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Team 2 -->
+                    <div class="space-y-2 doubles-only hidden">
+                        <p class="text-sm font-medium text-primary">Team 2</p>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <!-- Player 3 Field -->
+                            <div class="space-y-2">
+                                <label class="text-sm font-medium leading-none" for="id_player3">
+                                    Player 3
+                                    {% if not is_staff %}<span class="text-muted-foreground text-xs">(Opponent)</span>{% endif %}
+                                    <span class="text-destructive doubles-required hidden">*</span>
+                                </label>
+                                <select name="player3" id="id_player3"
+                                        class="flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2">
+                                    <option value="">Select Player 3...</option>
+                                    {% for value, label in form.player1.field.choices %}
+                                    <option value="{{ value }}">{{ label }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+
+                            <!-- Player 4 Field -->
+                            <div class="space-y-2">
+                                <label class="text-sm font-medium leading-none" for="id_player4">
+                                    Player 4
+                                    {% if not is_staff %}<span class="text-muted-foreground text-xs">(Opponent)</span>{% endif %}
+                                    <span class="text-destructive doubles-required hidden">*</span>
+                                </label>
+                                <select name="player4" id="id_player4"
+                                        class="flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2">
+                                    <option value="">Select Player 4...</option>
+                                    {% for value, label in form.player1.field.choices %}
+                                    <option value="{{ value }}">{{ label }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -256,4 +317,58 @@
         </div>
     </div>
 </div>
+
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const isDoubleSelect = document.getElementById('id_is_double');
+        const singlesFields = document.querySelectorAll('.singles-only');
+        const doublesFields = document.querySelectorAll('.doubles-only');
+        const doublesRequired = document.querySelectorAll('.doubles-required');
+        const player3Select = document.getElementById('id_player3');
+        const player4Select = document.getElementById('id_player4');
+
+        function toggleDoublesMode() {
+            const isDouble = isDoubleSelect.value === 'True';
+
+            singlesFields.forEach(field => {
+                if (!isDouble) {
+                    field.classList.remove('hidden');
+                } else {
+                    field.classList.add('hidden');
+                }
+            });
+
+            doublesFields.forEach(field => {
+                if (isDouble) {
+                    field.classList.remove('hidden');
+                } else {
+                    field.classList.add('hidden');
+                }
+            });
+
+            doublesRequired.forEach(req => {
+                if (isDouble) {
+                    req.classList.remove('hidden');
+                } else {
+                    req.classList.add('hidden');
+                }
+            });
+
+            // Toggle required attribute
+            if (player3Select) {
+                player3Select.required = isDouble;
+                if (!isDouble) player3Select.value = '';
+            }
+            if (player4Select) {
+                player4Select.required = isDouble;
+                if (!isDouble) player4Select.value = '';
+            }
+        }
+
+        if (isDoubleSelect) {
+            isDoubleSelect.addEventListener('change', toggleDoublesMode);
+            toggleDoublesMode();
+        }
+    });
+</script>
 {% endblock %}

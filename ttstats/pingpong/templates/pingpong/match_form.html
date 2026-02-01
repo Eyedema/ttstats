@@ -25,7 +25,7 @@
                     Creating match as: {{ user_player.name }}
                 </p>
                 <p class="text-xs text-muted-foreground">
-                    You are automatically set as <strong>Player 1</strong>. Select your opponent as Player 2. 
+                    You are automatically set as <strong><span class="singles-only">Player 1</span><span class="doubles-only hidden">Player 1 (Team 1)</span></strong>. Select your opponent<span class="doubles-only hidden">s</span> as Player 2<span class="doubles-only hidden"> (Team 1), Player 3 & 4 (Team 2)</span>.
                     You cannot create matches for other players.
                 </p>
             </div>
@@ -92,7 +92,7 @@
                     </div>
                     <div>
                         <p class="text-xs md:text-sm font-medium text-muted-foreground mb-1">Final Score</p>
-                        <p class="font-semibold text-sm md:text-base">{{ object.player1_score }} - {{ object.player2_score }}</p>
+                        <p class="font-semibold text-sm md:text-base">{{ object.team1_score }} - {{ object.team2_score }}</p>
                     </div>
                     <div>
                         <p class="text-xs md:text-sm font-medium text-muted-foreground mb-1">Date Played</p>
@@ -158,6 +158,7 @@
                                 <label class="text-sm font-medium leading-none" for="id_player1">
                                     Player 1
                                     {% if not is_staff %}<span class="text-muted-foreground text-xs">(You)</span>{% endif %}
+                                    <span class="text-muted-foreground text-xs doubles-only hidden">(Team 1)</span>
                                     <span class="text-destructive">*</span>
                                 </label>
                                 <select name="player1" id="id_player1"
@@ -178,6 +179,7 @@
                                 <label class="text-sm font-medium leading-none" for="id_player2">
                                     Player 2
                                     {% if not is_staff %}<span class="text-muted-foreground text-xs singles-only">(Opponent)</span>{% endif %}
+                                    <span class="text-muted-foreground text-xs doubles-only hidden">(Team 1)</span>
                                     <span class="text-destructive">*</span>
                                 </label>
                                 <select name="player2" id="id_player2"
@@ -496,7 +498,7 @@
     });
 </script>
 
-{% if not is_complete and is_staff %}
+<!-- {% if not is_complete and is_staff %}
 <script>
     // Dynamic player dropdown filtering (only for staff users)
     const player1Select = document.getElementById('id_player1');
@@ -589,5 +591,5 @@
     // Initial filter on page load
     filterPlayers();
 </script>
-{% endif %}
+{% endif %} -->
 {% endblock %}
