@@ -1,17 +1,17 @@
 """
 Elo rating calculation for TTStats.
 Uses traditional Elo formula with table tennis-specific K-factor adjustments.
+Supports both 1v1 and 2v2 matches.
 """
 
 import logging
+from django.db import transaction
 
 logger = logging.getLogger(__name__)
-
 
 def calculate_k_factor(match, player):
     """
     Calculate K-factor based on match importance and player experience.
-
     Returns higher K for:
     - Tournament matches (more important)
     - Longer matches (more reliable result)
@@ -42,26 +42,23 @@ def calculate_k_factor(match, player):
     k = base_k * type_multiplier * best_of_multiplier * experience_multiplier
     return k
 
-
 def calculate_expected_score(rating_a, rating_b):
     """Calculate expected score (probability of A winning) using Elo formula."""
     return 1 / (1 + 10 ** ((rating_b - rating_a) / 400))
 
+def calculate_elo_change(r1, r2, actual_score, k_factor):
+    """Helper to calculate raw Elo point change."""
+    expected = calculate_expected_score(r1, r2)
+    return round(k_factor * (actual_score - expected))
 
 def update_player_elo(match):
     """
     Calculate and update Elo ratings after match completion.
-    Called from handle_match_completion signal.
-
-    Guards:
-    - Only runs if match has winner
-    - Only runs if match is confirmed by both players
-    - Skips 2v2 matches (future: friend will implement)
-
-    Future compatibility:
-    - Checks for 'is_double' field (doesn't exist in master, but will in support_doubles)
-    - For 1v1: Uses match.player1 and match.player2 (current structure)
-    - For 2v2: Will need to extract players from match.team1/team2 (friend's work)
+    Called from handle_match_completion signal or management command.
+    
+    Handles both 1v1 and 2v2 matches.
+    For 2v2, uses the average Elo of the team to calculate probabilities,
+    then applies the same rating change to both players on the team.
     """
     from .models import EloHistory, Match
 
@@ -83,74 +80,91 @@ def update_player_elo(match):
         logger.debug(f"Skipping Elo update for match {match.pk}: already calculated")
         return
 
-    # Future-proofing: Skip 2v2 matches (friend will implement calculate_elo_2v2)
-    if hasattr(match, 'is_double') and match.is_double:
-        logger.info(f"Skipping Elo update for match {match.pk}: 2v2 not yet implemented")
-        return
+    with transaction.atomic():
+        # 1. IDENTIFY TEAMS AND PLAYERS
+        # We determine if it's 2v2 by checking the number of players
+        team1_players = list(match.team1.players.all())
+        team2_players = list(match.team2.players.all())
+        
+        is_double = len(team1_players) > 1 or len(team2_players) > 1
 
-    # Get players (current master structure uses player1/player2)
-    # Note: In support_doubles branch, this will need refactoring to:
-    #   player1 = match.team1.players.first()
-    #   player2 = match.team2.players.first()
-    player1 = match.team1.players.first()
-    player2 = match.team2.players.first()
+        if is_double:
+            # Calculate Team Elo (Average)
+            # If a team has 0 players (shouldn't happen), avoid division by zero
+            if not team1_players or not team2_players:
+                logger.error(f"Skipping Elo update for match {match.pk}: empty team found")
+                return
 
-    # Get current ratings
-    r1 = player1.elo_rating
-    r2 = player2.elo_rating
+            r1 = sum(p.elo_rating for p in team1_players) / len(team1_players)
+            r2 = sum(p.elo_rating for p in team2_players) / len(team2_players)
+        else:
+            # 1v1 Case
+            r1 = team1_players[0].elo_rating
+            r2 = team2_players[0].elo_rating
 
-    # Calculate expected scores (probability of winning)
-    e1 = calculate_expected_score(r1, r2)
-    e2 = 1 - e1  # Probabilities sum to 1
+        # 2. DETERMINE OUTCOME (1 = Team 1 wins, 0 = Team 2 wins)
+        # We check if the winner object is the same as the team1 object
+        if match.winner == match.team1:
+            s1 = 1
+        else:
+            s1 = 0
+        s2 = 1 - s1
 
-    # Actual scores (1 = win, 0 = loss)
-    s1 = 1 if match.winner.players.first() == player1 else 0
-    s2 = 1 - s1
+        # 3. CALCULATE K-FACTORS
+        # For 2v2, we average the K-factors of the players in the team
+        # This preserves the "new player boost" logic even in teams
+        k1_list = [calculate_k_factor(match, p) for p in team1_players]
+        k2_list = [calculate_k_factor(match, p) for p in team2_players]
+        
+        k1_team = sum(k1_list) / len(k1_list)
+        k2_team = sum(k2_list) / len(k2_list)
 
-    # Calculate K-factors (can be different for each player due to experience)
-    k1 = calculate_k_factor(match, player1)
-    k2 = calculate_k_factor(match, player2)
+        # 4. CALCULATE CHANGE
+        elo_change_1 = calculate_elo_change(r1, r2, s1, k1_team)
+        elo_change_2 = calculate_elo_change(r2, r1, s2, k2_team)
 
-    # Calculate rating changes
-    elo_change_1 = round(k1 * (s1 - e1))
-    elo_change_2 = round(k2 * (s2 - e2))
+        # 5. APPLY UPDATES TO TEAM 1
+        for p in team1_players:
+            old_rating = p.elo_rating
+            p.elo_rating += elo_change_1
+            p.elo_peak = max(p.elo_peak, p.elo_rating)
+            p.matches_for_elo += 1
+            p.save(update_fields=['elo_rating', 'elo_peak', 'matches_for_elo'])
+            
+            # Record History
+            EloHistory.objects.create(
+                match=match,
+                player=p,
+                old_rating=old_rating,
+                new_rating=p.elo_rating,
+                rating_change=elo_change_1,
+                k_factor=k1_team 
+            )
 
-    # Store old ratings
-    old_rating_1 = player1.elo_rating
-    old_rating_2 = player2.elo_rating
+        # 6. APPLY UPDATES TO TEAM 2
+        for p in team2_players:
+            old_rating = p.elo_rating
+            p.elo_rating += elo_change_2
+            p.elo_peak = max(p.elo_peak, p.elo_rating)
+            p.matches_for_elo += 1
+            p.save(update_fields=['elo_rating', 'elo_peak', 'matches_for_elo'])
+            
+            # Record History
+            EloHistory.objects.create(
+                match=match,
+                player=p,
+                old_rating=old_rating,
+                new_rating=p.elo_rating,
+                rating_change=elo_change_2,
+                k_factor=k2_team
+            )
 
-    # Update player ratings
-    player1.elo_rating += elo_change_1
-    player1.elo_peak = max(player1.elo_peak, player1.elo_rating)
-    player1.matches_for_elo += 1
-    player1.save(update_fields=['elo_rating', 'elo_peak', 'matches_for_elo'])
-
-    player2.elo_rating += elo_change_2
-    player2.elo_peak = max(player2.elo_peak, player2.elo_rating)
-    player2.matches_for_elo += 1
-    player2.save(update_fields=['elo_rating', 'elo_peak', 'matches_for_elo'])
-
-    # Create history records
-    EloHistory.objects.create(
-        match=match,
-        player=player1,
-        old_rating=old_rating_1,
-        new_rating=player1.elo_rating,
-        rating_change=elo_change_1,
-        k_factor=k1,
-    )
-
-    EloHistory.objects.create(
-        match=match,
-        player=player2,
-        old_rating=old_rating_2,
-        new_rating=player2.elo_rating,
-        rating_change=elo_change_2,
-        k_factor=k2,
-    )
-
+    # Logging
+    team1_names = ", ".join([p.name for p in team1_players])
+    team2_names = ", ".join([p.name for p in team2_players])
+    
     logger.info(
-        f"Elo updated for match {match.pk}: "
-        f"{player1} {elo_change_1:+d} ({old_rating_1} → {player1.elo_rating}), "
-        f"{player2} {elo_change_2:+d} ({old_rating_2} → {player2.elo_rating})"
+        f"Elo updated for match {match.pk} ({'2v2' if is_double else '1v1'}): "
+        f"Team1[{team1_names}] {elo_change_1:+d}, "
+        f"Team2[{team2_names}] {elo_change_2:+d}"
     )

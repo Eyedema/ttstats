@@ -37,10 +37,6 @@ class Command(BaseCommand):
             'confirmations'
         ).order_by('date_played', 'created_at')
 
-        # Also filter out 2v2 matches if is_double field exists
-        if hasattr(Match, 'is_double'):
-            all_matches = all_matches.filter(is_double=False)
-
         # Filter to confirmed matches only (using Python property)
         matches = [m for m in all_matches if m.match_confirmed]
         match_count = len(matches)
