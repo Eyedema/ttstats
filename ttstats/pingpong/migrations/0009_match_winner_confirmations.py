@@ -21,9 +21,33 @@ def populate_confirmations_from_old_confirmations(apps, schema_editor):
 
 def copy_winners(apps, schema_editor):
     Match = apps.get_model('pingpong', 'Match')
-
+    Team = apps.get_model('pingpong', 'Team')
+    
     for match in Match.objects.exclude(old_winner__isnull=True):
-        match.winner.add(match.old_winner)
+        # Create a transient team for this player if it doesn't exist
+        # Or find the team that corresponds to this player
+        
+        # Since this is a migration, let's keep it robust:
+        # We need to find the Team that corresponds to match.old_winner (Player)
+        
+        # 1. Try to find an existing team for this single player
+        teams = Team.objects.filter(players=match.old_winner)
+        target_team = None
+        
+        for team in teams:
+            if team.players.count() == 1:
+                target_team = team
+                break
+        
+        # 2. If not found, create it
+        if not target_team:
+            target_team = Team.objects.create()
+            target_team.players.add(match.old_winner)
+            
+        # 3. Assign
+        match.winner = target_team
+        match.save()
+
 
 
 class Migration(migrations.Migration):
