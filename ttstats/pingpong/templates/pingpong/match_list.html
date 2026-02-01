@@ -168,7 +168,16 @@
                             {% if match.winner %}
                             <div class="flex items-center gap-2">
                                 <div class="w-8 h-8 rounded-full bg-success/10 text-success flex items-center justify-center font-semibold text-xs">
-                                    {{ match.winner.name|slice:":1"|upper }}
+                                    {% if match.winner.name %}
+                                        {# It is a single object #}
+                                        {{ match.winner.name|slice:":1"|upper }}
+                                    {% else %}
+                                        {# It is a list (or iterable) #}
+                                        {% for person in match.winner.players.all|slice:":2" %}
+                                            {# Handle if person is an object with .name or just a string #}
+                                            {{ person.name|default:person|slice:":1"|upper }}
+                                        {% endfor %}
+                                    {% endif %}
                                 </div>
                                 <a href="{% url 'pingpong:player_detail' match.winner.pk %}" class="text-sm font-medium hover:underline">
                                     {{ match.winner }}
