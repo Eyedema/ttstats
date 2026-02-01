@@ -1088,27 +1088,25 @@ class ScheduledMatchCreateView(LoginRequiredMixin, CreateView):
         from .models import Team
 
         if True:  # Scheduled matches are singles-only
-            # Create 1-player teams
-            try:
-                team1 = (Team.objects
-                         .filter(players=player1)
-                         .annotate(num_players=Count('players'))
-                         .filter(num_players=1)
-                         .get()
-                         )
-            except Team.DoesNotExist:
+            # Create 1-player teams (or reuse existing)
+            team1 = (Team.objects
+                     .filter(players=player1)
+                     .annotate(num_players=Count('players'))
+                     .filter(num_players=1)
+                     .first()
+                     )
+            if not team1:
                 team1 = Team.objects.create()
                 team1.players.set([player1])
                 team1.save()
 
-            try:
-                team2 = (Team.objects
-                         .filter(players=player2)
-                         .annotate(num_players=Count('players'))
-                         .filter(num_players=1)
-                         .get()
-                         )
-            except Team.DoesNotExist:
+            team2 = (Team.objects
+                     .filter(players=player2)
+                     .annotate(num_players=Count('players'))
+                     .filter(num_players=1)
+                     .first()
+                     )
+            if not team2:
                 team2 = Team.objects.create()
                 team2.players.set([player2])
                 team2.save()
