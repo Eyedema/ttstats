@@ -3,13 +3,14 @@ from django.db.models import Q
 
 
 class MatchManager(models.Manager):
-    """    
+    """
     - Staff users: See all matches
     - Regular users: See only matches they participated in
     - Anonymous users: See no matches
     """
 
-    def visible_to(self, user):
+    def get_queryset(self):
+        """Automatically filter matches based on current user"""
         from ttstats.middleware import get_current_user
 
         qs = super().get_queryset()
@@ -32,7 +33,7 @@ class MatchManager(models.Manager):
             user_player = user.player
             return qs.filter(
                 Q(team1__players=user_player) | Q(team2__players=user_player)
-            )
+            ).distinct()
         except AttributeError:
             # User has no linked player
             return qs.none()

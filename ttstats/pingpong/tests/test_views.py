@@ -13,6 +13,9 @@ from .conftest import (
     PlayerFactory,
     ScheduledMatchFactory,
     UserFactory,
+    confirm_match,
+    confirm_team,
+    get_match_players,
 )
 
 
@@ -124,11 +127,14 @@ class TestPlayerDetailView:
         other = PlayerFactory(with_user=True)
         # 2 confirmed wins
         for i in range(2):
-            m = MatchFactory(
-                player1=p, player2=other,
-                player1_confirmed=True, player2_confirmed=True,
-            )
-            Match.objects.filter(pk=m.pk).update(winner=p)
+            m = MatchFactory(player1=p, player2=other)
+            # Add games to make player1/team1 win
+            GameFactory(match=m, game_number=1, team1_score=11, team2_score=5)
+            GameFactory(match=m, game_number=2, team1_score=11, team2_score=9)
+            GameFactory(match=m, game_number=3, team1_score=11, team2_score=7)
+            m.refresh_from_db()
+            # Confirm the match
+            confirm_match(m)
 
         c = _login_client(u)
         resp = c.get(reverse("pingpong:player_detail", args=[p.pk]))
@@ -268,7 +274,9 @@ class TestMatchCreateView:
             "notes": "",
         })
         assert resp.status_code == 302
-        assert Match.objects.filter(player1=p, player2=other).exists()
+        # Check that a match exists where player p is in team1
+        match = Match.objects.filter(team1__players=p, team2__players=other).first()
+        assert match is not None
 
     def test_same_player_rejection(self):
         staff, _ = _staff_with_player()
@@ -304,8 +312,8 @@ class TestMatchUpdateView:
         u, p = _verified_user_with_player()
         other = PlayerFactory(with_user=True)
         m = MatchFactory(player1=p, player2=other, best_of=3)
-        GameFactory(match=m, game_number=1, player1_score=11, player2_score=5)
-        GameFactory(match=m, game_number=2, player1_score=11, player2_score=9)
+        GameFactory(match=m, game_number=1, team1_score=11, team2_score=5)
+        GameFactory(match=m, game_number=2, team1_score=11, team2_score=9)
         m.refresh_from_db()
         assert m.winner is not None
 
@@ -325,8 +333,8 @@ class TestGameCreateView:
         u, p = _verified_user_with_player()
         other = PlayerFactory(with_user=True)
         m = MatchFactory(player1=p, player2=other, best_of=3)
-        GameFactory(match=m, game_number=1, player1_score=11, player2_score=5)
-        GameFactory(match=m, game_number=2, player1_score=11, player2_score=9)
+        GameFactory(match=m, game_number=1, team1_score=11, team2_score=5)
+        GameFactory(match=m, game_number=2, team1_score=11, team2_score=9)
         m.refresh_from_db()
 
         c = _login_client(u)
@@ -348,8 +356,8 @@ class TestGameCreateView:
         c = _login_client(u)
         resp = c.post(reverse("pingpong:game_add", args=[m.pk]), {
             "game_number": 1,
-            "player1_score": 11,
-            "player2_score": 5,
+            "team1_score": 11,
+            "team2_score": 5,
         })
         assert resp.status_code == 302
         assert m.games.count() == 1
@@ -361,8 +369,8 @@ class TestGameCreateView:
         c = _login_client(u)
         resp = c.post(reverse("pingpong:game_add", args=[m.pk]), {
             "game_number": 1,
-            "player1_score": 11,
-            "player2_score": 5,
+            "team1_score": 11,
+            "team2_score": 5,
             "add_another": "true",
         })
         assert resp.status_code == 302
@@ -372,18 +380,20 @@ class TestGameCreateView:
         u, p = _verified_user_with_player()
         other = PlayerFactory(with_user=True)
         m = MatchFactory(player1=p, player2=other, best_of=3)
-        GameFactory(match=m, game_number=1, player1_score=11, player2_score=5)
+        GameFactory(match=m, game_number=1, team1_score=11, team2_score=5)
         c = _login_client(u)
         # This second game should complete the match
         resp = c.post(reverse("pingpong:game_add", args=[m.pk]), {
             "game_number": 2,
-            "player1_score": 11,
-            "player2_score": 9,
+            "team1_score": 11,
+            "team2_score": 9,
         })
         assert resp.status_code == 302
         assert f"/matches/{m.pk}/" in resp.url
         m.refresh_from_db()
-        assert m.winner == p
+        # Winner is now a Team, and p is in team1
+        assert m.winner == m.team1
+        assert p in m.winner.players.all()
 
 
 # ===========================================================================
@@ -401,21 +411,27 @@ class TestLeaderboardView:
 
     def test_only_confirmed_matches(self):
         u, p = _verified_user_with_player()
-        other = PlayerFactory(with_user=True)
+        # Make other player verified to prevent auto-confirm
+        other_user = UserFactory()
+        other_user.profile.email_verified = True
+        other_user.profile.save()
+        other = PlayerFactory(user=other_user)
 
-        # Confirmed match where p wins
-        m = MatchFactory(
-            player1=p, player2=other,
-            player1_confirmed=True, player2_confirmed=True,
-        )
-        Match.objects.filter(pk=m.pk).update(winner=p)
+        # Confirmed match where p (in team1) wins
+        m = MatchFactory(player1=p, player2=other)
+        GameFactory(match=m, game_number=1, team1_score=11, team2_score=5)
+        GameFactory(match=m, game_number=2, team1_score=11, team2_score=7)
+        GameFactory(match=m, game_number=3, team1_score=11, team2_score=9)
+        m.refresh_from_db()
+        confirm_match(m)
 
-        # Unconfirmed match
-        m2 = MatchFactory(
-            player1=p, player2=other,
-            player1_confirmed=False, player2_confirmed=False,
-        )
-        Match.objects.filter(pk=m2.pk).update(winner=p)
+        # Unconfirmed match (both players are verified, so won't auto-confirm)
+        m2 = MatchFactory(player1=p, player2=other)
+        GameFactory(match=m2, game_number=1, team1_score=11, team2_score=5)
+        GameFactory(match=m2, game_number=2, team1_score=11, team2_score=7)
+        GameFactory(match=m2, game_number=3, team1_score=11, team2_score=9)
+        m2.refresh_from_db()
+        # Don't confirm m2
 
         c = _login_client(u)
         resp = c.get(reverse("pingpong:leaderboard"))
@@ -429,11 +445,12 @@ class TestLeaderboardView:
         u, p = _verified_user_with_player()
         other = PlayerFactory(with_user=True)
 
-        m = MatchFactory(
-            player1=p, player2=other,
-            player1_confirmed=True, player2_confirmed=True,
-        )
-        Match.objects.filter(pk=m.pk).update(winner=p)
+        m = MatchFactory(player1=p, player2=other)
+        GameFactory(match=m, game_number=1, team1_score=11, team2_score=5)
+        GameFactory(match=m, game_number=2, team1_score=11, team2_score=7)
+        GameFactory(match=m, game_number=3, team1_score=11, team2_score=9)
+        m.refresh_from_db()
+        confirm_match(m)
 
         c = _login_client(u)
         resp = c.get(reverse("pingpong:leaderboard"))
@@ -459,14 +476,12 @@ class TestHeadToHeadStatsView:
         u, p1 = _verified_user_with_player()
         p2 = PlayerFactory(with_user=True)
 
-        m = MatchFactory(
-            player1=p1, player2=p2,
-            player1_confirmed=True, player2_confirmed=True,
-        )
-        GameFactory(match=m, game_number=1, player1_score=11, player2_score=5)
-        GameFactory(match=m, game_number=2, player1_score=11, player2_score=9)
-        GameFactory(match=m, game_number=3, player1_score=11, player2_score=7)
+        m = MatchFactory(player1=p1, player2=p2)
+        GameFactory(match=m, game_number=1, team1_score=11, team2_score=5)
+        GameFactory(match=m, game_number=2, team1_score=11, team2_score=9)
+        GameFactory(match=m, game_number=3, team1_score=11, team2_score=7)
         m.refresh_from_db()
+        confirm_match(m)
 
         c = _login_client(u)
         resp = c.get(reverse("pingpong:head_to_head"), {"player1": p1.pk, "player2": p2.pk})
@@ -635,7 +650,8 @@ class TestMatchConfirm:
         resp = c.post(reverse("pingpong:match_confirm", args=[m.pk]))
         assert resp.status_code == 302
         m.refresh_from_db()
-        assert m.player1_confirmed is True
+        # Check that player p (team1) has confirmed
+        assert p in m.confirmations.all()
 
     def test_confirm_as_player2(self):
         u, p = _verified_user_with_player()
@@ -645,12 +661,15 @@ class TestMatchConfirm:
         resp = c.post(reverse("pingpong:match_confirm", args=[m.pk]))
         assert resp.status_code == 302
         m.refresh_from_db()
-        assert m.player2_confirmed is True
+        # Check that player p (team2) has confirmed
+        assert p in m.confirmations.all()
 
     def test_already_confirmed(self):
         u, p = _verified_user_with_player()
         other = PlayerFactory(with_user=True)
-        m = MatchFactory(player1=p, player2=other, player1_confirmed=True)
+        m = MatchFactory(player1=p, player2=other)
+        # Pre-confirm the match for player p
+        confirm_team(m, 1)
         c = _login_client(u)
         resp = c.post(reverse("pingpong:match_confirm", args=[m.pk]))
         assert resp.status_code == 302
@@ -801,15 +820,16 @@ class TestMatchConfirmEloUpdate:
 
         # Create match with winner
         match = MatchFactory(player1=player1, player2=player2, best_of=5)
-        GameFactory(match=match, game_number=1, player1_score=11, player2_score=5)
-        GameFactory(match=match, game_number=2, player1_score=11, player2_score=7)
-        GameFactory(match=match, game_number=3, player1_score=11, player2_score=9)
+        GameFactory(match=match, game_number=1, team1_score=11, team2_score=5)
+        GameFactory(match=match, game_number=2, team1_score=11, team2_score=7)
+        GameFactory(match=match, game_number=3, team1_score=11, team2_score=9)
         match.refresh_from_db()
 
         # Verify winner is set but not confirmed
-        assert match.winner == player1
-        assert not match.player1_confirmed
-        assert not match.player2_confirmed
+        assert match.winner == match.team1
+        assert player1 in match.winner.players.all()
+        assert not match.team1_confirmed
+        assert not match.team2_confirmed
         assert EloHistory.objects.count() == 0
 
         # Player 1 confirms via UI
@@ -820,8 +840,8 @@ class TestMatchConfirmEloUpdate:
 
         match.refresh_from_db()
         player1.refresh_from_db()
-        assert match.player1_confirmed
-        assert not match.player2_confirmed
+        assert match.team1_confirmed
+        assert not match.team2_confirmed
         # Elo should NOT update yet (only one confirmation)
         assert player1.elo_rating == 1500
         assert EloHistory.objects.count() == 0
@@ -836,8 +856,8 @@ class TestMatchConfirmEloUpdate:
         player2.refresh_from_db()
 
         # NOW: Both confirmed, Elo should update
-        assert match.player1_confirmed
-        assert match.player2_confirmed
+        assert match.team1_confirmed
+        assert match.team2_confirmed
         assert match.match_confirmed
 
         # CRITICAL: Elo should be updated

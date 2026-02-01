@@ -221,6 +221,20 @@ class Match(models.Model):
         """Tutti i giocatori di entrambi i team hanno confermato"""
         return self.team1_confirmed and self.team2_confirmed
 
+    @property
+    def player1(self):
+        """Backward-compatible property: returns first player from team1"""
+        if self.team1:
+            return self.team1.players.first()
+        return None
+
+    @property
+    def player2(self):
+        """Backward-compatible property: returns first player from team2"""
+        if self.team2:
+            return self.team2.players.first()
+        return None
+
     def should_auto_confirm(self):
         if not self.winner or self.match_confirmed:
             return False
@@ -396,6 +410,20 @@ class ScheduledMatch(models.Model):
     def user_can_edit(self, user):
         """Check if user can edit this scheduled match"""
         return self.user_can_view(user)
+
+    @property
+    def player1(self):
+        """Backward-compatible property: returns first player from team1"""
+        if self.team1:
+            return self.team1.players.first()
+        return None
+
+    @property
+    def player2(self):
+        """Backward-compatible property: returns first player from team2"""
+        if self.team2:
+            return self.team2.players.first()
+        return None
 
 
 class EloHistory(models.Model):

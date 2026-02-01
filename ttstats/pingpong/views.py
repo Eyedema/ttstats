@@ -1006,16 +1006,6 @@ class ScheduledMatchCreateView(LoginRequiredMixin, CreateView):
                     pk=user_player.pk
                 )
 
-                # Limit player3 choices to exclude the user
-                form.fields["player3"].queryset = Player.objects.exclude(
-                    pk=user_player.pk
-                )
-
-                # Limit player4 choices to exclude the user
-                form.fields["player4"].queryset = Player.objects.exclude(
-                    pk=user_player.pk
-                )
-
             except Player.DoesNotExist:
                 messages.error(
                     self.request,
@@ -1023,37 +1013,14 @@ class ScheduledMatchCreateView(LoginRequiredMixin, CreateView):
                 )
                 form.fields["player1"].disabled = True
                 form.fields["player2"].disabled = True
-                form.fields["player3"].disabled = True
-                form.fields["player4"].disabled = True
 
         return form
 
     def form_valid(self, form):
         """Save the scheduled match and send notifications"""
         user = self.request.user
-        is_double = (form.cleaned_data.get('is_double') == 'True')
         player1 = form.cleaned_data["player1"]
         player2 = form.cleaned_data["player2"]
-        player3 = form.cleaned_data["player3"]  # Optional
-        player4 = form.cleaned_data["player4"]  # Optional
-
-        # Validation for singles matches
-        if not is_double:
-            if player3 or player4:
-                messages.error(self.request, "Singles matches cannot have Player 3 or Player 4!")
-                return self.form_invalid(form)
-
-        # Validation for doubles matches
-        if is_double:
-            if not player3 or not player4:
-                messages.error(self.request, "Doubles matches require all 4 players!")
-                return self.form_invalid(form)
-
-            # Ensure all 4 players are unique
-            players = [player1, player2, player3, player4]
-            if len(set(players)) != 4:
-                messages.error(self.request, "All players must be different!")
-                return self.form_invalid(form)
 
         # Ensure player1 != player2
         if player1 == player2:
@@ -1066,7 +1033,7 @@ class ScheduledMatchCreateView(LoginRequiredMixin, CreateView):
                 user_player = user.player
 
                 # Ensure user is one of the players
-                if user_player not in [player1, player2, player3, player4]:
+                if user_player not in [player1, player2]:
                     messages.error(
                         self.request, "You can only create matches you participate in!"
                     )
@@ -1087,25 +1054,10 @@ class ScheduledMatchCreateView(LoginRequiredMixin, CreateView):
                 )
                 return self.form_invalid(form)
 
-        # Create 1-player teams (scheduled matches are singles only)
+        # Create 1-player teams (scheduled matches are singles only for now)
         from .models import Team
 
-        if is_double:
-            # Create 2-player teams
-            try:
-                team1 = Team.objects.filter(players=player1).filter(players=player3).get()
-            except Team.DoesNotExist:
-                team1 = Team.objects.create()
-                team1.players.set([player1, player3])
-                team1.save()
-
-            try:
-                team2 = Team.objects.filter(players=player2).filter(players=player4).get()
-            except Team.DoesNotExist:
-                team2 = Team.objects.create()
-                team2.players.set([player2, player4])
-                team2.save()
-        else:
+        if True:  # Scheduled matches are singles-only
             # Create 1-player teams
             try:
                 team1 = (Team.objects

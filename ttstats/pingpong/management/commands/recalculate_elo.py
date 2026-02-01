@@ -28,12 +28,12 @@ class Command(BaseCommand):
         if dry_run:
             self.stdout.write(self.style.WARNING('DRY RUN MODE - No changes will be saved'))
 
-        # Get all matches with winner, with comprehensive prefetching
+        # Get all matches with winner
+        # Note: Don't prefetch players here - we reset Elo ratings before processing,
+        # and prefetched data would contain stale values
         all_matches = Match.objects.filter(
             winner__isnull=False,
         ).select_related('team1', 'team2', 'winner').prefetch_related(
-            'team1__players__user__profile',
-            'team2__players__user__profile',
             'confirmations'
         ).order_by('date_played', 'created_at')
 
@@ -56,6 +56,7 @@ class Command(BaseCommand):
                     elo_peak=1500,
                     matches_for_elo=0,
                 )
+                
 
                 # Clear existing Elo history
                 deleted_count = EloHistory.objects.all().count()
@@ -65,6 +66,7 @@ class Command(BaseCommand):
                 # Replay matches in chronological order
                 self.stdout.write('Recalculating Elo ratings...')
                 for i, match in enumerate(matches, 1):
+    
                     update_player_elo(match)
 
                     if i % 50 == 0:

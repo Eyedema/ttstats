@@ -89,6 +89,14 @@ def update_elo_on_confirmation(sender, instance, created, **kwargs):
     update_player_elo(instance)
 
 
+@receiver(post_save, sender=MatchConfirmation)
+def update_elo_on_match_confirmation(sender, instance, created, **kwargs):
+    """Update Elo ratings when a player confirms a match"""
+    if created:
+        # Try to update Elo for the match (has guards inside, safe to call anytime)
+        update_player_elo(instance.match)
+
+
 @receiver(post_save, sender=WebAuthnCredential)
 def notify_passkey_registered(sender, instance, created, **kwargs):
     """Send email when new passkey is registered"""
