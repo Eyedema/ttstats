@@ -19,11 +19,11 @@ docker compose -f compose.dev.yml exec web python manage.py createsuperuser
 
 
 # Testing (always use pytest, never Django's manage.py test)
-cd /path/to/ttstats && python -m pytest --tb=short -q          # Run all tests
-cd /path/to/ttstats && python -m pytest --co -q                # List all tests
-cd /path/to/ttstats && python -m pytest ttstats/pingpong/tests/test_models.py  # Single file
-cd /path/to/ttstats && python -m pytest -k "TestMatch"         # Run by name pattern
-cd /path/to/ttstats && python -m pytest --tb=long -x           # Stop on first failure, full traceback
+cd ttstats && python -m pytest --tb=short -q          # Run all tests
+cd ttstats && python -m pytest --co -q                # List all tests
+cd ttstats && python -m pytest ttstats/pingpong/tests/test_models.py  # Single file
+cd ttstats && python -m pytest -k "TestMatch"         # Run by name pattern
+cd ttstats && python -m pytest --tb=long -x           # Stop on first failure, full traceback
 
 # Coverage
 cd ttstats && coverage run -m pytest && coverage report         # Run with coverage
@@ -37,7 +37,7 @@ docker compose -f compose.prod.yml up --build -d
 ## Project Structure
 
 ```
-/home/user/ttstats/
+/Users/ubaldopuocci/ttstats/
  ├── pytest.ini                        # Pytest configuration (DO NOT use manage.py test) 
 ├── requirements.txt                  # Python dependencies
 ├── ttstats/                          # Django project root

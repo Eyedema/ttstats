@@ -50,6 +50,17 @@
     </div>
 
     {% if player1 and player2 %}
+        {% if has_2v2_matches %}
+        <div class="rounded-lg border bg-warning/10 p-6">
+            <div class="flex items-start gap-3">
+                <img src="{% static 'pingpong/icons/info.svg' %}" class="w-5 h-5 text-warning" alt="">
+                <div>
+                    <p class="font-semibold text-sm">Limited Data</p>
+                    <p class="text-xs mt-1">Head-to-head statistics only include singles (1v1) matches. Doubles matches are excluded from this comparison.</p>
+                </div>
+            </div>
+        </div>
+        {% endif %}
         {% if has_data %}
         <!-- Head to Head Header -->
         <div class="rounded-lg border bg-gradient-to-r from-primary to-primary/90 text-primary-foreground p-4 md:p-6">

@@ -1,8 +1,11 @@
 from django.contrib import admin
+from django.urls import path
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import User
+from django.core.management import call_command
+from django.http import HttpResponseRedirect
 from django_otp_webauthn.models import WebAuthnCredential
-from .models import Player, Match, Game, Location, UserProfile, ScheduledMatch, EloHistory
+from .models import Player, Match, Game, Location, UserProfile, ScheduledMatch, EloHistory, MatchConfirmation, Team
 
 # Unregister the default User admin
 admin.site.unregister(User)
@@ -46,21 +49,42 @@ class PlayerAdmin(admin.ModelAdmin):
 
 @admin.register(EloHistory)
 class EloHistoryAdmin(admin.ModelAdmin):
-    """Elo History admin (read-only)"""
     list_display = ('player', 'match', 'old_rating', 'new_rating', 'rating_change', 'k_factor', 'created_at')
     list_filter = ('created_at', 'player')
     search_fields = ('player__name', 'match__id')
     readonly_fields = ('match', 'player', 'old_rating', 'new_rating', 'rating_change', 'k_factor', 'created_at')
+    
+    # Point to the new template we just created
+    change_list_template = "admin/pingpong/EloHistory/change_list.html"
 
     def has_add_permission(self, request):
-        return False  # Elo history is auto-generated
+        return False
 
     def has_change_permission(self, request, obj=None):
-        return False  # Elo history is immutable
+        return False
+
+    def get_urls(self):
+        urls = super().get_urls()
+        my_urls = [
+            path('recalculate/', self.admin_site.admin_view(self.recalculate_elo_view), name='recalculate_elo'),
+        ]
+        return my_urls + urls
+
+    def recalculate_elo_view(self, request):
+        if request.method == "POST":
+            # Your command does not take arguments, so we just call it
+            call_command('recalculate_elo')
+            self.message_user(request, "Elo ratings recalculated successfully.")
+            return HttpResponseRedirect("../")
+        
+        # Fallback if accessed via GET (optional)
+        return HttpResponseRedirect("../")
 
 
 admin.site.register(Match)
 admin.site.register(Game)
 admin.site.register(Location)
 admin.site.register(UserProfile)
+admin.site.register(Team)
+admin.site.register(MatchConfirmation)
 admin.site.register(ScheduledMatch)

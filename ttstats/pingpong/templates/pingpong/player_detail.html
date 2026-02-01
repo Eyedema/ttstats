@@ -273,6 +273,43 @@
                             <div class="text-xs text-muted-foreground">{{ match.date_played|date:"H:i" }}</div>
                         </td>
                         <td class="px-6 py-4">
+                            {% if match.is_double %}
+                                {% if player in match.team1.players.all %}
+                                <div class="text-sm">
+                                    <span class="font-medium">vs {{ match.team2.name|default:"Team 2" }}</span>
+                                    <div class="text-xs text-muted-foreground mt-1">
+                                        {% for opponent in match.team2.players.all %}
+                                            <a href="{% url 'pingpong:player_detail' opponent.pk %}" class="hover:underline">{{ opponent.name }}</a>{% if not forloop.last %}, {% endif %}
+                                        {% endfor %}
+                                    </div>
+                                    <div class="text-xs text-muted-foreground mt-1">
+                                        Partner:
+                                        {% for teammate in match.team1.players.all %}
+                                            {% if teammate != player %}
+                                                <a href="{% url 'pingpong:player_detail' teammate.pk %}" class="hover:underline">{{ teammate.name }}</a>
+                                            {% endif %}
+                                        {% endfor %}
+                                    </div>
+                                </div>
+                                {% else %}
+                                <div class="text-sm">
+                                    <span class="font-medium">vs {{ match.team1.name|default:"Team 1" }}</span>
+                                    <div class="text-xs text-muted-foreground mt-1">
+                                        {% for opponent in match.team1.players.all %}
+                                            <a href="{% url 'pingpong:player_detail' opponent.pk %}" class="hover:underline">{{ opponent.name }}</a>{% if not forloop.last %}, {% endif %}
+                                        {% endfor %}
+                                    </div>
+                                    <div class="text-xs text-muted-foreground mt-1">
+                                        Partner:
+                                        {% for teammate in match.team2.players.all %}
+                                            {% if teammate != player %}
+                                                <a href="{% url 'pingpong:player_detail' teammate.pk %}" class="hover:underline">{{ teammate.name }}</a>
+                                            {% endif %}
+                                        {% endfor %}
+                                    </div>
+                                </div>
+                                {% endif %}
+                            {% else %}
                             <div class="flex items-center gap-2 text-sm">
                                 <span class="font-medium">vs</span>
                                 {% if match.player1 == player %}
@@ -281,22 +318,23 @@
                                 <a href="{% url 'pingpong:player_detail' match.player1.pk %}" class="font-medium hover:underline">{{ match.player1 }}</a>
                                 {% endif %}
                             </div>
+                            {% endif %}
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap">
                             <div class="flex items-center gap-2">
                                 {% if match.player1 == player %}
-                                <span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium {% if match.winner == player %}bg-success/10 text-success{% else %}bg-muted{% endif %}">{{ match.p1_score }}</span>
+                                <span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium {% if match.player_won %}bg-success/10 text-success{% else %}bg-muted{% endif %}">{{ match.p1_score }}</span>
                                 <span class="text-muted-foreground">-</span>
-                                <span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium {% if match.winner != player and match.winner %}bg-destructive/10 text-destructive{% else %}bg-muted{% endif %}">{{ match.p2_score }}</span>
+                                <span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium {% if not match.player_won and match.winner %}bg-destructive/10 text-destructive{% else %}bg-muted{% endif %}">{{ match.p2_score }}</span>
                                 {% else %}
-                                <span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium {% if match.winner != player and match.winner %}bg-destructive/10 text-destructive{% else %}bg-muted{% endif %}">{{ match.p1_score }}</span>
+                                <span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium {% if not match.player_won and match.winner %}bg-destructive/10 text-destructive{% else %}bg-muted{% endif %}">{{ match.p1_score }}</span>
                                 <span class="text-muted-foreground">-</span>
-                                <span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium {% if match.winner == player %}bg-success/10 text-success{% else %}bg-muted{% endif %}">{{ match.p2_score }}</span>
+                                <span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium {% if match.player_won %}bg-success/10 text-success{% else %}bg-muted{% endif %}">{{ match.p2_score }}</span>
                                 {% endif %}
                             </div>
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap">
-                            {% if match.winner == player %}
+                            {% if match.player_won %}
                             <span class="inline-flex items-center gap-1 rounded-md bg-success/10 px-2 py-1 text-xs font-medium text-success">
                                 <img src="{% static 'pingpong/icons/check.svg' %}" class="w-3 h-3" alt="">
                                 Win
@@ -351,7 +389,7 @@
 
                 <!-- Result Badge (prominent) -->
                 <div class="mb-2">
-                    {% if match.winner == player %}
+                    {% if match.player_won %}
                     <span class="inline-flex items-center gap-1 rounded-md bg-success/10 px-3 py-1 text-sm font-bold text-success">
                         <img src="{% static 'pingpong/icons/check.svg' %}" class="w-4 h-4" alt="">
                         WON
@@ -366,6 +404,43 @@
 
                 <!-- Opponent & Score -->
                 <div class="flex items-center justify-between mb-3">
+                    {% if match.is_double %}
+                        {% if player in match.team1.players.all %}
+                        <div>
+                            <div class="text-xs text-muted-foreground mb-1">vs {{ match.team2.name|default:"Team 2" }}</div>
+                            <div class="font-semibold text-sm">
+                                {% for opponent in match.team2.players.all %}
+                                    <a href="{% url 'pingpong:player_detail' opponent.pk %}" class="hover:underline">{{ opponent.name|truncatechars:15 }}</a>{% if not forloop.last %}, {% endif %}
+                                {% endfor %}
+                            </div>
+                            <div class="text-xs text-muted-foreground mt-0.5">
+                                Partner:
+                                {% for teammate in match.team1.players.all %}
+                                    {% if teammate != player %}
+                                        <a href="{% url 'pingpong:player_detail' teammate.pk %}" class="hover:underline">{{ teammate.name|truncatechars:15 }}</a>
+                                    {% endif %}
+                                {% endfor %}
+                            </div>
+                        </div>
+                        {% else %}
+                        <div>
+                            <div class="text-xs text-muted-foreground mb-1">vs {{ match.team1.name|default:"Team 1" }}</div>
+                            <div class="font-semibold text-sm">
+                                {% for opponent in match.team1.players.all %}
+                                    <a href="{% url 'pingpong:player_detail' opponent.pk %}" class="hover:underline">{{ opponent.name|truncatechars:15 }}</a>{% if not forloop.last %}, {% endif %}
+                                {% endfor %}
+                            </div>
+                            <div class="text-xs text-muted-foreground mt-0.5">
+                                Partner:
+                                {% for teammate in match.team2.players.all %}
+                                    {% if teammate != player %}
+                                        <a href="{% url 'pingpong:player_detail' teammate.pk %}" class="hover:underline">{{ teammate.name|truncatechars:15 }}</a>
+                                    {% endif %}
+                                {% endfor %}
+                            </div>
+                        </div>
+                        {% endif %}
+                    {% else %}
                     <div>
                         <div class="text-xs text-muted-foreground mb-1">vs</div>
                         {% if match.player1 == player %}
@@ -374,17 +449,18 @@
                         <a href="{% url 'pingpong:player_detail' match.player1.pk %}" class="font-semibold hover:underline">{{ match.player1 }}</a>
                         {% endif %}
                     </div>
+                    {% endif %}
 
                     <!-- Score -->
                     <div class="flex items-center gap-2">
                         {% if match.player1 == player %}
-                        <span class="inline-flex items-center rounded-md px-3 py-1.5 text-base font-bold {% if match.winner == player %}bg-success/10 text-success{% else %}bg-muted{% endif %}">{{ match.p1_score }}</span>
+                        <span class="inline-flex items-center rounded-md px-3 py-1.5 text-base font-bold {% if match.player_won %}bg-success/10 text-success{% else %}bg-muted{% endif %}">{{ match.p1_score }}</span>
                         <span class="text-muted-foreground font-bold">-</span>
-                        <span class="inline-flex items-center rounded-md px-3 py-1.5 text-base font-bold {% if match.winner != player and match.winner %}bg-destructive/10 text-destructive{% else %}bg-muted{% endif %}">{{ match.p2_score }}</span>
+                        <span class="inline-flex items-center rounded-md px-3 py-1.5 text-base font-bold {% if not match.player_won and match.winner %}bg-destructive/10 text-destructive{% else %}bg-muted{% endif %}">{{ match.p2_score }}</span>
                         {% else %}
-                        <span class="inline-flex items-center rounded-md px-3 py-1.5 text-base font-bold {% if match.winner != player and match.winner %}bg-destructive/10 text-destructive{% else %}bg-muted{% endif %}">{{ match.p1_score }}</span>
+                        <span class="inline-flex items-center rounded-md px-3 py-1.5 text-base font-bold {% if not match.player_won and match.winner %}bg-destructive/10 text-destructive{% else %}bg-muted{% endif %}">{{ match.p1_score }}</span>
                         <span class="text-muted-foreground font-bold">-</span>
-                        <span class="inline-flex items-center rounded-md px-3 py-1.5 text-base font-bold {% if match.winner == player %}bg-success/10 text-success{% else %}bg-muted{% endif %}">{{ match.p2_score }}</span>
+                        <span class="inline-flex items-center rounded-md px-3 py-1.5 text-base font-bold {% if match.player_won %}bg-success/10 text-success{% else %}bg-muted{% endif %}">{{ match.p2_score }}</span>
                         {% endif %}
                     </div>
                 </div>

@@ -7,7 +7,7 @@ from io import StringIO
 from django.core.management import call_command
 
 from ..models import Player, Match, Game, EloHistory
-from .conftest import PlayerFactory, MatchFactory, GameFactory
+from .conftest import PlayerFactory, MatchFactory, GameFactory, confirm_match, confirm_match_silent
 
 
 @pytest.mark.django_db
@@ -20,13 +20,11 @@ class TestRecalculateElo:
         p2 = PlayerFactory(elo_rating=1400, matches_for_elo=10)
 
         match = MatchFactory(player1=p1, player2=p2)
-        GameFactory(match=match, game_number=1, player1_score=11, player2_score=5)
-        GameFactory(match=match, game_number=2, player1_score=11, player2_score=7)
-        GameFactory(match=match, game_number=3, player1_score=11, player2_score=9)
+        GameFactory(match=match, game_number=1, team1_score=11, team2_score=5)
+        GameFactory(match=match, game_number=2, team1_score=11, team2_score=7)
+        GameFactory(match=match, game_number=3, team1_score=11, team2_score=9)
         match.refresh_from_db()
-        match.player1_confirmed = True
-        match.player2_confirmed = True
-        match.save()
+        confirm_match(match)
 
         # Save Elo values AFTER confirmation (signal will have updated them)
         p1.refresh_from_db()
@@ -59,13 +57,12 @@ class TestRecalculateElo:
         p2 = PlayerFactory(elo_rating=1300, elo_peak=1500, matches_for_elo=40)
 
         match = MatchFactory(player1=p1, player2=p2)
-        GameFactory(match=match, game_number=1, player1_score=11, player2_score=5)
-        GameFactory(match=match, game_number=2, player1_score=11, player2_score=7)
-        GameFactory(match=match, game_number=3, player1_score=11, player2_score=9)
+        GameFactory(match=match, game_number=1, team1_score=11, team2_score=5)
+        GameFactory(match=match, game_number=2, team1_score=11, team2_score=7)
+        GameFactory(match=match, game_number=3, team1_score=11, team2_score=9)
         match.refresh_from_db()
-        match.player1_confirmed = True
-        match.player2_confirmed = True
-        match.save()
+        # Use silent confirm to avoid triggering Elo updates before the command
+        confirm_match_silent(match)
 
         call_command('recalculate_elo', stdout=StringIO())
 
@@ -87,12 +84,13 @@ class TestRecalculateElo:
     def test_recalculate_chronological_order(self):
         """Command should process matches in chronological order"""
         from datetime import datetime, timedelta
+        from django.utils import timezone
 
         p1 = PlayerFactory(elo_rating=1500, matches_for_elo=0)
         p2 = PlayerFactory(elo_rating=1500, matches_for_elo=0)
 
         # Create 3 matches over 3 days
-        base_date = datetime(2024, 1, 1, 12, 0, 0)
+        base_date = timezone.make_aware(datetime(2024, 1, 1, 12, 0, 0))
 
         for i in range(3):
             match = MatchFactory(
@@ -101,13 +99,12 @@ class TestRecalculateElo:
                 date_played=base_date + timedelta(days=i)
             )
             # P1 wins all matches
-            GameFactory(match=match, game_number=1, player1_score=11, player2_score=5)
-            GameFactory(match=match, game_number=2, player1_score=11, player2_score=7)
-            GameFactory(match=match, game_number=3, player1_score=11, player2_score=9)
+            GameFactory(match=match, game_number=1, team1_score=11, team2_score=5)
+            GameFactory(match=match, game_number=2, team1_score=11, team2_score=7)
+            GameFactory(match=match, game_number=3, team1_score=11, team2_score=9)
             match.refresh_from_db()
-            match.player1_confirmed = True
-            match.player2_confirmed = True
-            match.save()
+            # Use silent confirm to avoid triggering Elo updates before the command
+            confirm_match_silent(match)
 
         call_command('recalculate_elo', stdout=StringIO())
 
@@ -145,13 +142,11 @@ class TestRecalculateElo:
         assert EloHistory.objects.count() == 1
 
         # Create real match
-        GameFactory(match=match, game_number=1, player1_score=11, player2_score=5)
-        GameFactory(match=match, game_number=2, player1_score=11, player2_score=7)
-        GameFactory(match=match, game_number=3, player1_score=11, player2_score=9)
+        GameFactory(match=match, game_number=1, team1_score=11, team2_score=5)
+        GameFactory(match=match, game_number=2, team1_score=11, team2_score=7)
+        GameFactory(match=match, game_number=3, team1_score=11, team2_score=9)
         match.refresh_from_db()
-        match.player1_confirmed = True
-        match.player2_confirmed = True
-        match.save()
+        confirm_match(match)
 
         out = StringIO()
         call_command('recalculate_elo', stdout=out)
@@ -174,19 +169,17 @@ class TestRecalculateElo:
 
         # Confirmed match
         match1 = MatchFactory(player1=p1, player2=p2)
-        GameFactory(match=match1, game_number=1, player1_score=11, player2_score=5)
-        GameFactory(match=match1, game_number=2, player1_score=11, player2_score=7)
-        GameFactory(match=match1, game_number=3, player1_score=11, player2_score=9)
+        GameFactory(match=match1, game_number=1, team1_score=11, team2_score=5)
+        GameFactory(match=match1, game_number=2, team1_score=11, team2_score=7)
+        GameFactory(match=match1, game_number=3, team1_score=11, team2_score=9)
         match1.refresh_from_db()
-        match1.player1_confirmed = True
-        match1.player2_confirmed = True
-        match1.save()
+        confirm_match(match1)
 
         # Unconfirmed match (will NOT auto-confirm because players are verified)
         match2 = MatchFactory(player1=p1, player2=p2)
-        GameFactory(match=match2, game_number=1, player1_score=11, player2_score=5)
-        GameFactory(match=match2, game_number=2, player1_score=11, player2_score=7)
-        GameFactory(match=match2, game_number=3, player1_score=11, player2_score=9)
+        GameFactory(match=match2, game_number=1, team1_score=11, team2_score=5)
+        GameFactory(match=match2, game_number=2, team1_score=11, team2_score=7)
+        GameFactory(match=match2, game_number=3, team1_score=11, team2_score=9)
         match2.refresh_from_db()
         # No confirmations
 

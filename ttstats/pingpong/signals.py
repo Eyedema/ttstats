@@ -1,10 +1,12 @@
 from django.contrib.auth.models import User
+from django.db.models import Count
+
 from django.db.models.signals import post_save, pre_save
 from django.dispatch import receiver
 from django_otp_webauthn.models import WebAuthnCredential
 
 from .emails import send_match_confirmation_email, send_passkey_registered_email
-from .models import Match, UserProfile
+from .models import Match, MatchConfirmation, UserProfile
 from .elo import update_player_elo
 
 
@@ -14,17 +16,26 @@ def create_user_profile(sender, instance, created, **kwargs):
         userprofile = UserProfile.objects.create(user=instance)
         userprofile.create_verification_token()
         userprofile.save()
+    else:
+        # Ensure profile exists even for existing users
+        # (in case they were created before signal was added)
+        if not hasattr(instance, 'profile'):
+            userprofile = UserProfile.objects.create(user=instance)
+            userprofile.create_verification_token()
+            userprofile.save()
 
 
 @receiver(pre_save, sender=Match)
 def track_match_winner_change(sender, instance, **kwargs):
     """Remember if winner is being set for the first time"""
-    if instance.pk:  # Match already exists in DB
-        old_match = Match.objects.get(pk=instance.pk)
-        instance._winner_just_set = (
-            old_match.winner is None and instance.winner is not None
-        )
-    else:  # New match
+    if not instance.pk:
+        instance._winner_just_set = False
+        return
+
+    try:
+        old_match = sender.objects.get(pk=instance.pk)
+        instance._winner_just_set = (old_match.winner_id is None)
+    except sender.DoesNotExist:
         instance._winner_just_set = False
 
 
@@ -32,32 +43,30 @@ def track_match_winner_change(sender, instance, **kwargs):
 def handle_match_completion(sender, instance, created, **kwargs):
     """Handle match completion tasks"""
     # Only process if winner was just set
-    if not getattr(instance, "_winner_just_set", False):
+    if not getattr(instance, "_winner_just_set", False) or not instance.winner:
         return
 
     # 1. Auto-confirm if needed
     if instance.should_auto_confirm():
-        Match.objects.filter(pk=instance.pk).update(
-            player1_confirmed=True, player2_confirmed=True
+        all_players = (instance.team1.players.all() | instance.team2.players.all())
+        MatchConfirmation.objects.bulk_create(
+            [MatchConfirmation(match=instance, player=player) for player in all_players],
+            ignore_conflicts=True
         )
         # Reload instance to get updated confirmation fields
         instance.refresh_from_db()
+        return
 
     # 2. Send confirmation emails (only to verified users who need to confirm)
-    else:
+    for player in (instance.team1.players.all() | instance.team2.players.all()):
         if (
-            instance.player1.user
-            and instance.player1.user.email
-            and not instance.player1_confirmed
+                player.user
+                and player.user.email
+                and hasattr(player.user, 'profile')
+                and player.user.profile.email_verified
+                and player.id not in [c.player_id for c in instance.confirmations.all()]
         ):
-            send_match_confirmation_email(instance, instance.player1, instance.player2)
-
-        if (
-            instance.player2.user
-            and instance.player2.user.email
-            and not instance.player2_confirmed
-        ):
-            send_match_confirmation_email(instance, instance.player2, instance.player1)
+            send_match_confirmation_email(instance, player)
 
     # 3. Update Elo ratings (only runs if confirmed)
     update_player_elo(instance)
@@ -78,6 +87,14 @@ def update_elo_on_confirmation(sender, instance, created, **kwargs):
 
     # Try to update Elo (has guards inside, safe to call anytime)
     update_player_elo(instance)
+
+
+@receiver(post_save, sender=MatchConfirmation)
+def update_elo_on_match_confirmation(sender, instance, created, **kwargs):
+    """Update Elo ratings when a player confirms a match"""
+    if created:
+        # Try to update Elo for the match (has guards inside, safe to call anytime)
+        update_player_elo(instance.match)
 
 
 @receiver(post_save, sender=WebAuthnCredential)

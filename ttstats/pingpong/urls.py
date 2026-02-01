@@ -1,4 +1,4 @@
-from django.urls import path, include
+from django.urls import path
 from . import views
 
 app_name = "pingpong"
@@ -27,10 +27,17 @@ urlpatterns = [
     path("matches/add/", views.MatchCreateView.as_view(), name="match_add"),
     path("matches/<int:pk>/", views.MatchDetailView.as_view(), name="match_detail"),
     path("matches/<int:pk>/edit/", views.MatchUpdateView.as_view(), name="match_edit"),
-    path("matches/<int:match_pk>/add-game/", views.GameCreateView.as_view(), name="game_add"),
-    path("match/<int:pk>/confirm/", views.match_confirm, name='match_confirm'),
+    path(
+        "matches/<int:match_pk>/add-game/",
+        views.GameCreateView.as_view(),
+        name="game_add",
+    ),
+    path("head-to-head/", views.HeadToHeadStatsView.as_view(), name="head_to_head"),
+    path("signup/", views.PlayerRegistrationView.as_view(), name="signup"),
+    path('match/<int:pk>/confirm/', views.match_confirm, name='match_confirm'),
+    path("calendar/", views.CalendarView.as_view(), name="calendar"),
     path("matches/schedule/", views.ScheduledMatchCreateView.as_view(), name="match_schedule"),
 
-    # Passkey management
+# Passkey management
     path("passkeys/", views.PasskeyManagementView.as_view(), name="passkey_management"),
 ]

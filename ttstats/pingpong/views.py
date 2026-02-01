@@ -8,7 +8,7 @@ from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.auth.views import LoginView
 from django.core.mail import send_mail
 from django.core.serializers.json import DjangoJSONEncoder
-from django.db.models import Count, F, Q
+from django.db.models import Count, F, Q, Sum
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse_lazy
 from django.views import View
@@ -21,7 +21,7 @@ from django.views.generic import (
 )
 
 from .forms import GameForm, MatchEditForm, MatchForm, PlayerRegistrationForm, ScheduledMatchForm
-from .models import Game, Location, Match, Player, ScheduledMatch, UserProfile
+from .models import Game, Location, Match, Player, UserProfile, MatchConfirmation, ScheduledMatch
 from .emails import send_scheduled_match_email, send_passkey_deleted_email
 
 try:
@@ -68,9 +68,9 @@ class MatchDetailView(LoginRequiredMixin, DetailView):
 
         # Pass separate elo changes for easier template access
         for change in elo_changes:
-            if change.player == match.player1:
+            if change.player in match.team1.players.all():
                 context['player1_elo_change'] = change
-            elif change.player == match.player2:
+            elif change.player in match.team2.players.all():
                 context['player2_elo_change'] = change
 
         return context
@@ -87,86 +87,89 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
         context = super().get_context_data(**kwargs)
 
         player = self.get_object()
-        matches = (
-            Match.objects.filter(
-                (Q(player1=player) | Q(player2=player))
-                & (Q(player1_confirmed=True) & Q(player2_confirmed=True))
-            )
-            .order_by("-date_played")
-            .prefetch_related("games")
-        )
 
-        # Annotate matches with game counts for efficiency
-        matches_with_scores = matches.annotate(
-            p1_score=Count("games", filter=Q(games__winner=F("player1"))),
-            p2_score=Count("games", filter=Q(games__winner=F("player2"))),
-        )
+        # Fetch all matches for player with comprehensive prefetching
+        all_matches = Match.objects.filter(
+            Q(team1__players=player) | Q(team2__players=player)
+        ).select_related('team1', 'team2', 'winner').prefetch_related(
+            'team1__players',
+            'team2__players',
+            'team1__players__user__profile',
+            'team2__players__user__profile',
+            'confirmations'
+        ).order_by('-date_played').distinct()
 
-        if matches_with_scores.exists():
-            first_match = matches_with_scores.first()
-            print(f"DEBUG: Match {first_match.pk}")
-            print(f"  p1_score: {first_match.p1_score}")
-            print(f"  p2_score: {first_match.p2_score}")
-            print(f"  player1_score property: {first_match.player1_score}")
-            print(f"  player2_score property: {first_match.player2_score}")
+        # Filter to confirmed matches only (using Python property)
+        confirmed_matches = [m for m in all_matches if m.match_confirmed]
 
-        total_matches = matches.count()
-        wins = matches.filter(winner=player).count()
+        # Add p1_score, p2_score, and player_won to each match from player's perspective
+        for match in confirmed_matches:
+            if player in match.team1.players.all():
+                match.p1_score = match.team1_score
+                match.p2_score = match.team2_score
+            else:
+                match.p1_score = match.team2_score
+                match.p2_score = match.team1_score
+
+            # Check if player won (works for both 1v1 and 2v2)
+            match.player_won = match.winner and player in match.winner.players.all()
+
+        total_matches = len(confirmed_matches)
+
+        # Won matches
+        wins = len([m for m in confirmed_matches if m.winner and player in m.winner.players.all()])
         losses = total_matches - wins
 
         # Calculate current streak
-        current_streak = 0
-        streak_type = None
-        longest_win_streak = 0
-        longest_loss_streak = 0
-        temp_win_streak = 0
-        temp_loss_streak = 0
+        stats = self._calculate_streaks(confirmed_matches)
 
-        for match in matches:
-            if match.winner == player:
-                if streak_type == "loss" or streak_type is None:
-                    if streak_type == "loss":
-                        longest_loss_streak = max(longest_loss_streak, temp_loss_streak)
-                        temp_loss_streak = 0
-                    current_streak = 1
-                    streak_type = "win"
-                    temp_win_streak = 1
-                else:
-                    current_streak += 1
-                    temp_win_streak += 1
-            elif match.winner:  # It's a loss (winner exists but isn't this player)
-                if streak_type == "win" or streak_type is None:
-                    if streak_type == "win":
-                        longest_win_streak = max(longest_win_streak, temp_win_streak)
-                        temp_win_streak = 0
-                    current_streak = 1
-                    streak_type = "loss"
-                    temp_loss_streak = 1
-                else:
-                    current_streak += 1
-                    temp_loss_streak += 1
-
-        # Don't forget the final streak
-        if streak_type == "win":
-            longest_win_streak = max(longest_win_streak, temp_win_streak)
-        elif streak_type == "loss":
-            longest_loss_streak = max(longest_loss_streak, temp_loss_streak)
-
-        context.update(
-            {
-                "matches": matches_with_scores,  # Use annotated matches
-                "total_matches": total_matches,
-                "wins": wins,
-                "losses": losses,
-                "win_rate": (wins / total_matches * 100) if total_matches > 0 else 0,
-                "current_streak": current_streak,
-                "streak_type": streak_type,
-                "longest_win_streak": longest_win_streak,
-                "longest_loss_streak": longest_loss_streak,
-            }
-        )
+        context.update({
+            'matches': confirmed_matches,  # List of confirmed matches
+            'total_matches': total_matches,
+            'wins': wins,
+            'losses': losses,
+            'win_rate': (wins / total_matches * 100) if total_matches > 0 else 0,
+            'current_streak': stats['current_streak'],
+            'streak_type': stats['streak_type'],
+            'longest_win_streak': stats['longest_win_streak'],
+            'longest_loss_streak': stats['longest_loss_streak'],
+        })
 
         return context
+
+    def _calculate_streaks(self, matches):
+        current_streak = streak_type = 0
+        longest_win = longest_loss = win_streak = loss_streak = 0
+
+        for match in matches:
+            player_won = self.object in match.winner.players.all()
+
+            if player_won:
+                if streak_type != 'win':
+                    longest_loss = max(longest_loss, loss_streak)
+                    loss_streak = win_streak = 0
+                    streak_type = 'win'
+                win_streak += 1
+                current_streak = win_streak
+            elif match.winner:  # Loss
+                if streak_type != 'loss':
+                    longest_win = max(longest_win, win_streak)
+                    win_streak = loss_streak = 0
+                    streak_type = 'loss'
+                loss_streak += 1
+                current_streak = loss_streak
+
+        if streak_type == 'win':
+            longest_win = max(longest_win, win_streak)
+        elif streak_type == 'loss':
+            longest_loss = max(longest_loss, loss_streak)
+
+        return {
+            'current_streak': current_streak,
+            'streak_type': streak_type,
+            'longest_win_streak': longest_win,
+            'longest_loss_streak': longest_loss,
+        }
 
 
 class DashboardView(LoginRequiredMixin, TemplateView):
@@ -179,7 +182,12 @@ class DashboardView(LoginRequiredMixin, TemplateView):
 
         # Get statistics
         total_players = Player.objects.count()
-        total_matches = Match.objects.count()
+        matches = Match.objects.prefetch_related(
+            "team1__players__user__profile",
+            "team2__players__user__profile",
+            "confirmations",
+        ).all()
+        total_matches = len([m for m in matches if m.match_confirmed])
         recent_matches = Match.objects.all().order_by("-date_played")[:5]
 
         context.update(
@@ -281,7 +289,7 @@ class GameCreateView(LoginRequiredMixin, CreateView):
                     )
             messages.success(
                 self.request,
-                f"🎉 Match Complete! {self.match.winner} wins {self.match.player1_score}-{self.match.player2_score}!",
+                f"🎉 Match Complete! {self.match.winner} wins {self.match.team1_score}-{self.match.team2_score}!", #TODO: "wins", but what if it is a team with 2 names?
             )
             # Always go to match detail if match is complete, regardless of button pressed
             return redirect("pingpong:match_detail", pk=self.match.pk)
@@ -348,6 +356,16 @@ class MatchCreateView(LoginRequiredMixin, CreateView):
                     pk=user_player.pk
                 )
 
+                # Limit player3 choices to exclude the user
+                form.fields["player3"].queryset = Player.objects.exclude(
+                    pk=user_player.pk
+                )
+
+                # Limit player4 choices to exclude the user
+                form.fields["player4"].queryset = Player.objects.exclude(
+                    pk=user_player.pk
+                )
+
             except Player.DoesNotExist:
                 # User has no player profile - show error message
                 messages.error(
@@ -356,20 +374,41 @@ class MatchCreateView(LoginRequiredMixin, CreateView):
                 )
                 form.fields["player1"].disabled = True
                 form.fields["player2"].disabled = True
+                form.fields["player3"].disabled = True
+                form.fields["player4"].disabled = True
 
         return form
 
     def form_valid(self, form):
         """Validate that non-staff users are participants"""
         user = self.request.user
+        is_double = (form.cleaned_data.get('is_double'))
         player1 = form.cleaned_data["player1"]
         player2 = form.cleaned_data["player2"]
+        player3 = form.cleaned_data["player3"]  # Optional
+        player4 = form.cleaned_data["player4"]  # Optional
 
-        # Prevent creating matches between same player
+        # Validation for singles matches
+        if not is_double:
+            if player3 or player4:
+                messages.error(self.request, "Singles matches cannot have Player 3 or Player 4!")
+                return self.form_invalid(form)
+
+        # Validation for doubles matches
+        if is_double:
+            if not player3 or not player4:
+                messages.error(self.request, "Doubles matches require all 4 players!")
+                return self.form_invalid(form)
+
+            # Ensure all 4 players are unique
+            players = [player1, player2, player3, player4]
+            if len(set(players)) != 4:
+                messages.error(self.request, "All players must be different!")
+                return self.form_invalid(form)
+
+        # Ensure player1 != player2
         if player1 == player2:
-            messages.error(
-                self.request, "You cannot create a match between the same player!"
-            )
+            messages.error(self.request, "Player 1 and Player 2 must be different!")
             return self.form_invalid(form)
 
         # Non-staff users must be participants
@@ -378,7 +417,7 @@ class MatchCreateView(LoginRequiredMixin, CreateView):
                 user_player = user.player
 
                 # Ensure user is one of the players
-                if player1 != user_player and player2 != user_player:
+                if user_player not in [player1, player2, player3, player4]:
                     messages.error(
                         self.request, "You can only create matches you participate in!"
                     )
@@ -396,6 +435,63 @@ class MatchCreateView(LoginRequiredMixin, CreateView):
                     self.request, "You must have a player profile to create matches."
                 )
                 return self.form_invalid(form)
+
+        # Create Team objects
+        from .models import Team
+
+        if is_double:
+            # Create 2-player teams (or reuse existing)
+            team1 = (Team.objects
+                     .filter(players=player1)
+                     .filter(players=player3)
+                     .annotate(num_players=Count('players'))
+                     .filter(num_players=2)
+                     .first()
+                     )
+            if not team1:
+                team1 = Team.objects.create()
+                team1.players.set([player1, player3])
+                team1.save()
+
+            team2 = (Team.objects
+                     .filter(players=player2)
+                     .filter(players=player4)
+                     .annotate(num_players=Count('players'))
+                     .filter(num_players=2)
+                     .first()
+                     )
+            if not team2:
+                team2 = Team.objects.create()
+                team2.players.set([player2, player4])
+                team2.save()
+        else:
+            # Create 1-player teams (or reuse existing)
+            team1 = (Team.objects
+                     .filter(players=player1)
+                     .annotate(num_players=Count('players'))
+                     .filter(num_players=1)
+                     .first()
+                     )
+            if not team1:
+                team1 = Team.objects.create()
+                team1.players.set([player1])
+                team1.save()
+
+            team2 = (Team.objects
+                     .filter(players=player2)
+                     .annotate(num_players=Count('players'))
+                     .filter(num_players=1)
+                     .first()
+                     )
+            if not team2:
+                team2 = Team.objects.create()
+                team2.players.set([player2])
+                team2.save()
+
+        # Assign teams to match instance (don't save yet)
+        form.instance.team1 = team1
+        form.instance.team2 = team2
+        form.instance.is_double = is_double
 
         messages.success(self.request, "Match created successfully!")
         return super().form_valid(form)
@@ -438,36 +534,51 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
 
-        players = Player.objects.all()
-        player_stats = []
+        # Fetch all players with comprehensive prefetching
+        player_stats_qs = Player.objects.select_related('user').prefetch_related(
+            'teams',
+            'teams__matches_as_team1',
+            'teams__matches_as_team2',
+            'teams__matches_as_team1__team1__players__user__profile',
+            'teams__matches_as_team1__team2__players__user__profile',
+            'teams__matches_as_team1__confirmations',
+            'teams__matches_as_team2__team1__players__user__profile',
+            'teams__matches_as_team2__team2__players__user__profile',
+            'teams__matches_as_team2__confirmations',
+            'teams__matches_as_team1__games',
+            'teams__matches_as_team2__games',
+            'teams__matches_as_team1__winner__players',
+            'teams__matches_as_team2__winner__players'
+        )
 
-        for player in players:
-            matches = Match.objects.filter(
-                (Q(player1=player) | Q(player2=player))
-                & (Q(player1_confirmed=True) & Q(player2_confirmed=True))
-            )
-            total_matches = matches.count()
-            wins = matches.filter(winner=player).count()
+        # Calculate stats in Python
+        player_stats = []
+        for player in player_stats_qs:
+            # Get all matches (both teams)
+            all_matches = set()
+            for team in player.teams.all():
+                all_matches.update(team.matches_as_team1.all())
+                all_matches.update(team.matches_as_team2.all())
+
+            # Filter to confirmed only (using Python property)
+            confirmed_matches = [m for m in all_matches if m.match_confirmed]
+
+            total_matches = len(confirmed_matches)
+            wins = len([m for m in confirmed_matches if m.winner and player in m.winner.players.all()])
             losses = total_matches - wins
             win_rate = (wins / total_matches * 100) if total_matches > 0 else 0
+            total_games = sum(m.games.count() for m in confirmed_matches)
 
-            # Calculate total games played
-            total_games = 0
-            for match in matches:
-                total_games += match.games.count()
-
-            player_stats.append(
-                {
-                    "player": player,
-                    "total_matches": total_matches,
-                    "total_games": total_games,
-                    "wins": wins,
-                    "losses": losses,
-                    "win_rate": win_rate,
-                    "elo_rating": player.elo_rating,
-                    "elo_peak": player.elo_peak,
-                }
-            )
+            player_stats.append({
+                "player": player,
+                "total_matches": total_matches,
+                "total_games": total_games,
+                "wins": wins,
+                "losses": losses,
+                "win_rate": win_rate,
+                "elo_rating": player.elo_rating,
+                "elo_peak": player.elo_peak,
+            })
 
         # Sort by Elo rating (desc), then by total wins (desc), then by win rate (desc)
         player_stats.sort(
@@ -494,24 +605,57 @@ class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
             player1 = get_object_or_404(Player, pk=player1_id)
             player2 = get_object_or_404(Player, pk=player2_id)
 
+            # Check if any 2v2 matches exist between these players
+            has_2v2_matches = Match.objects.filter(
+                Q(team1__players=player1) | Q(team2__players=player1)
+            ).filter(
+                Q(team1__players=player2) | Q(team2__players=player2)
+            ).filter(
+                is_double=True
+            ).exists()
+            context['has_2v2_matches'] = has_2v2_matches
+
             # Get all matches between these players
-            matches = (
-                Match.objects.filter(
-                    (
-                        Q(player1=player1, player2=player2)
-                        | Q(player1=player2, player2=player1)
-                    )
-                    & (Q(player1_confirmed=True) & Q(player2_confirmed=True))
+            all_matches = (
+                Match.objects.annotate(
+                    team1_player_count=Count('team1__players', distinct=True),
+                    team2_player_count=Count('team2__players', distinct=True)
                 )
-                .prefetch_related("games")
+                .filter(
+                    # Only matches between these two exact players
+                    team1_player_count=1,
+                    team2_player_count=1
+                )
+                .filter(
+                    # Check if there are only the two selected players in the match, no one else
+                    Q(team1__players=player1, team2__players=player2) |
+                    Q(team1__players=player2, team2__players=player1)
+                )
+                .select_related("team1", "team2", "winner")
+                .prefetch_related(
+                    "games",
+                    "team1__players__user__profile",
+                    "team2__players__user__profile",
+                    "confirmations"
+                )
+                .distinct()
                 .order_by("date_played")
             )
 
-            if matches.exists():
-                # Basic stats
-                total_matches = matches.count()
-                player1_match_wins = matches.filter(winner=player1).count()
-                player2_match_wins = matches.filter(winner=player2).count()
+            # Filter to confirmed matches only (using Python property)
+            matches = [m for m in all_matches if m.match_confirmed]
+
+            if matches:
+                # Basic stats (matches is now a list, not QuerySet)
+                total_matches = len(matches)
+                player1_match_wins = len([
+                    m for m in matches
+                    if m.winner and player1 in m.winner.players.all()
+                ])
+                player2_match_wins = len([
+                    m for m in matches
+                    if m.winner and player2 in m.winner.players.all()
+                ])
 
                 # Game-level analysis
                 all_games = []
@@ -526,12 +670,12 @@ class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
                     games = match.games.all()
                     for game in games:
                         # Determine scores based on who was player1 in the match
-                        if match.player1 == player1:
-                            p1_score = game.player1_score
-                            p2_score = game.player2_score
+                        if match.team1.players.first() == player1:
+                            p1_score = game.team1_score
+                            p2_score = game.team2_score
                         else:
-                            p1_score = game.player2_score
-                            p2_score = game.player1_score
+                            p1_score = game.team2_score
+                            p2_score = game.team1_score
 
                         diff = p1_score - p2_score
                         point_differences.append(
@@ -600,29 +744,31 @@ class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
                     else 0
                 )
 
-                # Recent form (last 5 matches)
-                recent_matches = list(matches.order_by("-date_played")[:5])
+                # Recent form (last 5 matches) - matches is already ordered by date_played
+                recent_matches = list(reversed(matches[-5:]))  # Get last 5 and reverse for desc order
                 player1_recent_wins = sum(
-                    1 for m in recent_matches if m.winner == player1
+                    1 for m in recent_matches
+                    if m.winner and player1 in m.winner.players.all()
                 )
                 player2_recent_wins = sum(
-                    1 for m in recent_matches if m.winner == player2
+                    1 for m in recent_matches
+                    if m.winner and player2 in m.winner.players.all()
                 )
 
                 # Match margins (for average margin per match chart)
                 match_margins = []
                 for match in matches:
-                    if match.winner == player1:
+                    if match.winner.players.first() == player1:
                         margin = (
-                            match.player1_score - match.player2_score
-                            if match.player1 == player1
-                            else match.player2_score - match.player1_score
+                            match.team1_score - match.team2_score
+                            if match.team1.players.first() == player1
+                            else match.team2_score - match.team1_score
                         )
-                    elif match.winner == player2:
+                    elif match.winner.players.first() == player2:
                         margin = -(
-                            match.player1_score - match.player2_score
-                            if match.player1 == player1
-                            else match.player2_score - match.player1_score
+                            match.team1_score - match.team2_score
+                            if match.team1.players.first() == player1
+                            else match.team2_score - match.team1_score
                         )
                     else:
                         margin = 0
@@ -687,7 +833,7 @@ class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
                             match_margins, cls=DjangoJSONEncoder
                         ),
                         "cumulative_avg_json": json.dumps(cumulative_avg),
-                        "matches": matches.order_by("-date_played"),
+                        "matches": list(reversed(matches)),  # Reverse for descending order
                     }
                 )
             else:
@@ -753,25 +899,22 @@ def match_confirm(request, pk):
     """Allow a player to confirm a match"""
     match = get_object_or_404(Match, pk=pk)
 
-    # Determine which player is confirming
-    user = request.user
-
     try:
-        user_player = user.player
+        user_player = Player.objects.get(user=request.user)
 
-        if match.player1 == user_player and not match.player1_confirmed:
-            match.player1_confirmed = True
-            match.save()
-            messages.success(request, "You have confirmed this match!")
-        elif match.player2 == user_player and not match.player2_confirmed:
-            match.player2_confirmed = True
-            match.save()
-            messages.success(request, "You have confirmed this match!")
-        elif match.player1 == user_player or match.player2 == user_player:
-            messages.info(request, "You have already confirmed this match.")
-        else:
+        # Verify the player belongs to one of the two teams
+        if (user_player not in match.team1.players.all() and
+                user_player not in match.team2.players.all()):
             messages.error(request, "You are not a player in this match.")
+            return redirect("pingpong:match_detail", pk=pk)
 
+        # Create confirmations (does not duplicate existing ones)
+        MatchConfirmation.objects.get_or_create(
+            match=match,
+            player=user_player
+        )
+
+        messages.success(request, "You have confirmed this match!")
     except Player.DoesNotExist:
         messages.error(request, "You must have a player profile to confirm matches.")
 
@@ -889,7 +1032,9 @@ class ScheduledMatchCreateView(LoginRequiredMixin, CreateView):
                 form.fields["player1"].help_text = "You are automatically set as Player 1"
 
                 # Limit player2 choices to exclude the user
-                form.fields["player2"].queryset = Player.objects.exclude(pk=user_player.pk)
+                form.fields["player2"].queryset = Player.objects.exclude(
+                    pk=user_player.pk
+                )
 
             except Player.DoesNotExist:
                 messages.error(
@@ -907,19 +1052,27 @@ class ScheduledMatchCreateView(LoginRequiredMixin, CreateView):
         player1 = form.cleaned_data["player1"]
         player2 = form.cleaned_data["player2"]
 
+        # Ensure player1 != player2
+        if player1 == player2:
+            messages.error(self.request, "Player 1 and Player 2 must be different!")
+            return self.form_invalid(form)
+
         # Non-staff users must be participants
         if not user.is_staff:
             try:
                 user_player = user.player
-                if player1 != user_player and player2 != user_player:
+
+                # Ensure user is one of the players
+                if user_player not in [player1, player2]:
                     messages.error(
-                        self.request, "You can only schedule matches you participate in!"
+                        self.request, "You can only create matches you participate in!"
                     )
                     return self.form_invalid(form)
 
+                # Force user to be player1 (prevent tampering)
                 if player1 != user_player:
                     messages.error(
-                        self.request, "You must be Player 1 in matches you schedule!"
+                        self.request, "You must be Player 1 in matches you create!"
                     )
                     return self.form_invalid(form)
 
@@ -931,13 +1084,44 @@ class ScheduledMatchCreateView(LoginRequiredMixin, CreateView):
                 )
                 return self.form_invalid(form)
 
+        # Create 1-player teams (scheduled matches are singles only for now)
+        from .models import Team
+
+        if True:  # Scheduled matches are singles-only
+            # Create 1-player teams (or reuse existing)
+            team1 = (Team.objects
+                     .filter(players=player1)
+                     .annotate(num_players=Count('players'))
+                     .filter(num_players=1)
+                     .first()
+                     )
+            if not team1:
+                team1 = Team.objects.create()
+                team1.players.set([player1])
+                team1.save()
+
+            team2 = (Team.objects
+                     .filter(players=player2)
+                     .annotate(num_players=Count('players'))
+                     .filter(num_players=1)
+                     .first()
+                     )
+            if not team2:
+                team2 = Team.objects.create()
+                team2.players.set([player2])
+                team2.save()
+
+        # Assign teams to scheduled match
+        form.instance.team1 = team1
+        form.instance.team2 = team2
+
         # Save the scheduled match
         self.object = form.save()
         scheduled_match = self.object
 
         # Send notification emails to both players
-        send_scheduled_match_email(scheduled_match, player1, player2)
-        send_scheduled_match_email(scheduled_match, player2, player1)
+        send_scheduled_match_email(scheduled_match, player1)
+        send_scheduled_match_email(scheduled_match, player2)
 
         # Mark notification as sent
         scheduled_match.notification_sent = True
