@@ -7,7 +7,7 @@ from django.contrib.auth.models import User
 
 from ..elo import calculate_k_factor, calculate_expected_score, update_player_elo
 from ..models import Player, Match, Game, EloHistory
-from .conftest import PlayerFactory, MatchFactory, GameFactory, UserFactory
+from .conftest import PlayerFactory, MatchFactory, GameFactory, UserFactory, confirm_match
 
 
 @pytest.mark.django_db
@@ -94,18 +94,20 @@ class TestEloUpdate:
 
     def test_no_update_without_winner(self):
         """Elo should not update if match has no winner"""
-        match = MatchFactory(winner=None, player1_confirmed=True, player2_confirmed=True)
+        match = MatchFactory(confirmed=True)
+        # No games, so no winner
 
-        old_elo_1 = match.player1.elo_rating
-        old_elo_2 = match.player2.elo_rating
+        player1, player2 = match.team1.players.first(), match.team2.players.first()
+        old_elo_1 = player1.elo_rating
+        old_elo_2 = player2.elo_rating
 
         update_player_elo(match)
 
-        match.player1.refresh_from_db()
-        match.player2.refresh_from_db()
+        player1.refresh_from_db()
+        player2.refresh_from_db()
 
-        assert match.player1.elo_rating == old_elo_1
-        assert match.player2.elo_rating == old_elo_2
+        assert player1.elo_rating == old_elo_1
+        assert player2.elo_rating == old_elo_2
         assert EloHistory.objects.count() == 0
 
     def test_no_update_without_confirmation(self):
@@ -118,10 +120,10 @@ class TestEloUpdate:
         p2.user.profile.email_verified = True
         p2.user.profile.save()
 
-        match = MatchFactory(player1=p1, player2=p2, player1_confirmed=False, player2_confirmed=False)
-        GameFactory(match=match, game_number=1, player1_score=11, player2_score=5)
-        GameFactory(match=match, game_number=2, player1_score=11, player2_score=7)
-        GameFactory(match=match, game_number=3, player1_score=11, player2_score=9)
+        match = MatchFactory(player1=p1, player2=p2)
+        GameFactory(match=match, game_number=1, team1_score=11, team2_score=5)
+        GameFactory(match=match, game_number=2, team1_score=11, team2_score=7)
+        GameFactory(match=match, game_number=3, team1_score=11, team2_score=9)
         match.refresh_from_db()  # Refresh to get auto-set winner
 
         old_elo_1 = p1.elo_rating
@@ -143,15 +145,13 @@ class TestEloUpdate:
         match = MatchFactory(player1=p1, player2=p2, match_type='casual', best_of=5)
 
         # Player1 wins 3-0
-        GameFactory(match=match, game_number=1, player1_score=11, player2_score=5)
-        GameFactory(match=match, game_number=2, player1_score=11, player2_score=7)
-        GameFactory(match=match, game_number=3, player1_score=11, player2_score=9)
+        GameFactory(match=match, game_number=1, team1_score=11, team2_score=5)
+        GameFactory(match=match, game_number=2, team1_score=11, team2_score=7)
+        GameFactory(match=match, game_number=3, team1_score=11, team2_score=9)
         match.refresh_from_db()
 
         # Confirm match
-        match.player1_confirmed = True
-        match.player2_confirmed = True
-        match.save()
+        confirm_match(match)
 
         update_player_elo(match)
 
@@ -172,15 +172,13 @@ class TestEloUpdate:
         match = MatchFactory(player1=underdog, player2=favorite, match_type='casual', best_of=5)
 
         # Underdog wins 3-1
-        GameFactory(match=match, game_number=1, player1_score=11, player2_score=5)
-        GameFactory(match=match, game_number=2, player1_score=11, player2_score=7)
-        GameFactory(match=match, game_number=3, player1_score=9, player2_score=11)
-        GameFactory(match=match, game_number=4, player1_score=11, player2_score=8)
+        GameFactory(match=match, game_number=1, team1_score=11, team2_score=5)
+        GameFactory(match=match, game_number=2, team1_score=11, team2_score=7)
+        GameFactory(match=match, game_number=3, team1_score=9, team2_score=11)
+        GameFactory(match=match, game_number=4, team1_score=11, team2_score=8)
         match.refresh_from_db()
 
-        match.player1_confirmed = True
-        match.player2_confirmed = True
-        match.save()
+        confirm_match(match)
 
         update_player_elo(match)
 
@@ -202,14 +200,12 @@ class TestEloUpdate:
         match = MatchFactory(player1=favorite, player2=underdog, match_type='casual', best_of=5)
 
         # Favorite wins 3-0
-        GameFactory(match=match, game_number=1, player1_score=11, player2_score=5)
-        GameFactory(match=match, game_number=2, player1_score=11, player2_score=7)
-        GameFactory(match=match, game_number=3, player1_score=11, player2_score=9)
+        GameFactory(match=match, game_number=1, team1_score=11, team2_score=5)
+        GameFactory(match=match, game_number=2, team1_score=11, team2_score=7)
+        GameFactory(match=match, game_number=3, team1_score=11, team2_score=9)
         match.refresh_from_db()
 
-        match.player1_confirmed = True
-        match.player2_confirmed = True
-        match.save()
+        confirm_match(match)
 
         update_player_elo(match)
 
@@ -227,14 +223,12 @@ class TestEloUpdate:
         p2 = PlayerFactory(elo_rating=1500, matches_for_elo=25)
         match = MatchFactory(player1=p1, player2=p2, match_type='casual', best_of=5)
 
-        GameFactory(match=match, game_number=1, player1_score=11, player2_score=5)
-        GameFactory(match=match, game_number=2, player1_score=11, player2_score=7)
-        GameFactory(match=match, game_number=3, player1_score=11, player2_score=9)
+        GameFactory(match=match, game_number=1, team1_score=11, team2_score=5)
+        GameFactory(match=match, game_number=2, team1_score=11, team2_score=7)
+        GameFactory(match=match, game_number=3, team1_score=11, team2_score=9)
         match.refresh_from_db()
 
-        match.player1_confirmed = True
-        match.player2_confirmed = True
-        match.save()
+        confirm_match(match)
 
         update_player_elo(match)
 
@@ -263,14 +257,12 @@ class TestEloUpdate:
         opponent = PlayerFactory(elo_rating=1500, matches_for_elo=25)
         match = MatchFactory(player1=player, player2=opponent, match_type='casual', best_of=5)
 
-        GameFactory(match=match, game_number=1, player1_score=11, player2_score=5)
-        GameFactory(match=match, game_number=2, player1_score=11, player2_score=7)
-        GameFactory(match=match, game_number=3, player1_score=11, player2_score=9)
+        GameFactory(match=match, game_number=1, team1_score=11, team2_score=5)
+        GameFactory(match=match, game_number=2, team1_score=11, team2_score=7)
+        GameFactory(match=match, game_number=3, team1_score=11, team2_score=9)
         match.refresh_from_db()
 
-        match.player1_confirmed = True
-        match.player2_confirmed = True
-        match.save()
+        confirm_match(match)
 
         update_player_elo(match)
 
@@ -285,14 +277,12 @@ class TestEloUpdate:
         p2 = PlayerFactory(elo_rating=1500, matches_for_elo=20)
         match = MatchFactory(player1=p1, player2=p2, match_type='casual', best_of=5)
 
-        GameFactory(match=match, game_number=1, player1_score=11, player2_score=5)
-        GameFactory(match=match, game_number=2, player1_score=11, player2_score=7)
-        GameFactory(match=match, game_number=3, player1_score=11, player2_score=9)
+        GameFactory(match=match, game_number=1, team1_score=11, team2_score=5)
+        GameFactory(match=match, game_number=2, team1_score=11, team2_score=7)
+        GameFactory(match=match, game_number=3, team1_score=11, team2_score=9)
         match.refresh_from_db()
 
-        match.player1_confirmed = True
-        match.player2_confirmed = True
-        match.save()
+        confirm_match(match)
 
         update_player_elo(match)
 
@@ -308,14 +298,12 @@ class TestEloUpdate:
         p2 = PlayerFactory(elo_rating=1500, matches_for_elo=25)
         match = MatchFactory(player1=p1, player2=p2, match_type='casual', best_of=5)
 
-        GameFactory(match=match, game_number=1, player1_score=11, player2_score=5)
-        GameFactory(match=match, game_number=2, player1_score=11, player2_score=7)
-        GameFactory(match=match, game_number=3, player1_score=11, player2_score=9)
+        GameFactory(match=match, game_number=1, team1_score=11, team2_score=5)
+        GameFactory(match=match, game_number=2, team1_score=11, team2_score=7)
+        GameFactory(match=match, game_number=3, team1_score=11, team2_score=9)
         match.refresh_from_db()
 
-        match.player1_confirmed = True
-        match.player2_confirmed = True
-        match.save()
+        confirm_match(match)
 
         # First update
         update_player_elo(match)

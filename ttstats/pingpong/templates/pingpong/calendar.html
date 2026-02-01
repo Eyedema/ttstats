@@ -62,13 +62,14 @@
                             </div>
                             {% for match in day.matches %}
                             {% if match.is_scheduled %}
-                            <div class="block text-xs p-1 mb-1 rounded bg-primary/10 text-primary" title="Scheduled: {{ match.player1 }} vs {{ match.player2 }}">
-                                {{ match.player1.name|slice:":10" }} vs {{ match.player2.name|slice:":10" }}
+                            <div class="block text-xs p-1 mb-1 rounded bg-primary/10 text-primary" title="Scheduled: {% if match.is_double %}{{ match.team1.name|default:'Team 1' }} vs {{ match.team2.name|default:'Team 2' }}: {% for p in match.team1.players.all %}{{ p.name }}{% if not forloop.last %}, {% endif %}{% endfor %} vs {% for p in match.team2.players.all %}{{ p.name }}{% if not forloop.last %}, {% endif %}{% endfor %}{% else %}{{ match.player1 }} vs {{ match.player2 }}{% endif %}">
+                                {% if match.is_double %}T1 vs T2{% else %}{{ match.player1.name|slice:":10" }} vs {{ match.player2.name|slice:":10" }}{% endif %}
                             </div>
                             {% else %}
                             <a href="{% url 'pingpong:match_detail' match.pk %}"
-                               class="block text-xs p-1 mb-1 rounded bg-secondary hover:bg-secondary/80 transition-colors">
-                                {{ match.player1.name|slice:":10" }} vs {{ match.player2.name|slice:":10" }}
+                               class="block text-xs p-1 mb-1 rounded bg-secondary hover:bg-secondary/80 transition-colors"
+                               title="{% if match.is_double %}{{ match.team1.name|default:'Team 1' }} vs {{ match.team2.name|default:'Team 2' }}: {% for p in match.team1.players.all %}{{ p.name }}{% if not forloop.last %}, {% endif %}{% endfor %} vs {% for p in match.team2.players.all %}{{ p.name }}{% if not forloop.last %}, {% endif %}{% endfor %}{% else %}{{ match.player1 }} vs {{ match.player2 }}{% endif %}">
+                                {% if match.is_double %}T1 vs T2{% else %}{{ match.player1.name|slice:":10" }} vs {{ match.player2.name|slice:":10" }}{% endif %}
                             </a>
                             {% endif %}
                             {% endfor %}
@@ -106,7 +107,16 @@
             <div class="block p-4 rounded-lg border bg-primary/5">
                 <div class="flex items-center justify-between">
                     <div>
+                        {% if match.is_double %}
+                        <p class="font-medium">{{ match.team1.name|default:"Team 1" }} vs {{ match.team2.name|default:"Team 2" }}</p>
+                        <p class="text-xs text-muted-foreground">
+                            {% for p in match.team1.players.all %}{{ p.name }}{% if not forloop.last %} & {% endif %}{% endfor %}
+                            vs
+                            {% for p in match.team2.players.all %}{{ p.name }}{% if not forloop.last %} & {% endif %}{% endfor %}
+                        </p>
+                        {% else %}
                         <p class="font-medium">{{ match.player1 }} vs {{ match.player2 }}</p>
+                        {% endif %}
                         <p class="text-sm text-muted-foreground">
                             {{ match.scheduled_date|date:"F d, Y" }} at {{ match.scheduled_time|time:"H:i" }}
                             {% if match.location %} - {{ match.location }}{% endif %}

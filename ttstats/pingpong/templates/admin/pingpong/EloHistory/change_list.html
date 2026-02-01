@@ -1,0 +1,14 @@
+{% extends "admin/change_list.html" %}
+
+{% block object-tools-items %}
+    {{ block.super }}
+    <li>
+        {# Using a form for POST request is safer for actions that change data #}
+        <form action="recalculate/" method="POST" style="display: inline;">
+            {% csrf_token %}
+            <button type="submit" class="button" style="background: #79aec8; cursor: pointer;">
+                Recalculate Elo
+            </button>
+        </form>
+    </li>
+{% endblock %}

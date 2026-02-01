@@ -71,16 +71,16 @@ class TestGameForm:
     def test_valid_data(self):
         form = GameForm(data={
             "game_number": 1,
-            "player1_score": 11,
-            "player2_score": 5,
+            "team1_score": 11,
+            "team2_score": 5,
         })
         assert form.is_valid(), form.errors
 
     def test_tie_score_rejected(self):
         form = GameForm(data={
             "game_number": 1,
-            "player1_score": 10,
-            "player2_score": 10,
+            "team1_score": 10,
+            "team2_score": 10,
         })
         assert not form.is_valid()
         assert "A game cannot end in a tie!" in str(form.errors)
@@ -88,8 +88,8 @@ class TestGameForm:
     def test_deuce_must_win_by_2(self):
         form = GameForm(data={
             "game_number": 1,
-            "player1_score": 11,
-            "player2_score": 10,
+            "team1_score": 11,
+            "team2_score": 10,
         })
         assert not form.is_valid()
         assert "must win by 2" in str(form.errors)
@@ -97,16 +97,16 @@ class TestGameForm:
     def test_valid_deuce_score(self):
         form = GameForm(data={
             "game_number": 1,
-            "player1_score": 12,
-            "player2_score": 10,
+            "team1_score": 12,
+            "team2_score": 10,
         })
         assert form.is_valid(), form.errors
 
     def test_edge_scores(self):
         form = GameForm(data={
             "game_number": 1,
-            "player1_score": 15,
-            "player2_score": 13,
+            "team1_score": 15,
+            "team2_score": 13,
         })
         assert form.is_valid(), form.errors
 
@@ -114,23 +114,23 @@ class TestGameForm:
         """Score below 10-10 doesn't need win-by-2."""
         form = GameForm(data={
             "game_number": 1,
-            "player1_score": 11,
-            "player2_score": 9,
+            "team1_score": 11,
+            "team2_score": 9,
         })
         assert form.is_valid(), form.errors
 
     def test_duration_minutes_optional(self):
         form = GameForm(data={
             "game_number": 1,
-            "player1_score": 11,
-            "player2_score": 5,
+            "team1_score": 11,
+            "team2_score": 5,
         })
         assert form.is_valid()
 
         form2 = GameForm(data={
             "game_number": 1,
-            "player1_score": 11,
-            "player2_score": 5,
+            "team1_score": 11,
+            "team2_score": 5,
             "duration_minutes": 10,
         })
         assert form2.is_valid()

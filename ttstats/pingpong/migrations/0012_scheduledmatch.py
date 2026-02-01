@@ -7,7 +7,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('pingpong', '0007_userprofile'),
+        ('pingpong', '0011_alter_matchconfirmation_options_and_more'),
     ]
 
     operations = [

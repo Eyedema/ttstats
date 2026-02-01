@@ -23,7 +23,7 @@
                     Scheduling match as: {{ user_player.name }}
                 </p>
                 <p class="text-xs text-muted-foreground">
-                    You are automatically set as <strong>Player 1</strong>. Select your opponent as Player 2. 
+                    You are automatically set as <strong>Player 1</strong>. Select your opponent as Player 2.
                     You cannot schedule matches for other players.
                 </p>
             </div>
@@ -100,13 +100,13 @@
                                 <option value="{{ value }}" {% if form.player1.value == value or form.player1.value|stringformat:"s" == value|stringformat:"s" %}selected{% endif %}>{{ label }}</option>
                                 {% endfor %}
                             </select>
-                            {% if form.player1.help_text %}
-                            <p class="text-xs md:text-sm text-muted-foreground">{{ form.player1.help_text }}</p>
-                            {% endif %}
-                            {% if form.player1.errors %}
-                            <p class="text-sm text-destructive">{{ form.player1.errors.0 }}</p>
-                            {% endif %}
-                        </div>
+                                {% if form.player1.help_text %}
+                                <p class="text-xs md:text-sm text-muted-foreground">{{ form.player1.help_text }}</p>
+                                {% endif %}
+                                {% if form.player1.errors %}
+                                <p class="text-sm text-destructive">{{ form.player1.errors.0 }}</p>
+                                {% endif %}
+                            </div>
 
                         <!-- Player 2 -->
                         <div class="space-y-2">
