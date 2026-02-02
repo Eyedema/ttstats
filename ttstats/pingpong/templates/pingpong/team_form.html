@@ -1,0 +1,177 @@
+{% extends "pingpong/base.html" %}
+{% load static %}
+
+{% block title %}{% if object %}Edit {{ object }}{% else %}Add New Team{% endif %} - Table Tennis Tracker{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto space-y-6">
+    <!-- Back button -->
+    <div>
+        <a href="{% url 'pingpong:team_list' %}" class="inline-flex items-center gap-2 text-sm font-medium hover:underline min-h-[44px]">
+            <img src="{% static 'pingpong/icons/arrow-left.svg' %}" class="w-4 h-4" alt="">
+            Back to Teams
+        </a>
+    </div>
+
+    <!-- Form Card -->
+    <div class="rounded-lg border bg-white">
+        <div class="p-6">
+            <!-- Header -->
+            <div class="flex items-center gap-4 mb-6 pb-6 border-b">
+                <div class="w-14 h-14 rounded-full bg-primary text-primary-foreground flex items-center justify-center">
+                    {% if object %}
+                    <img src="{% static 'pingpong/icons/pencil.svg' %}" class="w-6 h-6 invert" alt="">
+                    {% else %}
+                    <img src="{% static 'pingpong/icons/users.svg' %}" class="w-6 h-6 invert" alt="">
+                    {% endif %}
+                </div>
+                <div>
+                    <h2 class="text-2xl font-bold">
+                        {% if object %}Edit Team{% else %}Add New Team{% endif %}
+                    </h2>
+                    <p class="text-sm text-muted-foreground">
+                        {% if object %}Update {{ object }}'s information{% else %}Create a new doubles team{% endif %}
+                    </p>
+                </div>
+            </div>
+
+            <!-- Display form errors if any -->
+            {% if form.non_field_errors %}
+            <div class="rounded-lg border border-destructive bg-destructive/10 p-4 mb-6">
+                <div class="flex items-center gap-2 text-destructive">
+                    <img src="{% static 'pingpong/icons/circle-alert.svg' %}" class="w-5 h-5" alt="">
+                    <span class="font-medium">{{ form.non_field_errors }}</span>
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- Current Team Members (if editing) -->
+            {% if object %}
+            <div class="mb-6 p-4 bg-muted/50 rounded-lg border">
+                <h3 class="text-sm font-semibold mb-3 flex items-center gap-2">
+                    <img src="{% static 'pingpong/icons/users.svg' %}" class="w-4 h-4" alt="">
+                    Current Team Members
+                </h3>
+                <div class="flex flex-wrap gap-2">
+                    {% for player in object.players.all %}
+                    <div class="inline-flex items-center gap-2 rounded-md bg-white border px-3 py-2 text-sm">
+                        <div class="w-6 h-6 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-xs font-bold">
+                            {{ player.name|slice:":1"|upper }}
+                        </div>
+                        <span class="font-medium">{{ player.name }}</span>
+                    </div>
+                    {% empty %}
+                    <p class="text-sm text-muted-foreground">No players assigned yet</p>
+                    {% endfor %}
+                </div>
+                <p class="text-xs text-muted-foreground mt-3">
+                    <img src="{% static 'pingpong/icons/info.svg' %}" class="w-3 h-3 inline mr-1" alt="">
+                    Team members can only be modified through the admin panel
+                </p>
+            </div>
+            {% endif %}
+
+            <!-- Form -->
+            <form method="post" class="space-y-6">
+                {% csrf_token %}
+
+                <!-- Name Field -->
+                <div class="space-y-2">
+                    <div class="flex items-center justify-between">
+                        <label class="text-sm font-medium leading-none" for="id_name">
+                            Team Name
+                        </label>
+                        <span class="text-xs text-muted-foreground">Optional</span>
+                    </div>
+                    <input
+                        type="text"
+                        name="name"
+                        id="id_name"
+                        value="{{ form.name.value|default:'' }}"
+                        placeholder="e.g., Dream Team, Power Duo"
+                        class="flex h-10 w-full rounded-md border border-input bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.name.errors %}border-destructive{% endif %}"
+                    />
+                    {% if form.name.errors %}
+                    <p class="text-sm text-destructive">{{ form.name.errors.0 }}</p>
+                    {% else %}
+                    <p class="text-sm text-muted-foreground">
+                        Give your team a custom name. If left blank, the team will be displayed as "Player1 and Player2"
+                    </p>
+                    {% endif %}
+                </div>
+
+                <!-- Info Box -->
+                <div class="rounded-lg border border-primary/20 bg-primary/5 p-4">
+                    <div class="flex gap-3">
+                        <img src="{% static 'pingpong/icons/info.svg' %}" class="w-5 h-5 text-primary flex-shrink-0" alt="">
+                        <div class="text-sm">
+                            <p class="font-medium mb-2">About Team Names</p>
+                            <ul class="text-muted-foreground space-y-1">
+                                <li class="flex items-start gap-2">
+                                    <span class="text-primary mt-0.5">•</span>
+                                    <span>Team names are optional but help identify doubles partnerships</span>
+                                </li>
+                                <li class="flex items-start gap-2">
+                                    <span class="text-primary mt-0.5">•</span>
+                                    <span>If no name is provided, the team displays as "Player1 and Player2"</span>
+                                </li>
+                                <li class="flex items-start gap-2">
+                                    <span class="text-primary mt-0.5">•</span>
+                                    <span>You can change the team name at any time</span>
+                                </li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="border-t pt-6"></div>
+
+                <!-- Form Actions -->
+                <div class="flex gap-3 justify-end">
+                    <a href="{% if object %}{% url 'pingpong:team_detail' object.pk %}{% else %}{% url 'pingpong:team_list' %}{% endif %}"
+                       class="inline-flex items-center justify-center gap-2 rounded-md border bg-white px-4 py-2 text-sm font-medium hover:bg-secondary transition-colors min-h-[44px]">
+                        <img src="{% static 'pingpong/icons/x.svg' %}" class="w-4 h-4" alt="">
+                        Cancel
+                    </a>
+                    <button type="submit" class="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors min-h-[44px]">
+                        <img src="{% static 'pingpong/icons/check.svg' %}" class="w-4 h-4 invert" alt="">
+                        {% if object %}Update Team{% else %}Create Team{% endif %}
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Help Card -->
+    <div class="rounded-lg border border-warning/20 bg-warning/5 p-4">
+        <div class="flex gap-3">
+            <img src="{% static 'pingpong/icons/alert-triangle.svg' %}" class="w-5 h-5 text-warning flex-shrink-0" alt="">
+            <div>
+                <h3 class="font-semibold text-sm mb-1">Managing Team Members</h3>
+                <p class="text-sm text-muted-foreground">
+                    Team members (players) cannot be added or removed through this form. To manage team composition,
+                    please use the Django admin panel or contact your system administrator.
+                </p>
+            </div>
+        </div>
+    </div>
+
+    {% if not object %}
+    <!-- Additional Info for New Teams -->
+    <div class="rounded-lg border bg-white p-4">
+        <div class="flex gap-3">
+            <img src="{% static 'pingpong/icons/lightbulb.svg' %}" class="w-5 h-5 text-primary flex-shrink-0" alt="">
+            <div>
+                <h3 class="font-semibold text-sm mb-2">What happens after creation?</h3>
+                <ol class="text-sm text-muted-foreground space-y-2 list-decimal list-inside">
+                    <li>Your team will be created with an empty roster</li>
+                    <li>An administrator will need to assign players to this team</li>
+                    <li>Once players are added, the team can participate in matches</li>
+                    <li>You can come back and update the team name at any time</li>
+                </ol>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

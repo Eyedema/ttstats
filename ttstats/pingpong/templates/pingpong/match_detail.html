@@ -24,7 +24,7 @@
                     </p>
                     <h1 class="text-xl md:text-3xl font-bold mb-2">
                         {% if match.is_double %}
-                            {{ match.team1.name|default:"Team 1" }} vs {{ match.team2.name|default:"Team 2" }}
+                            {{ match.team1|default:"Team 1" }} vs {{ match.team2|default:"Team 2" }}
                         {% else %}
                             {{ match.player1 }} vs {{ match.player2 }}
                         {% endif %}

@@ -29,6 +29,9 @@ cd ttstats && python -m pytest --tb=long -x           # Stop on first failure, f
 cd ttstats && coverage run -m pytest && coverage report         # Run with coverage
 cd ttstats && coverage html                                     # Generate HTML report
 
+# Management Commands
+cd ttstats && python manage.py recalculate_elo                  # Recalculate all Elo ratings
+cd ttstats && python manage.py recalculate_elo --dry-run        # Preview Elo changes
 
 # Production
 docker compose -f compose.prod.yml up --build -d
@@ -43,16 +46,18 @@ docker compose -f compose.prod.yml up --build -d
 ├── ttstats/                          # Django project root
 │   ├── manage.py                     # Django CLI
 │   ├── pingpong/                     # Main application
-│   │   ├── models.py                 # Database models (6 models)
-│   │   ├── views.py                  # View classes (18 views, ~1060 lines)
-│   │   ├── forms.py                  # Form definitions (5 forms)
+│   │   ├── models.py                 # Database models (9 models)
+│   │   ├── views.py                  # View classes (26 views, ~1796 lines)
+│   │   ├── forms.py                  # Form definitions (7 forms)
+│   │   ├── elo.py                    # Elo rating calculation system
 │   │   ├── urls.py                   # URL routing
 │   │   ├── signals.py                # Django signals
 │   │   ├── managers.py               # Custom QuerySet managers
 │   │   ├── emails.py                 # Email utilities
 │   │   ├── admin.py                  # Django admin config
 │   │   ├── context_processors.py     # Template context
-│   │   ├── migrations/               # Database migrations (8 total)
+│   │   ├── management/commands/      # Management commands (recalculate_elo)
+│   │   ├── migrations/               # Database migrations (16 total)
 │   │   ├── templates/pingpong/       # Django templates
 │   │   ├── templates/registration/   # Auth templates
 │   │   ├── static/pingpong/icons/    # SVG icons (800+)
@@ -66,7 +71,15 @@ docker compose -f compose.prod.yml up --build -d
 │   │       ├── test_managers.py      # Custom manager tests (row-level security)
 │   │       ├── test_emails.py        # Email utility tests
 │   │       ├── test_middleware.py    # Middleware tests
-│   │       └── test_context_processors.py  # Context processor tests
+│   │       ├── test_context_processors.py  # Context processor tests
+│   │       ├── test_passkey_views.py       # Passkey view logic tests
+│   │       ├── test_passkey_integration.py # Passkey integration tests
+│   │       ├── test_passkey_emails.py      # Passkey email notification tests
+│   │       ├── test_passkey_admin.py       # Passkey admin interface tests
+│   │       ├── test_commands.py            # Management command tests
+│   │       ├── test_elo.py                 # Elo rating calculation tests
+│   │       ├── test_match_list_performance.py  # Performance optimization tests
+│   │       └── test_scheduled_match_conversion.py  # Scheduled match conversion tests
 
 │   └── ttstats/                      # Django configuration
 │       ├── settings/
@@ -97,7 +110,7 @@ docker compose -f compose.prod.yml up --build -d
 ### Stack & Configuration
 
 - **Framework:** pytest (configured in `pytest.ini` at project root)
-- **Factories:** factory-boy (`conftest.py` has `UserFactory`, `PlayerFactory`, `LocationFactory`, `MatchFactory`, `GameFactory`, `ScheduledMatchFactory`)
+- **Factories:** factory-boy (`conftest.py` has `UserFactory`, `PlayerFactory`, `LocationFactory`, `TeamFactory`, `MatchFactory`, `GameFactory`, `ScheduledMatchFactory`)
 - **Settings:** `DJANGO_SETTINGS_MODULE = ttstats.settings.dev`, `pythonpath = ttstats`
 - **NEVER** use Django's `TestCase` or `manage.py test`. Always use pytest classes and functions.
 
@@ -115,6 +128,8 @@ Each source module has a corresponding test file:
 | `emails.py` | `test_emails.py` | Email content, recipients, early returns, settings fallbacks |
 | `middleware.py` | `test_middleware.py` | Thread-local set/cleanup, exception safety |
 | `context_processors.py` | `test_context_processors.py` | Context dict values per auth state |
+| `elo.py` | `test_elo.py` | Elo calculation formulas, K-factors, doubles averaging |
+| `management/commands/` | `test_commands.py` | Management command execution, output validation |
 
 When adding new source code, **always create or update the corresponding test file**.
 
@@ -151,23 +166,31 @@ class TestSomething:
 
 ```python
 UserFactory(username="...", is_staff=True, ...)  # Creates User via create_user(), password="testpass123"
-PlayerFactory(name="...", with_user=True)         # with_user=True creates and links a User
+PlayerFactory(name="...", with_user=True)        # with_user=True creates and links a User
 LocationFactory(name="...")
-MatchFactory(player1=p1, player2=p2, best_of=5)   # Players auto-created with users by default
-GameFactory(match=m, game_number=1, player1_score=11, player2_score=5)
+TeamFactory(players=[p1])                        # Creates team with 1+ players
+MatchFactory(player1=p1, player2=p2, best_of=5)  # Backward-compatible, creates 1-player teams
+MatchFactory(team1_players=[p1,p2], team2_players=[p3,p4], is_double=True)  # Doubles match
+MatchFactory(confirmed=True)                     # Auto-confirms match after creation
+GameFactory(match=m, game_number=1, team1_score=11, team2_score=5)
 ScheduledMatchFactory(player1=p1, player2=p2, scheduled_date=date, scheduled_time=time)
 ```
 
-Key fixture: `complete_match` gives you a finished match (3-0 player1 wins, best of 5).
+Key fixtures:
+- `complete_match` - Finished singles match (3-0 player1 wins, best of 5)
+- Helper functions: `confirm_match(match)`, `confirm_match_silent(match)`, `confirm_team(team, match)`
 
 ### Known Gotchas
 
-1. **MatchManager filters by current user.** In view tests, `Match.objects.get(pk=...)` only returns matches the logged-in user can see. A regular user can't see matches they're not in — `get_object_or_404(Match, pk=pk)` returns 404, not 403.
-2. **Signals fire on User creation.** Every `UserFactory()` call creates a `UserProfile` with a verification token via signal. You don't need to create profiles manually.
-3. **Game.save() triggers Match.save().** Creating enough games automatically sets the match winner. Tests that check "no winner yet" must not create too many games.
-4. **Manager tests need thread-local manipulation.** Import `_thread_locals` from `ttstats.middleware` and set/clear `_thread_locals.user` directly. Use an `autouse` fixture to clean up.
-5. **base.html requires user.player.pk.** Any view test where the user has no Player profile will crash during template rendering with `NoReverseMatch`. Always create a player for the test user.
-6. **Email backend in tests.** Dev settings use `console.EmailBackend`. pytest-django's `mailoutbox` fixture or `django.core.mail.outbox` works for asserting sent emails.
+1. **Team-based architecture.** Matches now use Team model (not direct player references). Singles = 1-player teams, doubles = 2-player teams. Use `player1`/`player2` kwargs in MatchFactory for backward compatibility, or `team1_players`/`team2_players` for explicit control.
+2. **MatchManager filters by current user.** In view tests, `Match.objects.get(pk=...)` only returns matches the logged-in user can see. A regular user can't see matches they're not in — `get_object_or_404(Match, pk=pk)` returns 404, not 403.
+3. **Signals fire on User creation.** Every `UserFactory()` call creates a `UserProfile` with a verification token via signal. You don't need to create profiles manually.
+4. **Game.save() triggers Match.save().** Creating enough games automatically sets the match winner. Tests that check "no winner yet" must not create too many games.
+5. **Match confirmations use junction table.** Singles require 2 confirmations (both players), doubles require 4 (all players). Use `confirm=True` in MatchFactory or `confirm_match()` helper.
+6. **Elo updates on confirmation.** Elo ratings only change when match is fully confirmed. Use `confirm_match()` or `confirm_match_silent()` in tests to trigger Elo calculation.
+7. **Manager tests need thread-local manipulation.** Import `_thread_locals` from `ttstats.middleware` and set/clear `_thread_locals.user` directly. Use an `autouse` fixture to clean up.
+8. **base.html requires user.player.pk.** Any view test where the user has no Player profile will crash during template rendering with `NoReverseMatch`. Always create a player for the test user.
+9. **Email backend in tests.** Dev settings use `console.EmailBackend`. pytest-django's `mailoutbox` fixture or `django.core.mail.outbox` works for asserting sent emails.
 
 ### TDD Workflow for New Features
 
@@ -199,13 +222,16 @@ Beyond unit tests, maintain integration tests that exercise complete user flows 
 1. **Registration -> Verification -> Login flow:**
    POST signup -> GET verify-email with token -> POST login -> assert dashboard loads with correct user context.
 
-2. **Match lifecycle:**
-   POST create match -> POST add game 1 -> POST add game 2 -> POST add game 3 (triggers winner) -> assert match complete, winner set, confirmation emails sent -> POST confirm as player1 -> POST confirm as player2 -> assert match_confirmed is True -> GET leaderboard -> assert stats reflect the match.
+2. **Match lifecycle (singles with Elo):**
+   POST create match -> POST add game 1 -> POST add game 2 -> POST add game 3 (triggers winner) -> assert match complete, winner set, confirmation emails sent -> POST confirm as player1 -> POST confirm as player2 -> assert match_confirmed is True -> assert Elo ratings updated -> GET leaderboard -> assert stats reflect the match.
 
-3. **Scheduled match flow:**
-   POST schedule match -> assert emails sent -> GET calendar with correct month -> assert match appears on correct day.
+3. **Doubles match lifecycle:**
+   POST create match (is_double=True, 4 players) -> POST add games -> assert winner set -> POST confirm as all 4 players -> assert match fully confirmed -> assert Elo updated for all 4 players.
 
-4. **Head-to-head with data:**
+4. **Scheduled match conversion flow:**
+   POST schedule match -> assert emails sent -> GET calendar -> assert match appears -> GET scheduled match detail -> POST convert to match -> POST add games -> POST confirm -> assert linked match is confirmed -> GET calendar -> assert shows as converted and confirmed.
+
+5. **Head-to-head with data:**
    Create two players, play multiple confirmed matches between them -> GET head-to-head with both player IDs -> assert all stats (game wins, margins, streaks) are calculated correctly.
 
 These integration tests simulate real user sessions. They catch regressions where individual units pass but the wiring between them breaks (wrong redirect URL, missing context variable, signal not firing in the right order, etc.).
@@ -215,59 +241,95 @@ These integration tests simulate real user sessions. They catch regressions wher
 
 ---
 
-## Database Models
+## Database Models (9 Total)
 
-### Location (`pingpong/models.py`)
+### Location
 ```python
 # Fields: name, address, notes, created_at
 # Ordering: by name
+# Purpose: Physical location where matches are played
 ```
 
-### Player (`pingpong/models.py`)
+### Player
 ```python
-# Fields: user (optional OneToOne), name, nickname, playing_style, notes, created_at
+# Fields: user (optional OneToOne), name, nickname, playing_style, notes, created_at,
+#         elo_rating, elo_peak, matches_for_elo
 # playing_style choices: normal, hard_rubber, unknown
+# Properties: win_rate
 # Methods: user_can_edit(user)
 # Manager: PlayerManager (all visible, editable_by() for filtering)
+# Purpose: Individual player profile with Elo tracking
 ```
 
-### Match (`pingpong/models.py`)
+### Team
 ```python
-# Fields: player1, player2, date_played, location, match_type, best_of, winner,
-#         player1_confirmed, player2_confirmed, notes, created_at, updated_at
+# Fields: players (ManyToMany), name
+# Methods: __str__() (auto-generates "Player1 and Player2" format)
+# save() auto-generates name from player list if blank
+# Purpose: Support singles (1 player) and doubles (2 players)
+# Note: Automatically created/reused when matches are created
+```
+
+### Match
+```python
+# Fields: is_double, team1, team2, date_played, location, match_type, best_of,
+#         winner, confirmations (ManyToMany through MatchConfirmation),
+#         notes, created_at, updated_at
 # match_type choices: casual, practice, tournament
 # best_of choices: 3, 5, 7
-# Properties: player1_score, player2_score (game win counts), match_confirmed
+# Properties: team1_score, team2_score, team1_confirmed, team2_confirmed, match_confirmed,
+#             player1, player2 (backward-compatible)
 # Methods: user_can_edit(user), user_can_view(user), should_auto_confirm(),
 #          get_unverified_players()
 # save() auto-determines winner from games when match already exists (has pk)
 # Manager: MatchManager (row-level security based on user)
+# Purpose: Completed or in-progress match (singles or doubles)
 ```
 
-### Game (`pingpong/models.py`)
+### MatchConfirmation
 ```python
-# Fields: match, game_number, player1_score, player2_score, winner, duration_minutes
+# Fields: match, player, confirmed_at
+# Constraint: unique_together (match, player)
+# Purpose: Junction table for match confirmations (supports doubles with 4 players)
+# Note: Singles require 2 confirmations, doubles require 4
+```
+
+### Game
+```python
+# Fields: match, game_number, team1_score, team2_score, winner, duration_minutes
 # Constraint: unique (match, game_number)
 # save() auto-determines winner from scores, then calls match.save() to update match winner
 # Manager: GameManager (filters by match visibility)
+# Purpose: Individual game within a match
 ```
 
-### UserProfile (`pingpong/models.py`)
+### EloHistory
+```python
+# Fields: match, player, old_rating, new_rating, rating_change, k_factor, created_at
+# Constraint: unique_together (match, player)
+# Purpose: Track Elo rating changes per match for transparency
+# Display: Shown in match detail view
+```
+
+### UserProfile
 ```python
 # Fields: user (OneToOne), email_verified, email_verification_token,
 #         email_verification_sent_at, created_at
 # Auto-created via signal when User is created (with verification token)
 # Methods: create_verification_token(), verify_email(token)
+# Purpose: Extended user profile for email verification
 ```
 
-### ScheduledMatch (`pingpong/models.py`)
+### ScheduledMatch
 ```python
-# Fields: player1, player2, scheduled_date, scheduled_time, location, notes,
-#         created_at, created_by, notification_sent
-# Property: scheduled_datetime (combines date + time)
+# Fields: team1, team2, scheduled_date, scheduled_time, location, notes,
+#         created_at, created_by, notification_sent, match (OneToOne link)
+# Properties: scheduled_datetime, player1, player2 (backward-compatible),
+#             is_converted, is_fully_confirmed
 # Methods: user_can_view(user), user_can_edit(user) (delegates to user_can_view)
 # Manager: ScheduledMatchManager (row-level security based on user)
 # Ordering: by scheduled_date, scheduled_time
+# Purpose: Future scheduled match with conversion to Match tracking
 ```
 
 ## URL Routes
@@ -285,7 +347,7 @@ These integration tests simulate real user sessions. They catch regressions wher
 | Method | URL | View | Description |
 |--------|-----|------|-------------|
 | GET | `/pingpong/` | DashboardView | Main dashboard |
-| GET | `/pingpong/leaderboard/` | LeaderboardView | Player rankings |
+| GET | `/pingpong/leaderboard/` | LeaderboardView | Player rankings (by Elo) |
 | GET | `/pingpong/head-to-head/` | HeadToHeadStatsView | Player comparison |
 | GET | `/pingpong/calendar/` | CalendarView | Calendar with scheduled/past matches |
 
@@ -300,23 +362,34 @@ These integration tests simulate real user sessions. They catch regressions wher
 ### Matches (all LoginRequired)
 | Method | URL | View | Description |
 |--------|-----|------|-------------|
-| GET | `/pingpong/matches/` | MatchListView | List matches |
-| GET/POST | `/pingpong/matches/add/` | MatchCreateView | Create match |
-| GET | `/pingpong/matches/<id>/` | MatchDetailView | Match details |
-| GET/POST | `/pingpong/matches/<id>/edit/` | MatchUpdateView | Edit match |
+| GET | `/pingpong/matches/` | MatchListView | List matches (optimized) |
+| GET/POST | `/pingpong/matches/add/` | MatchCreateView | Create match (singles/doubles) |
+| GET | `/pingpong/matches/<id>/` | MatchDetailView | Match details + Elo changes |
+| GET/POST | `/pingpong/matches/<id>/edit/` | MatchUpdateView | Edit match (limited if complete) |
 | POST | `/pingpong/match/<id>/confirm/` | match_confirm | Confirm participation |
 | POST | `/pingpong/matches/<match_id>/add-game/` | GameCreateView | Add game to match |
 | GET/POST | `/pingpong/matches/schedule/` | ScheduledMatchCreateView | Schedule future match |
+| GET | `/pingpong/scheduled-matches/<id>/` | ScheduledMatchDetailView | View scheduled match |
+| GET/POST | `/pingpong/scheduled-matches/<id>/convert/` | ScheduledMatchConvertView | Convert to played match |
 
-## Forms Reference (`pingpong/forms.py`)
+### Teams (all LoginRequired)
+| Method | URL | View | Description |
+|--------|-----|------|-------------|
+| GET | `/pingpong/teams/` | TeamsListView | List all teams |
+| GET | `/pingpong/teams/<id>/` | TeamDetailView | Team stats and match history |
+| GET/POST | `/pingpong/teams/<id>/edit/` | TeamUpdateView | Edit team name |
+
+## Forms Reference (`pingpong/forms.py` - 7 Total)
 
 | Form | Model | Fields | Validation |
 |------|-------|--------|------------|
-| `MatchForm` | Match | player1, player2, date_played, location, match_type, best_of, notes | player1 != player2 |
+| `MatchForm` | Match | is_double, player1, player2, player3, player4, date_played, location, match_type, best_of, notes | All players different; correct count for singles/doubles |
 | `MatchEditForm` | Match | location, notes | (completed matches only) |
-| `GameForm` | Game | game_number, player1_score, player2_score, duration_minutes | No ties; win by 2 at deuce (>=10-10) |
+| `TeamEditForm` | Team | name | (edit team name only) |
+| `GameForm` | Game | game_number, team1_score, team2_score, duration_minutes | No ties; win by 2 at deuce (>=10-10) |
 | `PlayerRegistrationForm` | User | username, email, password1, password2, full_name, nickname, playing_style | Creates User + Player on save(commit=True) |
 | `ScheduledMatchForm` | ScheduledMatch | player1, player2, scheduled_date, scheduled_time, location, notes | player1 != player2; date >= today |
+| `MatchConvertForm` | Match | is_double, player1, player2, player3, player4, date_played, location, match_type, best_of, notes | Pre-fills from scheduled match; locks players for non-staff |
 
 ## Signals (`pingpong/signals.py`)
 
@@ -324,21 +397,73 @@ These integration tests simulate real user sessions. They catch regressions wher
 |--------|---------|--------|
 | `create_user_profile` | User post_save (created=True) | Creates UserProfile + verification token |
 | `track_match_winner_change` | Match pre_save | Sets `_winner_just_set` flag if winner goes from None to set |
-| `handle_match_completion` | Match post_save | If `_winner_just_set`: auto-confirm (unverified players) OR send confirmation emails (verified players) |
+| `handle_match_completion` | Match post_save | If `_winner_just_set`: auto-confirm (unverified) OR send confirmation emails (verified), update Elo if fully confirmed |
+| `update_elo_on_confirmation` | Match post_save | If match becomes fully confirmed, calculate and update Elo ratings |
+| `update_elo_on_match_confirmation` | MatchConfirmation post_save (created=True) | Triggers Elo update when individual player confirms |
 | `notify_passkey_registered` | WebAuthnCredential post_save (created=True) | Sends email notification when new passkey is registered |
 
 ## Business Logic
 
+### Team-Based Architecture
+- **Singles matches:** Automatically create/reuse 1-player teams
+- **Doubles matches:** Automatically create/reuse 2-player teams
+- **Team reuse logic:** If exact player composition exists, reuse that team (avoids duplicates)
+- **Backward compatibility:** Match.player1/player2 properties return first player from each team
+- **UI:** Forms show is_double toggle + player1/player2 (+ player3/player4 for doubles)
+
 ### Match Confirmation System
-1. Match created with both confirmations = False
+1. Match created with no confirmations (MatchConfirmation junction table)
 2. When winner is set for the first time (via Game.save() -> Match.save()):
-   - If any player is unverified (no user or email_verified=False): auto-confirm both sides via DB update
-   - If both players are verified: send confirmation emails to each
-3. Match shows confirmation badges in UI
+   - If any player is unverified (no user or email_verified=False): auto-confirm all via DB inserts
+   - If all players are verified: send confirmation emails to each
+3. **Singles:** Requires 2 confirmations (both players)
+4. **Doubles:** Requires 4 confirmations (all 4 players)
+5. Match shows confirmation badges in UI (team1_confirmed, team2_confirmed properties)
+6. **Elo trigger:** Elo ratings only update when match is fully confirmed
+
+### Elo Rating System (`pingpong/elo.py`)
+**Formula:** Traditional Elo with table tennis-specific adjustments
+
+**Features:**
+- **Singles:** Individual Elo vs Elo
+- **Doubles:** Team average Elo used for probability calculation
+- **K-factor base:** 32 for regular matches
+- **Tournament multiplier:** 1.5x (K=48 for tournaments)
+- **Best-of multipliers:** BO3=0.9x, BO5=1.0x, BO7=1.1x
+- **New player boost:** 1.5x K-factor for first 20 matches
+
+**Tracking:**
+- `Player.elo_rating` (current rating, starts at 1500)
+- `Player.elo_peak` (all-time highest rating)
+- `Player.matches_for_elo` (counter for new player boost)
+- `EloHistory` records every rating change (match, player, old, new, change, k_factor)
+
+**Display:**
+- Leaderboard sorted by Elo
+- Match detail shows Elo changes per player
+- Player detail shows current rating, peak, and history
+
+**Management command:**
+```bash
+python manage.py recalculate_elo       # Recalculate all Elo ratings from scratch
+python manage.py recalculate_elo --dry-run  # Preview changes without saving
+```
 
 ### Winner Determination
-- **Game:** Automatically determined by comparing player1_score vs player2_score in Game.save()
-- **Match:** Automatically determined in Match.save() when a player has >= (best_of // 2 + 1) game wins
+- **Game:** Automatically determined by comparing team1_score vs team2_score in Game.save()
+- **Match:** Automatically determined in Match.save() when a team has >= (best_of // 2 + 1) game wins
+
+### Scheduled Match Conversion
+1. User creates scheduled match (future date/time)
+2. Both teams receive email notification
+3. Match appears in calendar view with "Not converted" status
+4. User navigates to scheduled match detail page
+5. Clicks "Convert to Match" button
+6. Form pre-fills with scheduled match data (players, location, notes)
+7. User adds date_played, match_type, best_of
+8. On save: creates Match, links via ScheduledMatch.match field
+9. Calendar now shows "Converted" status
+10. is_fully_confirmed property checks if linked match is confirmed
 
 ### Row-Level Security
 - `CurrentUserMiddleware` stores user in thread-local (`_thread_locals.user`)
@@ -353,11 +478,15 @@ These integration tests simulate real user sessions. They catch regressions wher
 3. User clicks `/pingpong/verify-email/<token>/` -> verified, auto-logged in, redirected to dashboard
 4. Unverified users blocked at login (CustomLoginView.form_valid)
 
-### Scheduled Matches
-1. User creates scheduled match (player1 locked to self for non-staff)
-2. Both players receive email notification
-3. Match appears in calendar view
-4. notification_sent flag set to True
+### Performance Optimizations (MatchListView)
+**Problem:** N+1 queries rendering match lists (team scores, player lists, confirmations)
+
+**Solution:** Extensive prefetching + Python caching
+- `prefetch_related('team1__players', 'team2__players', 'games', 'confirmations')`
+- Cache properties: `cached_team1_score`, `cached_team2_score`, `cached_team1_players`, `cached_team2_players`, `cached_match_confirmed`
+- Reduces database queries by 90%+ on match list pages
+
+**Testing:** `test_match_list_performance.py` validates query count stays under limits
 
 ## Templates
 
@@ -369,16 +498,21 @@ These integration tests simulate real user sessions. They catch regressions wher
 |----------|---------|
 | `base.html` | Base layout with Tailwind (shadcn/ui colors), nav, alerts |
 | `dashboard.html` | Stats overview |
-| `match_list.html` | Match table/cards |
-| `match_detail.html` | Full match view with games |
-| `match_form.html` | Create/edit match |
+| `match_list.html` | Match table/cards (optimized rendering) |
+| `match_detail.html` | Full match view with games + Elo changes |
+| `match_form.html` | Create/edit match (singles/doubles toggle) |
 | `player_list.html` | Player listing |
-| `player_detail.html` | Player profile & stats |
+| `player_detail.html` | Player profile & stats (Elo, peak, history) |
 | `game_form.html` | Score entry |
-| `head_to_head.html` | Player comparison with charts |
-| `leaderboard.html` | Rankings table |
-| `calendar.html` | Calendar view with scheduled matches |
+| `head_to_head.html` | Player comparison with charts (singles only) |
+| `leaderboard.html` | Rankings table (sorted by Elo) |
+| `calendar.html` | Calendar view with scheduled/past matches |
 | `scheduled_match_form.html` | Schedule a future match |
+| `scheduled_match_detail.html` | View scheduled match details |
+| `scheduled_match_convert.html` | Convert scheduled match to played match |
+| `team_list.html` | List all teams |
+| `team_detail.html` | Team stats and match history |
+| `team_form.html` | Edit team name |
 
 ## Environment Configuration
 
@@ -424,20 +558,34 @@ docker compose -f compose.prod.yml up --build -d   # Gunicorn (3 workers)
 
 ## Dependencies (`requirements.txt`)
 
+**Core Framework:**
 ```
 Django==6.0
 asgiref==3.11.0
-coverage==7.13.1
+sqlparse==0.5.5
+```
+
+**Database & Production:**
+```
+psycopg2-binary  # PostgreSQL driver
+gunicorn         # WSGI server (production)
+whitenoise==6.11.0
+```
+
+**Authentication:**
+```
 django-otp==1.5.4
 django-otp-webauthn==0.3.0
-factory-boy==3.3.1
-faker==33.3.1
+```
+
+**Testing:**
+```
 pytest==8.3.4
 pytest-django==4.9.0
-sqlparse==0.5.5
-whitenoise==6.11.0
 pytest-cov
-
+coverage==7.13.1
+factory-boy==3.3.1
+faker==33.3.1
 ```
 
 ## Key Files Quick Reference
@@ -454,6 +602,8 @@ pytest-cov
 | Modify security | `pingpong/managers.py` |
 | Add context vars | `pingpong/context_processors.py` |
 | Add admin config | `pingpong/admin.py` |
+| Modify Elo calculations | `pingpong/elo.py` |
+| Add management command | `pingpong/management/commands/` |
 | Add/update tests | `pingpong/tests/` (see Testing Strategy section) |
 | Add factories/fixtures | `pingpong/tests/conftest.py` |
 | Modify settings | `ttstats/settings/` |
@@ -468,13 +618,47 @@ python manage.py migrate                     # Apply migrations
 python manage.py showmigrations              # List migrations
 ```
 
-Current migrations (8 total):
+Current migrations (16 total):
 1. `0001_initial` - Initial schema
-2. `0002-0004` - Location field adjustments
-3. `0005` - best_of field adjustment
-4. `0006` - Match confirmation fields
-5. `0007` - UserProfile model
-6. `0008` - ScheduledMatch model
+2. `0002-0005` - Location and best_of field adjustments
+3. `0006` - Match confirmation fields (old boolean approach)
+4. `0007` - UserProfile model
+5. `0008_teams` - **Major:** Introduced Team model
+6. `0009_match_winner_confirmations` - **Major:** Refactored confirmations to MatchConfirmation junction table
+7. `0010_cleanup_games` - **Major:** Renamed player scores to team scores in Game
+8. `0011` - MatchConfirmation constraints
+9. `0012` - ScheduledMatch model
+10. `0013_scheduledmatch_to_teams` - **Major:** Migrated ScheduledMatch to Teams
+11. `0014` - **Major:** Added Elo fields (elo_rating, elo_peak, matches_for_elo, EloHistory)
+12. `0015` - MatchConfirmation metadata cleanup
+13. `0016_scheduledmatch_match_link` - Added conversion tracking to ScheduledMatch
+
+## Management Commands
+
+### recalculate_elo
+**Purpose:** Recalculate all Elo ratings from scratch based on confirmed match history.
+
+**Usage:**
+```bash
+cd ttstats
+python manage.py recalculate_elo              # Recalculate and save
+python manage.py recalculate_elo --dry-run    # Preview changes without saving
+```
+
+**Process:**
+1. Resets all players to 1500 Elo, 0 matches_for_elo
+2. Deletes all EloHistory records
+3. Processes all confirmed matches in chronological order
+4. Applies same calculation logic as real-time updates
+5. Shows summary of rating changes
+
+**When to use:**
+- After fixing Elo calculation bugs
+- After data migrations that affect match history
+- To verify Elo consistency
+- Testing new K-factor or formula changes
+
+**File:** `pingpong/management/commands/recalculate_elo.py`
 
 ## Passkey Authentication
 

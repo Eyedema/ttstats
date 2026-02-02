@@ -20,8 +20,8 @@ from django.views.generic import (
     UpdateView,
 )
 
-from .forms import GameForm, MatchEditForm, MatchForm, PlayerRegistrationForm, ScheduledMatchForm
-from .models import Game, Location, Match, Player, UserProfile, MatchConfirmation, ScheduledMatch
+from .forms import GameForm, MatchEditForm, MatchForm, PlayerRegistrationForm, ScheduledMatchForm, MatchConvertForm
+from .models import Game, Location, Match, Player, UserProfile, MatchConfirmation, ScheduledMatch, Team
 from .emails import send_scheduled_match_email, send_passkey_deleted_email
 
 try:
@@ -134,6 +134,9 @@ class MatchListView(LoginRequiredMixin, ListView):
             team2_confirmed = (team2_ids.issubset(confirmed_ids)) or team2_all_unverified
 
             match.cached_match_confirmed = team1_confirmed and team2_confirmed
+
+        # Add total count for stats display (not just paginated count)
+        context['total_matches'] = self.get_queryset().count()
 
         return context
 
@@ -530,26 +533,22 @@ class MatchCreateView(LoginRequiredMixin, CreateView):
             # Create 2-player teams (or reuse existing)
             team1 = (Team.objects
                      .filter(players=player1)
-                     .filter(players=player3)
-                     .annotate(num_players=Count('players'))
-                     .filter(num_players=2)
+                     .filter(players=player2)
                      .first()
                      )
             if not team1:
                 team1 = Team.objects.create()
-                team1.players.set([player1, player3])
+                team1.players.set([player1, player2])
                 team1.save()
 
             team2 = (Team.objects
-                     .filter(players=player2)
+                     .filter(players=player3)
                      .filter(players=player4)
-                     .annotate(num_players=Count('players'))
-                     .filter(num_players=2)
                      .first()
                      )
             if not team2:
                 team2 = Team.objects.create()
-                team2.players.set([player2, player4])
+                team2.players.set([player3, player4])
                 team2.save()
         else:
             # Create 1-player teams (or reuse existing)
@@ -1261,21 +1260,28 @@ class CalendarView(LoginRequiredMixin, TemplateView):
         except AttributeError:
             user_player = None
 
-        # Get scheduled matches for this month
+        # Get scheduled matches for this month (with match data for filtering)
         scheduled_matches = ScheduledMatch.objects.filter(
             scheduled_date__year=year,
             scheduled_date__month=month,
+        ).select_related('match', 'match__team1', 'match__team2').prefetch_related(
+            'match__confirmations'
         ).order_by("scheduled_date", "scheduled_time")
 
         # Get completed matches for this month
+        # Exclude matches with related_name to scheduled match for prefetching
         completed_matches = Match.objects.filter(
             date_played__year=year,
             date_played__month=month,
-        ).order_by("date_played")
+        ).select_related('scheduled_from').order_by("date_played")
 
         # Organize matches by day
         matches_by_day = {}
         for sm in scheduled_matches:
+            # Skip fully confirmed scheduled matches
+            if sm.match and sm.match.match_confirmed:
+                continue
+
             day = sm.scheduled_date.day
             if day not in matches_by_day:
                 matches_by_day[day] = []
@@ -1283,6 +1289,11 @@ class CalendarView(LoginRequiredMixin, TemplateView):
             matches_by_day[day].append(sm)
 
         for m in completed_matches:
+            # Skip matches that came from scheduled matches and aren't fully confirmed
+            # (they're already shown as scheduled matches above)
+            if not m.match_confirmed:
+                continue
+
             day = m.date_played.day
             if day not in matches_by_day:
                 matches_by_day[day] = []
@@ -1323,6 +1334,216 @@ class CalendarView(LoginRequiredMixin, TemplateView):
         )
 
         return context
+
+
+class ScheduledMatchDetailView(LoginRequiredMixin, DetailView):
+    """View to display scheduled match details and conversion status"""
+
+    model = ScheduledMatch
+    template_name = "pingpong/scheduled_match_detail.html"
+    context_object_name = "scheduled_match"
+
+    def get_queryset(self):
+        """Filter by user permissions"""
+        return ScheduledMatch.objects.all()
+
+    def get_object(self, queryset=None):
+        """Check permissions and return object"""
+        from django.core.exceptions import PermissionDenied
+        obj = super().get_object(queryset)
+
+        # Check if user can view this scheduled match
+        if not obj.user_can_view(self.request.user):
+            raise PermissionDenied("You don't have permission to view this scheduled match.")
+
+        return obj
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        scheduled_match = self.object
+        user = self.request.user
+
+        # Add conversion status
+        context['is_converted'] = scheduled_match.is_converted
+        context['is_fully_confirmed'] = scheduled_match.is_fully_confirmed
+
+        # Check if user can convert (participant or staff)
+        can_convert = scheduled_match.user_can_view(user)
+        context['can_convert'] = can_convert
+
+        return context
+
+
+class ScheduledMatchConvertView(LoginRequiredMixin, CreateView):
+    """View to convert scheduled match to played match"""
+
+    model = Match
+    form_class = MatchConvertForm
+    template_name = "pingpong/scheduled_match_convert.html"
+
+    def dispatch(self, request, *args, **kwargs):
+        """Check if already converted and permissions"""
+        # Check authentication first (before fetching object)
+        if not request.user.is_authenticated:
+            # Let LoginRequiredMixin handle the redirect
+            return super().dispatch(request, *args, **kwargs)
+
+        # User is authenticated, safe to fetch object
+        # Use _base_manager to bypass custom manager filtering
+        try:
+            self.scheduled_match = ScheduledMatch._base_manager.get(
+                pk=self.kwargs['scheduled_match_pk']
+            )
+        except ScheduledMatch.DoesNotExist:
+            from django.http import Http404
+            raise Http404("Scheduled match not found")
+
+        # Check permissions
+        if not self.scheduled_match.user_can_view(request.user):
+            messages.error(request, "You don't have permission to convert this scheduled match.")
+            return redirect("pingpong:calendar")
+
+        # Check if already converted
+        if self.scheduled_match.is_converted:
+            messages.info(request, "This scheduled match has already been converted to a played match.")
+            return redirect("pingpong:match_detail", pk=self.scheduled_match.match.pk)
+
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_form_kwargs(self):
+        """Pass scheduled_match and user to form"""
+        kwargs = super().get_form_kwargs()
+        kwargs['scheduled_match'] = self.scheduled_match
+        kwargs['user'] = self.request.user
+        return kwargs
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['scheduled_match'] = self.scheduled_match
+        context['locations'] = Location.objects.all()
+        return context
+
+    def get_success_url(self):
+        """Redirect to match detail page"""
+        return reverse_lazy("pingpong:match_detail", kwargs={"pk": self.object.pk})
+
+    def form_valid(self, form):
+        """Create match, link to scheduled match, handle teams"""
+        user = self.request.user
+        is_double = form.cleaned_data.get('is_double')
+        player1 = form.cleaned_data["player1"]
+        player2 = form.cleaned_data["player2"]
+        player3 = form.cleaned_data.get("player3")
+        player4 = form.cleaned_data.get("player4")
+
+        # Validation for singles matches
+        if not is_double:
+            if player3 or player4:
+                messages.error(self.request, "Singles matches cannot have Player 3 or Player 4!")
+                return self.form_invalid(form)
+
+        # Validation for doubles matches
+        if is_double:
+            if not player3 or not player4:
+                messages.error(self.request, "Doubles matches require all 4 players!")
+                return self.form_invalid(form)
+
+            # Ensure all 4 players are unique
+            players = [player1, player2, player3, player4]
+            if len(set(players)) != 4:
+                messages.error(self.request, "All players must be different!")
+                return self.form_invalid(form)
+
+        # Ensure player1 != player2
+        if player1 == player2:
+            messages.error(self.request, "Player 1 and Player 2 must be different!")
+            return self.form_invalid(form)
+
+        # Non-staff users must be participants
+        if not user.is_staff:
+            try:
+                user_player = user.player
+
+                # Ensure user is one of the players
+                if user_player not in [player1, player2, player3, player4]:
+                    messages.error(
+                        self.request, "You can only convert matches you participate in!"
+                    )
+                    return self.form_invalid(form)
+
+            except Player.DoesNotExist:
+                messages.error(
+                    self.request, "You must have a player profile to convert matches."
+                )
+                return self.form_invalid(form)
+
+        # Create or reuse Team objects (same logic as MatchCreateView)
+        if is_double:
+            # Create 2-player teams
+            team1 = (Team.objects
+                     .filter(players=player1)
+                     .filter(players=player3)
+                     .annotate(num_players=Count('players'))
+                     .filter(num_players=2)
+                     .first()
+                     )
+            if not team1:
+                team1 = Team.objects.create()
+                team1.players.set([player1, player3])
+                team1.save()
+
+            team2 = (Team.objects
+                     .filter(players=player2)
+                     .filter(players=player4)
+                     .annotate(num_players=Count('players'))
+                     .filter(num_players=2)
+                     .first()
+                     )
+            if not team2:
+                team2 = Team.objects.create()
+                team2.players.set([player2, player4])
+                team2.save()
+        else:
+            # Create 1-player teams
+            team1 = (Team.objects
+                     .filter(players=player1)
+                     .annotate(num_players=Count('players'))
+                     .filter(num_players=1)
+                     .first()
+                     )
+            if not team1:
+                team1 = Team.objects.create()
+                team1.players.set([player1])
+                team1.save()
+
+            team2 = (Team.objects
+                     .filter(players=player2)
+                     .annotate(num_players=Count('players'))
+                     .filter(num_players=1)
+                     .first()
+                     )
+            if not team2:
+                team2 = Team.objects.create()
+                team2.players.set([player2])
+                team2.save()
+
+        # Assign teams to match
+        form.instance.team1 = team1
+        form.instance.team2 = team2
+        form.instance.is_double = is_double
+
+        # Save the match
+        response = super().form_valid(form)
+
+        # Link scheduled match to this match
+        self.scheduled_match.match = self.object
+        self.scheduled_match.save()
+
+        messages.success(
+            self.request,
+            "Match recorded successfully! Now add game scores to complete the match."
+        )
+        return response
 
 
 class CustomLoginView(LoginView):
@@ -1388,3 +1609,189 @@ class PasskeyManagementView(LoginRequiredMixin, View):
         credential.delete()
         messages.success(request, f"Passkey '{device_name}' deleted")
         return redirect('pingpong:passkey_management')
+
+class TeamsListView(LoginRequiredMixin, ListView):
+    """View to list all players"""
+
+    template_name = "pingpong/team_list.html"
+    context_object_name = "teams"
+    model = Team
+    paginate_by = 10
+
+
+class TeamUpdateView(LoginRequiredMixin, UpdateView):
+    """View to update an existing team"""
+
+    model = Team
+    template_name = "pingpong/team_form.html"
+    fields = ["name"]
+
+    def get_success_url(self):
+        return reverse_lazy("pingpong:team_detail", kwargs={"pk": self.object.pk})
+
+    def form_valid(self, form):
+        messages.success(
+            self.request, f"Team '{form.instance.name}' updated successfully!"
+        )
+        return super().form_valid(form)
+
+class TeamDetailView(LoginRequiredMixin, DetailView):
+    """View to show details of a single team"""
+
+    template_name = "pingpong/team_detail.html"
+    context_object_name = "team"
+    model = Team
+
+    def get_context_data(self, **kwargs: Any) -> dict[str, Any]:
+        context = super().get_context_data(**kwargs)
+
+        team = self.get_object()
+
+        # Fetch all matches for team with comprehensive prefetching
+        all_matches = Match.objects.filter(
+            Q(team1=team) | Q(team2=team)
+        ).select_related('team1', 'team2', 'winner').prefetch_related(
+            'team1__players',
+            'team2__players',
+            'team1__players__user__profile',
+            'team2__players__user__profile',
+            'confirmations',
+            'games'
+        ).order_by('-date_played').distinct()
+
+        # Filter to confirmed matches only (using Python property)
+        confirmed_matches = [m for m in all_matches if m.match_confirmed]
+
+        # Add custom attributes to each match from team's perspective
+        for match in confirmed_matches:
+            # Determine if team is team1 or team2
+            is_team1 = match.team1 == team
+
+            # Set opponent team
+            match.opponent_team = match.team2 if is_team1 else match.team1
+
+            # Set scores from team's perspective
+            match.team_score = match.team1_score if is_team1 else match.team2_score
+            match.opponent_score = match.team2_score if is_team1 else match.team1_score
+
+            # Check if team won
+            match.team_won = match.winner == team
+
+        total_matches = len(confirmed_matches)
+
+        # Won matches and losses
+        wins = len([m for m in confirmed_matches if m.winner == team])
+        losses = total_matches - wins
+
+        # Calculate streaks
+        stats = self._calculate_streaks(confirmed_matches, team)
+
+        # Calculate performance statistics
+        performance = self._calculate_performance_stats(confirmed_matches)
+
+        context.update({
+            'matches': confirmed_matches,
+            'total_matches': total_matches,
+            'wins': wins,
+            'losses': losses,
+            'win_rate': round((wins / total_matches * 100), 1) if total_matches > 0 else 0,
+            'loss_rate': round((losses / total_matches * 100), 1) if total_matches > 0 else 0,
+            'current_streak': stats['current_streak'],
+            'longest_win_streak': stats['longest_win_streak'],
+            'longest_loss_streak': stats['longest_loss_streak'],
+            'avg_score': performance['avg_score'],
+            'avg_opponent_score': performance['avg_opponent_score'],
+            'best_win': performance['best_win'],
+            'worst_loss': performance['worst_loss'],
+        })
+
+        return context
+
+    def _calculate_streaks(self, matches, team):
+        """Calculate current streak, longest win streak, and longest loss streak"""
+        current_streak = 0
+        streak_type = None  # 'win' or 'loss'
+        longest_win = 0
+        longest_loss = 0
+        win_streak = 0
+        loss_streak = 0
+
+        # Iterate through matches from most recent to oldest
+        for match in matches:
+            team_won = match.winner == team
+
+            if team_won:
+                if streak_type != 'win':
+                    # Switching from loss to win or starting fresh
+                    longest_loss = max(longest_loss, loss_streak)
+                    loss_streak = 0
+                    win_streak = 0
+                    streak_type = 'win'
+                win_streak += 1
+                current_streak = win_streak
+            elif match.winner:  # Loss (match has a winner but it's not this team)
+                if streak_type != 'loss':
+                    # Switching from win to loss or starting fresh
+                    longest_win = max(longest_win, win_streak)
+                    win_streak = 0
+                    loss_streak = 0
+                    streak_type = 'loss'
+                loss_streak += 1
+                current_streak = -loss_streak  # Negative for loss streak
+
+        # Update longest streaks one final time
+        if streak_type == 'win':
+            longest_win = max(longest_win, win_streak)
+        elif streak_type == 'loss':
+            longest_loss = max(longest_loss, loss_streak)
+
+        return {
+            'current_streak': current_streak,
+            'longest_win_streak': longest_win,
+            'longest_loss_streak': longest_loss,
+        }
+
+    def _calculate_performance_stats(self, matches):
+        """Calculate average scores and best/worst performances"""
+        if not matches:
+            return {
+                'avg_score': 0,
+                'avg_opponent_score': 0,
+                'best_win': 'N/A',
+                'worst_loss': 'N/A',
+            }
+
+        total_team_score = 0
+        total_opponent_score = 0
+        best_win_margin = -999
+        best_win_score = None
+        worst_loss_margin = 999
+        worst_loss_score = None
+
+        for match in matches:
+            # Add to totals
+            total_team_score += match.team_score
+            total_opponent_score += match.opponent_score
+
+            # Calculate margin
+            margin = match.team_score - match.opponent_score
+
+            # Track best win (largest positive margin)
+            if match.team_won and margin > best_win_margin:
+                best_win_margin = margin
+                best_win_score = f"{match.team_score}-{match.opponent_score}"
+
+            # Track worst loss (largest negative margin)
+            if not match.team_won and margin < worst_loss_margin:
+                worst_loss_margin = margin
+                worst_loss_score = f"{match.team_score}-{match.opponent_score}"
+
+        avg_score = total_team_score / len(matches)
+        avg_opponent_score = total_opponent_score / len(matches)
+
+        return {
+            'avg_score': round(avg_score, 1),
+            'avg_opponent_score': round(avg_opponent_score, 1),
+            'best_win': best_win_score if best_win_score else 'N/A',
+            'worst_loss': worst_loss_score if worst_loss_score else 'N/A',
+        }

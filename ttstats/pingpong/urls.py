@@ -32,12 +32,16 @@ urlpatterns = [
         views.GameCreateView.as_view(),
         name="game_add",
     ),
-    path("head-to-head/", views.HeadToHeadStatsView.as_view(), name="head_to_head"),
-    path("signup/", views.PlayerRegistrationView.as_view(), name="signup"),
     path('match/<int:pk>/confirm/', views.match_confirm, name='match_confirm'),
-    path("calendar/", views.CalendarView.as_view(), name="calendar"),
     path("matches/schedule/", views.ScheduledMatchCreateView.as_view(), name="match_schedule"),
+    path("scheduled-matches/<int:pk>/", views.ScheduledMatchDetailView.as_view(), name="scheduled_match_detail"),
+    path("scheduled-matches/<int:scheduled_match_pk>/convert/", views.ScheduledMatchConvertView.as_view(), name="scheduled_match_convert"),
 
-# Passkey management
+    # Passkey management
     path("passkeys/", views.PasskeyManagementView.as_view(), name="passkey_management"),
+
+    # Teams
+    path("teams/", views.TeamsListView.as_view(), name="team_list"),
+    path("teams/<int:pk>/", views.TeamDetailView.as_view(), name="team_detail"),
+    path("teams/<int:pk>/edit/", views.TeamUpdateView.as_view(), name="team_edit"),
 ]

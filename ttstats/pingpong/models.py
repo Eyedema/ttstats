@@ -380,6 +380,16 @@ class ScheduledMatch(models.Model):
     # Track if emails were sent
     notification_sent = models.BooleanField(default=False)
 
+    # Link to actual match if scheduled match was converted
+    match = models.OneToOneField(
+        "Match",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="scheduled_from",
+        help_text="Linked match if this scheduled match was converted to a played match"
+    )
+
     objects = ScheduledMatchManager()
 
     class Meta:
@@ -403,8 +413,9 @@ class ScheduledMatch(models.Model):
         if user.is_staff or user.is_superuser:
             return True
         try:
-            return user in (self.team1.players.all() | self.team2.players.all())
-        except AttributeError:
+            user_player = user.player
+            return user_player in (self.team1.players.all() | self.team2.players.all())
+        except (AttributeError, Player.DoesNotExist):
             return False
 
     def user_can_edit(self, user):
@@ -424,6 +435,16 @@ class ScheduledMatch(models.Model):
         if self.team2:
             return self.team2.players.first()
         return None
+
+    @property
+    def is_converted(self):
+        """Check if this scheduled match has been converted to a played match"""
+        return self.match is not None
+
+    @property
+    def is_fully_confirmed(self):
+        """Check if linked match exists and is fully confirmed"""
+        return bool(self.match and self.match.match_confirmed)
 
 
 class EloHistory(models.Model):

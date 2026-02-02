@@ -1,0 +1,180 @@
+{% extends "pingpong/base.html" %}
+{% load static %}
+
+{% block title %}{{ scheduled_match.team1 }} vs {{ scheduled_match.team2 }} - Scheduled Match{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto space-y-6">
+    <!-- Back button -->
+    <div>
+        <a href="{% url 'pingpong:calendar' %}" class="inline-flex items-center gap-2 text-sm font-medium hover:underline min-h-[44px]">
+            <img src="{% static 'pingpong/icons/arrow-left.svg' %}" class="w-4 h-4" alt="">
+            Back to Calendar
+        </a>
+    </div>
+
+    <!-- Match Header -->
+    <div class="rounded-lg border bg-gradient-to-r from-primary to-primary/90 text-primary-foreground overflow-hidden">
+        <div class="p-6">
+            <div class="flex flex-col gap-4">
+                <div>
+                    <p class="text-sm opacity-80 mb-2">
+                        Scheduled for {{ scheduled_match.scheduled_date|date:"F d, Y" }} at {{ scheduled_match.scheduled_time|date:"H:i" }}
+                        {% if scheduled_match.location %} • {{ scheduled_match.location }}{% endif %}
+                    </p>
+                    <h1 class="text-3xl font-bold mb-2">
+                        {{ scheduled_match.team1 }} vs {{ scheduled_match.team2 }}
+                    </h1>
+                    {% if scheduled_match.team1.players.count == 2 %}
+                    <p class="text-sm opacity-70 mb-3">
+                        {% for p in scheduled_match.team1.players.all %}{{ p.name }}{% if not forloop.last %} & {% endif %}{% endfor %}
+                        vs
+                        {% for p in scheduled_match.team2.players.all %}{{ p.name }}{% if not forloop.last %} & {% endif %}{% endfor %}
+                    </p>
+                    {% endif %}
+
+                    <!-- Status Badge -->
+                    <div class="flex gap-2 flex-wrap">
+                        {% if not is_converted %}
+                        <span class="inline-flex items-center rounded-md bg-blue-500/20 border border-blue-300/30 px-3 py-1 text-sm font-medium">
+                            <img src="{% static 'pingpong/icons/calendar.svg' %}" class="w-4 h-4 mr-1.5" alt="">
+                            Not Yet Played
+                        </span>
+                        {% elif not is_fully_confirmed %}
+                        <span class="inline-flex items-center rounded-md bg-yellow-500/20 border border-yellow-300/30 px-3 py-1 text-sm font-medium">
+                            <img src="{% static 'pingpong/icons/clock.svg' %}" class="w-4 h-4 mr-1.5" alt="">
+                            Played - Awaiting Confirmation
+                        </span>
+                        {% else %}
+                        <span class="inline-flex items-center rounded-md bg-green-500/20 border border-green-300/30 px-3 py-1 text-sm font-medium">
+                            <img src="{% static 'pingpong/icons/check-circle.svg' %}" class="w-4 h-4 mr-1.5" alt="">
+                            Completed & Confirmed
+                        </span>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <!-- Action Buttons -->
+                <div class="flex flex-col sm:flex-row gap-2">
+                    {% if can_convert and not is_fully_confirmed %}
+                        {% if not is_converted %}
+                        <a href="{% url 'pingpong:scheduled_match_convert' scheduled_match.pk %}" class="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 rounded-md bg-white text-primary px-4 py-2.5 text-sm font-medium hover:bg-white/90 transition-colors min-h-[44px]">
+                            <img src="{% static 'pingpong/icons/play.svg' %}" class="w-4 h-4" alt="">
+                            Record Results
+                        </a>
+                        {% endif %}
+                    {% endif %}
+
+                    {% if is_converted %}
+                    <a href="{% url 'pingpong:match_detail' scheduled_match.match.pk %}" class="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 rounded-md border-2 border-white/30 bg-white/10 px-4 py-2.5 text-sm font-medium hover:bg-white/20 transition-colors min-h-[44px]">
+                        <img src="{% static 'pingpong/icons/external-link.svg' %}" class="w-4 h-4" alt="">
+                        View Match
+                    </a>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Match Details Card -->
+    <div class="rounded-lg border bg-card">
+        <div class="p-6 space-y-4">
+            <h2 class="text-xl font-semibold">Match Details</h2>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <dt class="text-sm font-medium text-muted-foreground mb-1">Date & Time</dt>
+                    <dd class="text-sm">{{ scheduled_match.scheduled_date|date:"F d, Y" }} at {{ scheduled_match.scheduled_time|date:"H:i" }}</dd>
+                </div>
+
+                {% if scheduled_match.location %}
+                <div>
+                    <dt class="text-sm font-medium text-muted-foreground mb-1">Location</dt>
+                    <dd class="text-sm">{{ scheduled_match.location }}</dd>
+                </div>
+                {% endif %}
+
+                <div>
+                    <dt class="text-sm font-medium text-muted-foreground mb-1">Match Type</dt>
+                    <dd class="text-sm">{% if scheduled_match.team1.players.count == 2 %}Doubles{% else %}Singles{% endif %}</dd>
+                </div>
+
+                {% if scheduled_match.created_by %}
+                <div>
+                    <dt class="text-sm font-medium text-muted-foreground mb-1">Created By</dt>
+                    <dd class="text-sm">{{ scheduled_match.created_by }}</dd>
+                </div>
+                {% endif %}
+            </div>
+
+            {% if scheduled_match.notes %}
+            <div>
+                <dt class="text-sm font-medium text-muted-foreground mb-1">Notes</dt>
+                <dd class="text-sm whitespace-pre-wrap">{{ scheduled_match.notes }}</dd>
+            </div>
+            {% endif %}
+
+            <!-- Players -->
+            <div>
+                <dt class="text-sm font-medium text-muted-foreground mb-2">Players</dt>
+                <div class="flex flex-col sm:flex-row gap-4">
+                    <div class="flex-1 p-4 rounded-md border bg-muted/20">
+                        <p class="text-sm font-medium mb-2">{{ scheduled_match.team1 }}</p>
+                        <ul class="space-y-1">
+                            {% for player in scheduled_match.team1.players.all %}
+                            <li class="text-sm">
+                                <a href="{% url 'pingpong:player_detail' player.pk %}" class="hover:underline">{{ player.name }}</a>
+                            </li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                    <div class="flex items-center justify-center text-muted-foreground">
+                        <span class="text-lg font-bold">vs</span>
+                    </div>
+                    <div class="flex-1 p-4 rounded-md border bg-muted/20">
+                        <p class="text-sm font-medium mb-2">{{ scheduled_match.team2 }}</p>
+                        <ul class="space-y-1">
+                            {% for player in scheduled_match.team2.players.all %}
+                            <li class="text-sm">
+                                <a href="{% url 'pingpong:player_detail' player.pk %}" class="hover:underline">{{ player.name }}</a>
+                            </li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Info Card -->
+    {% if not is_converted %}
+    <div class="rounded-lg border border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-950/30">
+        <div class="p-4">
+            <div class="flex gap-3">
+                <img src="{% static 'pingpong/icons/info.svg' %}" class="w-5 h-5 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" alt="">
+                <div class="flex-1">
+                    <h3 class="text-sm font-medium text-blue-900 dark:text-blue-100 mb-1">Ready to Play?</h3>
+                    <p class="text-sm text-blue-800 dark:text-blue-200">
+                        When you're ready to record the match results, click "Record Results" above. You'll be able to fill in the match details and add game scores.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% elif not is_fully_confirmed %}
+    <div class="rounded-lg border border-yellow-200 bg-yellow-50 dark:border-yellow-800 dark:bg-yellow-950/30">
+        <div class="p-4">
+            <div class="flex gap-3">
+                <img src="{% static 'pingpong/icons/triangle-alert.svg' %}" class="w-5 h-5 text-yellow-600 dark:text-yellow-400 flex-shrink-0 mt-0.5" alt="">
+                <div class="flex-1">
+                    <h3 class="text-sm font-medium text-yellow-900 dark:text-yellow-100 mb-1">Awaiting Confirmation</h3>
+                    <p class="text-sm text-yellow-800 dark:text-yellow-200">
+                        The match has been played and results recorded. Both players need to confirm the match results before it's finalized.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

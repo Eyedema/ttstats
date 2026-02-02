@@ -1,0 +1,241 @@
+{% extends "pingpong/base.html" %}
+{% load static %}
+
+{% block title %}Teams - Table Tennis Tracker{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto space-y-6">
+    <!-- Header -->
+    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <div>
+            <h2 class="text-2xl md:text-3xl font-bold tracking-tight">Teams</h2>
+            <p class="text-muted-foreground mt-1 text-sm md:text-base">Manage all registered teams</p>
+        </div>
+    </div>
+
+    <!-- Stats Card -->
+    <div class="rounded-lg border bg-white p-4 md:p-6">
+        <div class="flex items-center justify-between">
+            <div>
+                <p class="text-sm font-medium text-muted-foreground">Total Teams</p>
+                <p class="text-2xl md:text-3xl font-bold mt-1">{{ teams.count }}</p>
+                <p class="text-xs text-muted-foreground mt-1">Registered in the system</p>
+            </div>
+            <div class="w-10 h-10 md:w-12 md:h-12 bg-primary/10 rounded-full flex items-center justify-center flex-shrink-0">
+                <img src="{% static 'pingpong/icons/users.svg' %}" class="w-5 h-5 md:w-6 md:h-6" alt="">
+            </div>
+        </div>
+    </div>
+
+    <!-- Teams Table -->
+    {% if teams %}
+    <div class="rounded-lg border bg-white overflow-hidden">
+        <!-- Desktop Table (hidden on mobile/tablet) -->
+        <div class="hidden md:block overflow-x-auto">
+            <table class="w-full">
+                <thead class="border-b bg-muted/50">
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Team</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Players</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Matches Played</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Wins</th>
+                        <th class="px-6 py-3 text-right text-xs font-medium text-muted-foreground uppercase tracking-wider">Actions</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y">
+                    {% for team in teams %}
+                    <tr class="hover:bg-muted/50">
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <div class="flex items-center gap-3">
+                                <div class="w-10 h-10 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-semibold">
+                                    {% if team.name %}
+                                        {{ team.name|slice:":1"|upper }}
+                                    {% else %}
+                                        T
+                                    {% endif %}
+                                </div>
+                                <div>
+                                    <div class="font-medium">{{ team }}</div>
+                                </div>
+                            </div>
+                        </td>
+                        <td class="px-6 py-4">
+                            <div class="flex flex-col gap-1">
+                                {% for player in team.players.all %}
+                                <div class="flex items-center gap-2">
+                                    <div class="w-6 h-6 rounded-full bg-secondary text-secondary-foreground flex items-center justify-center text-xs font-semibold">
+                                        {{ player.name|slice:":1"|upper }}
+                                    </div>
+                                    <span class="text-sm">{{ player }}</span>
+                                </div>
+                                {% endfor %}
+                            </div>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            {% with total_matches=team.matches_as_team1.count|add:team.matches_as_team2.count %}
+                            <span class="text-sm font-medium">{{ total_matches }}</span>
+                            {% endwith %}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            {% with wins=team.match_set.count %}
+                            <span class="inline-flex items-center rounded-md bg-success/10 px-2 py-1 text-xs font-medium text-success">
+                                {{ wins }} wins
+                            </span>
+                            {% endwith %}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-right">
+                            <div class="inline-flex gap-2">
+                                <a href="{% url 'pingpong:team_detail' team.pk %}" class="inline-flex items-center gap-1 px-3 py-1.5 text-sm font-medium hover:bg-secondary rounded-md transition-colors">
+                                    <img src="{% static 'pingpong/icons/eye.svg' %}" class="w-4 h-4" alt="">
+                                    View
+                                </a>
+                                {% if user.is_staff %}
+                                <a href="{% url 'pingpong:team_edit' team.pk %}" class="inline-flex items-center gap-1 px-3 py-1.5 text-sm font-medium hover:bg-secondary rounded-md transition-colors">
+                                    <img src="{% static 'pingpong/icons/pencil.svg' %}" class="w-4 h-4" alt="">
+                                    Edit
+                                </a>
+                                {% endif %}
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Mobile Team Cards -->
+        <div class="md:hidden divide-y">
+            {% for team in teams %}
+            <div class="p-4 hover:bg-muted/50 transition-colors active:bg-muted">
+                <!-- Team Header -->
+                <div class="flex items-start gap-3 mb-3">
+                    <!-- Avatar -->
+                    <div class="w-12 h-12 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-semibold text-lg flex-shrink-0">
+                        {% if team.name %}
+                            {{ team.name|slice:":1"|upper }}
+                        {% else %}
+                            T
+                        {% endif %}
+                    </div>
+
+                    <!-- Team Info -->
+                    <div class="flex-1 min-w-0">
+                        <div class="font-semibold text-base truncate">{{ team }}</div>
+                        <div class="text-xs text-muted-foreground mt-1">
+                            {{ team.players.count }} player{{ team.players.count|pluralize }}
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Players List -->
+                <div class="mb-3 p-3 bg-muted/50 rounded-md">
+                    <p class="text-xs font-medium text-muted-foreground mb-2">Team Members:</p>
+                    <div class="flex flex-col gap-2">
+                        {% for player in team.players.all %}
+                        <div class="flex items-center gap-2">
+                            <div class="w-6 h-6 rounded-full bg-secondary text-secondary-foreground flex items-center justify-center text-xs font-semibold">
+                                {{ player.name|slice:":1"|upper }}
+                            </div>
+                            <span class="text-sm">{{ player }}</span>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+
+                <!-- Stats -->
+                <div class="mb-3 flex gap-4">
+                    <div class="flex-1 p-2 bg-muted/50 rounded-md text-center">
+                        <p class="text-xs text-muted-foreground">Matches</p>
+                        {% with total_matches=team.matches_as_team1.count|add:team.matches_as_team2.count %}
+                        <p class="text-lg font-bold">{{ total_matches }}</p>
+                        {% endwith %}
+                    </div>
+                    <div class="flex-1 p-2 bg-success/10 rounded-md text-center">
+                        <p class="text-xs text-success/70">Wins</p>
+                        {% with wins=team.match_set.count %}
+                        <p class="text-lg font-bold text-success">{{ wins }}</p>
+                        {% endwith %}
+                    </div>
+                </div>
+
+                <!-- Action Buttons -->
+                <div class="flex gap-2">
+                    <a href="{% url 'pingpong:team_detail' team.pk %}" class="flex-1 inline-flex items-center justify-center gap-1 px-3 py-2 text-sm font-medium hover:bg-secondary rounded-md transition-colors border min-h-[44px]">
+                        <img src="{% static 'pingpong/icons/eye.svg' %}" class="w-4 h-4" alt="">
+                        View Details
+                    </a>
+                    {% if user.is_staff %}
+                    <a href="{% url 'pingpong:team_edit' team.pk %}" class="flex-1 inline-flex items-center justify-center gap-1 px-3 py-2 text-sm font-medium hover:bg-secondary rounded-md transition-colors border min-h-[44px]">
+                        <img src="{% static 'pingpong/icons/pencil.svg' %}" class="w-4 h-4" alt="">
+                        Edit
+                    </a>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Pagination -->
+    {% if is_paginated %}
+    <div class="flex items-center justify-between border-t bg-white px-4 py-3 rounded-lg">
+        <div class="flex flex-1 justify-between sm:hidden">
+            {% if page_obj.has_previous %}
+            <a href="?page={{ page_obj.previous_page_number }}" class="inline-flex items-center rounded-md border bg-white px-4 py-2.5 text-sm font-medium hover:bg-secondary min-h-[44px]">
+                Previous
+            </a>
+            {% else %}
+            <span class="inline-flex items-center rounded-md border bg-muted px-4 py-2.5 text-sm font-medium text-muted-foreground">
+                Previous
+            </span>
+            {% endif %}
+            {% if page_obj.has_next %}
+            <a href="?page={{ page_obj.next_page_number }}" class="ml-3 inline-flex items-center rounded-md border bg-white px-4 py-2.5 text-sm font-medium hover:bg-secondary min-h-[44px]">
+                Next
+            </a>
+            {% else %}
+            <span class="ml-3 inline-flex items-center rounded-md border bg-muted px-4 py-2.5 text-sm font-medium text-muted-foreground">
+                Next
+            </span>
+            {% endif %}
+        </div>
+        <div class="hidden sm:flex sm:flex-1 sm:items-center sm:justify-between">
+            <div>
+                <p class="text-sm text-muted-foreground">
+                    Showing <span class="font-medium">{{ page_obj.start_index }}</span> to <span class="font-medium">{{ page_obj.end_index }}</span> of <span class="font-medium">{{ page_obj.paginator.count }}</span> teams
+                </p>
+            </div>
+            <div>
+                <nav class="inline-flex -space-x-px rounded-md shadow-sm" aria-label="Pagination">
+                    {% if page_obj.has_previous %}
+                    <a href="?page={{ page_obj.previous_page_number }}" class="inline-flex items-center rounded-l-md border bg-white px-2 py-2 text-sm font-medium hover:bg-secondary">
+                        <img src="{% static 'pingpong/icons/chevron-left.svg' %}" class="w-5 h-5" alt="Previous">
+                    </a>
+                    {% endif %}
+
+                    {% for num in page_obj.paginator.page_range %}
+                        {% if page_obj.number == num %}
+                        <span class="inline-flex items-center border border-primary bg-primary px-4 py-2 text-sm font-medium text-primary-foreground">
+                            {{ num }}
+                        </span>
+                        {% elif num > page_obj.number|add:'-3' and num < page_obj.number|add:'3' %}
+                        <a href="?page={{ num }}" class="inline-flex items-center border bg-white px-4 py-2 text-sm font-medium hover:bg-secondary">
+                            {{ num }}
+                        </a>
+                        {% endif %}
+                    {% endfor %}
+
+                    {% if page_obj.has_next %}
+                    <a href="?page={{ page_obj.next_page_number }}" class="inline-flex items-center rounded-r-md border bg-white px-2 py-2 text-sm font-medium hover:bg-secondary">
+                        <img src="{% static 'pingpong/icons/chevron-right.svg' %}" class="w-5 h-5" alt="Next">
+                    </a>
+                    {% endif %}
+                </nav>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+</div>
+{% endblock %}
