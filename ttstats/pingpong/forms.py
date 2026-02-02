@@ -2,7 +2,7 @@ from django import forms
 from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.models import User
 
-from .models import Game, Match, Player, ScheduledMatch
+from .models import Game, Match, Player, ScheduledMatch, Team
 
 
 class MatchForm(forms.ModelForm):
@@ -87,6 +87,13 @@ class MatchEditForm(forms.ModelForm):
     class Meta:
         model = Match
         fields = ['location', 'notes']
+
+
+class TeamEditForm(forms.ModelForm):
+    """Form for editing completed teams - only name"""
+    class Meta:
+        model = Team
+        fields = ['name']
 
 
 class GameForm(forms.ModelForm):
