@@ -1618,6 +1618,14 @@ class TeamsListView(LoginRequiredMixin, ListView):
     model = Team
     paginate_by = 10
 
+    def get_queryset(self):
+        # Annota il conteggio dei giocatori e filtra solo team con 2 giocatori
+        return Team.objects.annotate(
+            player_count=Count('players')
+        ).filter(
+            player_count=2
+        ).prefetch_related('players').order_by('name')
+
 
 class TeamUpdateView(LoginRequiredMixin, UpdateView):
     """View to update an existing team"""

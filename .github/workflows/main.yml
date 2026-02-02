@@ -19,13 +19,39 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history for git diff
+
+      - name: Check for Python file changes
+        id: check_files
+        run: |
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            # For PRs, check files changed between base and head
+            CHANGED_FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.sha }})
+          else
+            # For pushes, check files in the current commit
+            CHANGED_FILES=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }})
+          fi
+          
+          echo "Changed files:"
+          echo "$CHANGED_FILES"
+          
+          if echo "$CHANGED_FILES" | grep -q "\.py$"; then
+            echo "Python files were changed"
+            echo "py_changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "No Python files were changed"
+            echo "py_changed=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Set up Python
+        if: steps.check_files.outputs.py_changed == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
       - name: Cache pip dependencies
+        if: steps.check_files.outputs.py_changed == 'true'
         uses: actions/cache@v3
         with:
           path: ~/.cache/pip
@@ -34,6 +60,7 @@ jobs:
             ${{ runner.os }}-pip-
 
       - name: Install dependencies
+        if: steps.check_files.outputs.py_changed == 'true'
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
@@ -41,6 +68,7 @@ jobs:
           pip install pytest pytest-django pytest-cov
 
       - name: Run tests with pytest
+        if: steps.check_files.outputs.py_changed == 'true'
         env:
           DJANGO_SETTINGS_MODULE: ttstats.settings
           SECRET_KEY: "test-secret-key-for-ci-only"
@@ -50,6 +78,7 @@ jobs:
           pytest --cov=pingpong --cov-config=../.coveragerc --cov-report=term --cov-report=html -v
 
       - name: Generate coverage summary
+        if: steps.check_files.outputs.py_changed == 'true'
         id: coverage
         run: |
           cd ttstats
@@ -82,8 +111,12 @@ jobs:
           # Save for next step
           echo "coverage=$COVERAGE" >> $GITHUB_OUTPUT
 
+      - name: Skip message
+        if: steps.check_files.outputs.py_changed == 'false'
+        run: |
+          echo "⏭️  Skipping tests - no Python files were changed" >> $GITHUB_STEP_SUMMARY
       - name: Comment coverage on PR
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && steps.check_files.outputs.py_changed == 'true'
         uses: actions/github-script@v7
         with:
           script: |
@@ -112,6 +145,7 @@ jobs:
             });
 
       - name: Upload coverage HTML report
+        if: steps.check_files.outputs.py_changed == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
