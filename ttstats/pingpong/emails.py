@@ -352,3 +352,73 @@ Consider changing your password if you suspect unauthorized access.
         )
     except Exception as e:
         print(f"❌ Email send error: {e}")
+
+
+def send_verification_email(user_profile):
+    """Send email verification email to user"""
+    user = user_profile.user
+    token = user_profile.create_verification_token()
+    user_profile.save()
+
+    # Build absolute URL
+    protocol = getattr(settings, "SITE_PROTOCOL", "http")
+    domain = getattr(settings, "SITE_DOMAIN", "localhost:8000")
+    verification_url = f"{protocol}://{domain}/pingpong/verify-email/{token}/"
+
+    subject = "Verify Your Email - TTStats"
+
+    message = f"""Hi {user.username},
+
+Thank you for signing up for TTStats!
+
+Please verify your email address by clicking the link below:
+{verification_url}
+
+This link will expire in 24 hours.
+
+If you didn't create an account, you can safely ignore this email.
+
+- TTStats Team
+"""
+
+    html_message = f"""
+    <html>
+    <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2>Welcome to TTStats!</h2>
+        <p>Hi {user.username},</p>
+        <p>Thank you for signing up! Please verify your email address to get started.</p>
+
+        <a href="{verification_url}"
+           style="display: inline-block; background: #2563eb; color: white; padding: 12px 24px;
+                  text-decoration: none; border-radius: 6px; font-weight: bold; margin: 20px 0;">
+            ✅ Verify Email Address
+        </a>
+
+        <p style="margin-top: 30px; color: #6b7280; font-size: 14px;">
+            This link will expire in 24 hours. If you didn't create an account, you can safely ignore this email.
+        </p>
+
+        <p>- TTStats Team</p>
+    </body>
+    </html>
+    """
+
+    # Print to console for development
+    print(f"\n{'=' * 60}")
+    print(f"📧 VERIFICATION EMAIL TO: {user.email}")
+    print(f"   Token: {token}")
+    print(f"   URL: {verification_url}")
+    print(f"{'=' * 60}\n")
+
+    # Send email
+    try:
+        send_mail(
+            subject=subject,
+            message=message,
+            html_message=html_message,
+            from_email="noreply@tabletennis.com",
+            recipient_list=[user.email],
+            fail_silently=True,
+        )
+    except Exception as e:
+        print(f"❌ Email send error: {e}")
