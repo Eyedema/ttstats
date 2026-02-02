@@ -46,9 +46,96 @@ class MatchListView(LoginRequiredMixin, ListView):
     template_name = "pingpong/match_list.html"
     context_object_name = "matches"
     model = Match
+    paginate_by = 10
 
     def get_queryset(self):
-        return Match.objects.all().order_by("-date_played")
+        return (
+            Match.objects.all()
+            .select_related("team1", "team2", "location", "winner")
+            .prefetch_related(
+                "team1__players__user__profile",
+                "team2__players__user__profile",
+                "winner__players__user__profile",
+                "games",
+                "confirmations",
+            )
+            .order_by("-date_played")
+        )
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+
+        # Cache scores using prefetched games data to avoid N+1 queries
+        # Games are already loaded via prefetch_related, so this is free
+        page_obj = context.get('page_obj')
+        if page_obj:
+            matches = page_obj.object_list
+        else:
+            matches = context.get('matches', [])
+
+        for match in matches:
+            # Force evaluation of prefetched data and cache as lists
+            # This prevents template from triggering new queries
+            games = list(match.games.all())
+            match.cached_team1_score = sum(
+                1 for g in games if g.winner_id == match.team1_id
+            )
+            match.cached_team2_score = sum(
+                1 for g in games if g.winner_id == match.team2_id
+            )
+
+            # Cache team players as lists to avoid queries in template
+            if match.team1:
+                match.cached_team1_players = list(match.team1.players.all())
+                match.cached_player1 = (
+                    match.cached_team1_players[0] if match.cached_team1_players else None
+                )
+            else:
+                match.cached_team1_players = []
+                match.cached_player1 = None
+
+            if match.team2:
+                match.cached_team2_players = list(match.team2.players.all())
+                match.cached_player2 = (
+                    match.cached_team2_players[0] if match.cached_team2_players else None
+                )
+            else:
+                match.cached_team2_players = []
+                match.cached_player2 = None
+
+            # Cache winner players
+            if match.winner:
+                match.cached_winner_players = list(match.winner.players.all())
+            else:
+                match.cached_winner_players = []
+
+            # Cache match_confirmed status to avoid N+1 queries
+            # This replicates the logic from Match.team1_confirmed and Match.team2_confirmed
+            # but uses the already-prefetched data
+            confirmations = list(match.confirmations.all())
+            confirmed_ids = {c.id for c in confirmations}
+
+            # Team 1 confirmation check
+            team1_verified_players = [
+                p for p in match.cached_team1_players
+                if p.user and hasattr(p.user, 'profile') and p.user.profile.email_verified
+            ]
+            team1_ids = {p.id for p in team1_verified_players}
+            team1_all_unverified = len(team1_verified_players) == 0
+            team1_confirmed = (team1_ids.issubset(confirmed_ids)) or team1_all_unverified
+
+            # Team 2 confirmation check
+            team2_verified_players = [
+                p for p in match.cached_team2_players
+                if p.user and hasattr(p.user, 'profile') and p.user.profile.email_verified
+            ]
+            team2_ids = {p.id for p in team2_verified_players}
+            team2_all_unverified = len(team2_verified_players) == 0
+            team2_confirmed = (team2_ids.issubset(confirmed_ids)) or team2_all_unverified
+
+            match.cached_match_confirmed = team1_confirmed and team2_confirmed
+
+        return context
 
 
 class MatchDetailView(LoginRequiredMixin, DetailView):
