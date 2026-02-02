@@ -1,0 +1,270 @@
+{% extends "pingpong/base.html" %}
+{% load static %}
+
+{% block title %}Record Match Results - {{ scheduled_match.team1 }} vs {{ scheduled_match.team2 }}{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto space-y-6">
+    <!-- Back button -->
+    <div>
+        <a href="{% url 'pingpong:scheduled_match_detail' scheduled_match.pk %}" class="inline-flex items-center gap-2 text-sm font-medium hover:underline min-h-[44px]">
+            <img src="{% static 'pingpong/icons/arrow-left.svg' %}" class="w-4 h-4" alt="">
+            Back to Scheduled Match
+        </a>
+    </div>
+
+    <!-- Info Banner -->
+    <div class="rounded-lg border-l-4 border-blue-600 bg-blue-50 dark:bg-blue-950/30 p-4">
+        <div class="flex items-start gap-3">
+            <img src="{% static 'pingpong/icons/info.svg' %}" class="w-5 h-5 text-blue-600 dark:text-blue-400 mt-0.5 flex-shrink-0" alt="">
+            <div>
+                <p class="text-sm font-semibold text-blue-900 dark:text-blue-100 mb-1">
+                    Recording Results for Scheduled Match
+                </p>
+                <p class="text-xs text-blue-800 dark:text-blue-200">
+                    Players and date/time have been pre-filled from the scheduled match. Fill in the match type and best-of settings, then add game scores on the next page.
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Form Card -->
+    <div class="rounded-lg border bg-white dark:bg-card">
+        <div class="p-6">
+            <!-- Header -->
+            <div class="flex items-center gap-4 mb-6 pb-6 border-b">
+                <div class="w-14 h-14 rounded-full bg-primary text-primary-foreground flex items-center justify-center flex-shrink-0">
+                    <img src="{% static 'pingpong/icons/clipboard-list.svg' %}" class="w-6 h-6 invert" alt="">
+                </div>
+                <div>
+                    <h2 class="text-2xl font-bold">Record Match Results</h2>
+                    <p class="text-sm text-muted-foreground">
+                        {{ scheduled_match.team1 }} vs {{ scheduled_match.team2 }}
+                    </p>
+                </div>
+            </div>
+
+            <!-- Form -->
+            <form method="post" class="space-y-6">
+                {% csrf_token %}
+
+                <!-- Match Type Toggle -->
+                <div class="space-y-2">
+                    <label for="{{ form.is_double.id_for_label }}" class="text-sm font-medium">
+                        Match Type
+                    </label>
+                    {{ form.is_double }}
+                    {% if form.is_double.errors %}
+                    <p class="text-sm text-destructive">{{ form.is_double.errors.0 }}</p>
+                    {% endif %}
+                </div>
+
+                <!-- Players Section -->
+                <div class="space-y-4">
+                    <h3 class="text-base font-semibold border-b pb-2">Players</h3>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <!-- Team 1 -->
+                        <div class="space-y-3 p-4 rounded-md border bg-muted/20">
+                            <p class="text-sm font-medium text-muted-foreground">Team 1</p>
+
+                            <div class="space-y-2">
+                                <label for="{{ form.player1.id_for_label }}" class="text-sm font-medium singles-only">
+                                    Player 1
+                                </label>
+                                <label for="{{ form.player1.id_for_label }}" class="text-sm font-medium doubles-only hidden">
+                                    Player 1 (Team 1)
+                                </label>
+                                {{ form.player1 }}
+                                {% if form.player1.help_text %}
+                                <p class="text-xs text-muted-foreground">{{ form.player1.help_text }}</p>
+                                {% endif %}
+                                {% if form.player1.errors %}
+                                <p class="text-sm text-destructive">{{ form.player1.errors.0 }}</p>
+                                {% endif %}
+                            </div>
+
+                            <div class="space-y-2 doubles-only hidden">
+                                <label for="{{ form.player3.id_for_label }}" class="text-sm font-medium">
+                                    Player 2 (Team 1)
+                                </label>
+                                {{ form.player3 }}
+                                {% if form.player3.help_text %}
+                                <p class="text-xs text-muted-foreground">{{ form.player3.help_text }}</p>
+                                {% endif %}
+                                {% if form.player3.errors %}
+                                <p class="text-sm text-destructive">{{ form.player3.errors.0 }}</p>
+                                {% endif %}
+                            </div>
+                        </div>
+
+                        <!-- Team 2 -->
+                        <div class="space-y-3 p-4 rounded-md border bg-muted/20">
+                            <p class="text-sm font-medium text-muted-foreground">Team 2</p>
+
+                            <div class="space-y-2">
+                                <label for="{{ form.player2.id_for_label }}" class="text-sm font-medium singles-only">
+                                    Player 2
+                                </label>
+                                <label for="{{ form.player2.id_for_label }}" class="text-sm font-medium doubles-only hidden">
+                                    Player 1 (Team 2)
+                                </label>
+                                {{ form.player2 }}
+                                {% if form.player2.help_text %}
+                                <p class="text-xs text-muted-foreground">{{ form.player2.help_text }}</p>
+                                {% endif %}
+                                {% if form.player2.errors %}
+                                <p class="text-sm text-destructive">{{ form.player2.errors.0 }}</p>
+                                {% endif %}
+                            </div>
+
+                            <div class="space-y-2 doubles-only hidden">
+                                <label for="{{ form.player4.id_for_label }}" class="text-sm font-medium">
+                                    Player 2 (Team 2)
+                                </label>
+                                {{ form.player4 }}
+                                {% if form.player4.help_text %}
+                                <p class="text-xs text-muted-foreground">{{ form.player4.help_text }}</p>
+                                {% endif %}
+                                {% if form.player4.errors %}
+                                <p class="text-sm text-destructive">{{ form.player4.errors.0 }}</p>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Match Details Section -->
+                <div class="space-y-4">
+                    <h3 class="text-base font-semibold border-b pb-2">Match Details</h3>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="space-y-2">
+                            <label for="{{ form.match_type.id_for_label }}" class="text-sm font-medium">
+                                Match Type <span class="text-destructive">*</span>
+                            </label>
+                            {{ form.match_type }}
+                            {% if form.match_type.errors %}
+                            <p class="text-sm text-destructive">{{ form.match_type.errors.0 }}</p>
+                            {% endif %}
+                        </div>
+
+                        <div class="space-y-2">
+                            <label for="{{ form.best_of.id_for_label }}" class="text-sm font-medium">
+                                Best Of <span class="text-destructive">*</span>
+                            </label>
+                            {{ form.best_of }}
+                            <p class="text-xs text-muted-foreground">Number of games (odd number, e.g., 3, 5, 7)</p>
+                            {% if form.best_of.errors %}
+                            <p class="text-sm text-destructive">{{ form.best_of.errors.0 }}</p>
+                            {% endif %}
+                        </div>
+
+                        <div class="space-y-2">
+                            <label for="{{ form.date_played.id_for_label }}" class="text-sm font-medium">
+                                Date & Time Played
+                            </label>
+                            {{ form.date_played }}
+                            <p class="text-xs text-muted-foreground">Pre-filled from scheduled date/time</p>
+                            {% if form.date_played.errors %}
+                            <p class="text-sm text-destructive">{{ form.date_played.errors.0 }}</p>
+                            {% endif %}
+                        </div>
+
+                        <div class="space-y-2">
+                            <label for="{{ form.location.id_for_label }}" class="text-sm font-medium">
+                                Location
+                            </label>
+                            {{ form.location }}
+                            {% if form.location.errors %}
+                            <p class="text-sm text-destructive">{{ form.location.errors.0 }}</p>
+                            {% endif %}
+                        </div>
+                    </div>
+
+                    <div class="space-y-2">
+                        <label for="{{ form.notes.id_for_label }}" class="text-sm font-medium">
+                            Notes
+                        </label>
+                        {{ form.notes }}
+                        {% if form.notes.errors %}
+                        <p class="text-sm text-destructive">{{ form.notes.errors.0 }}</p>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <!-- Form Errors -->
+                {% if form.non_field_errors %}
+                <div class="rounded-lg border border-destructive/20 bg-destructive/5 p-4">
+                    <div class="flex items-start gap-3">
+                        <img src="{% static 'pingpong/icons/circle-alert.svg' %}" class="w-5 h-5 text-destructive flex-shrink-0" alt="">
+                        <div>
+                            {% for error in form.non_field_errors %}
+                            <p class="text-sm text-destructive">{{ error }}</p>
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
+
+                <!-- Action Buttons -->
+                <div class="flex flex-col sm:flex-row gap-3 pt-4">
+                    <button type="submit" class="flex-1 inline-flex items-center justify-center gap-2 rounded-md bg-primary text-primary-foreground px-6 py-3 text-sm font-medium hover:bg-primary/90 transition-colors min-h-[44px]">
+                        <img src="{% static 'pingpong/icons/save.svg' %}" class="w-4 h-4 invert" alt="">
+                        Record Match & Add Games
+                    </button>
+                    <a href="{% url 'pingpong:scheduled_match_detail' scheduled_match.pk %}" class="flex-1 inline-flex items-center justify-center gap-2 rounded-md border border-input bg-background px-6 py-3 text-sm font-medium hover:bg-accent hover:text-accent-foreground transition-colors min-h-[44px]">
+                        Cancel
+                    </a>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Help Card -->
+    <div class="rounded-lg border bg-muted/30">
+        <div class="p-4">
+            <h3 class="text-sm font-semibold mb-2 flex items-center gap-2">
+                <img src="{% static 'pingpong/icons/lightbulb.svg' %}" class="w-4 h-4" alt="">
+                Next Steps
+            </h3>
+            <ul class="space-y-1 text-xs text-muted-foreground">
+                <li>1. Fill in the match type and best-of settings above</li>
+                <li>2. Click "Record Match & Add Games" to create the match</li>
+                <li>3. You'll be redirected to add individual game scores</li>
+                <li>4. After all games are added, both players will receive confirmation emails</li>
+            </ul>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Show/hide doubles fields based on is_double selection
+    document.addEventListener('DOMContentLoaded', function() {
+        const isDoubleField = document.getElementById('{{ form.is_double.id_for_label }}');
+        const doublesFields = document.querySelectorAll('.doubles-only');
+        const singlesFields = document.querySelectorAll('.singles-only');
+
+        function updateFieldVisibility() {
+            const isDouble = isDoubleField.value === 'True';
+            doublesFields.forEach(field => {
+                if (isDouble) {
+                    field.classList.remove('hidden');
+                } else {
+                    field.classList.add('hidden');
+                }
+            });
+            singlesFields.forEach(field => {
+                if (isDouble) {
+                    field.classList.add('hidden');
+                } else {
+                    field.classList.remove('hidden');
+                }
+            });
+        }
+
+        isDoubleField.addEventListener('change', updateFieldVisibility);
+        updateFieldVisibility();
+    });
+</script>
+{% endblock %}

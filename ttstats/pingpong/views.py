@@ -20,8 +20,8 @@ from django.views.generic import (
     UpdateView,
 )
 
-from .forms import GameForm, MatchEditForm, MatchForm, PlayerRegistrationForm, ScheduledMatchForm
-from .models import Game, Location, Match, Player, UserProfile, MatchConfirmation, ScheduledMatch
+from .forms import GameForm, MatchEditForm, MatchForm, PlayerRegistrationForm, ScheduledMatchForm, MatchConvertForm
+from .models import Game, Location, Match, Player, UserProfile, MatchConfirmation, ScheduledMatch, Team
 from .emails import send_scheduled_match_email, send_passkey_deleted_email
 
 try:
@@ -134,6 +134,9 @@ class MatchListView(LoginRequiredMixin, ListView):
             team2_confirmed = (team2_ids.issubset(confirmed_ids)) or team2_all_unverified
 
             match.cached_match_confirmed = team1_confirmed and team2_confirmed
+
+        # Add total count for stats display (not just paginated count)
+        context['total_matches'] = self.get_queryset().count()
 
         return context
 
@@ -1261,21 +1264,28 @@ class CalendarView(LoginRequiredMixin, TemplateView):
         except AttributeError:
             user_player = None
 
-        # Get scheduled matches for this month
+        # Get scheduled matches for this month (with match data for filtering)
         scheduled_matches = ScheduledMatch.objects.filter(
             scheduled_date__year=year,
             scheduled_date__month=month,
+        ).select_related('match', 'match__team1', 'match__team2').prefetch_related(
+            'match__confirmations'
         ).order_by("scheduled_date", "scheduled_time")
 
         # Get completed matches for this month
+        # Exclude matches with related_name to scheduled match for prefetching
         completed_matches = Match.objects.filter(
             date_played__year=year,
             date_played__month=month,
-        ).order_by("date_played")
+        ).select_related('scheduled_from').order_by("date_played")
 
         # Organize matches by day
         matches_by_day = {}
         for sm in scheduled_matches:
+            # Skip fully confirmed scheduled matches
+            if sm.match and sm.match.match_confirmed:
+                continue
+
             day = sm.scheduled_date.day
             if day not in matches_by_day:
                 matches_by_day[day] = []
@@ -1283,6 +1293,11 @@ class CalendarView(LoginRequiredMixin, TemplateView):
             matches_by_day[day].append(sm)
 
         for m in completed_matches:
+            # Skip matches that came from scheduled matches and aren't fully confirmed
+            # (they're already shown as scheduled matches above)
+            if not m.match_confirmed:
+                continue
+
             day = m.date_played.day
             if day not in matches_by_day:
                 matches_by_day[day] = []
@@ -1323,6 +1338,216 @@ class CalendarView(LoginRequiredMixin, TemplateView):
         )
 
         return context
+
+
+class ScheduledMatchDetailView(LoginRequiredMixin, DetailView):
+    """View to display scheduled match details and conversion status"""
+
+    model = ScheduledMatch
+    template_name = "pingpong/scheduled_match_detail.html"
+    context_object_name = "scheduled_match"
+
+    def get_queryset(self):
+        """Filter by user permissions"""
+        return ScheduledMatch.objects.all()
+
+    def get_object(self, queryset=None):
+        """Check permissions and return object"""
+        from django.core.exceptions import PermissionDenied
+        obj = super().get_object(queryset)
+
+        # Check if user can view this scheduled match
+        if not obj.user_can_view(self.request.user):
+            raise PermissionDenied("You don't have permission to view this scheduled match.")
+
+        return obj
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        scheduled_match = self.object
+        user = self.request.user
+
+        # Add conversion status
+        context['is_converted'] = scheduled_match.is_converted
+        context['is_fully_confirmed'] = scheduled_match.is_fully_confirmed
+
+        # Check if user can convert (participant or staff)
+        can_convert = scheduled_match.user_can_view(user)
+        context['can_convert'] = can_convert
+
+        return context
+
+
+class ScheduledMatchConvertView(LoginRequiredMixin, CreateView):
+    """View to convert scheduled match to played match"""
+
+    model = Match
+    form_class = MatchConvertForm
+    template_name = "pingpong/scheduled_match_convert.html"
+
+    def dispatch(self, request, *args, **kwargs):
+        """Check if already converted and permissions"""
+        # Check authentication first (before fetching object)
+        if not request.user.is_authenticated:
+            # Let LoginRequiredMixin handle the redirect
+            return super().dispatch(request, *args, **kwargs)
+
+        # User is authenticated, safe to fetch object
+        # Use _base_manager to bypass custom manager filtering
+        try:
+            self.scheduled_match = ScheduledMatch._base_manager.get(
+                pk=self.kwargs['scheduled_match_pk']
+            )
+        except ScheduledMatch.DoesNotExist:
+            from django.http import Http404
+            raise Http404("Scheduled match not found")
+
+        # Check permissions
+        if not self.scheduled_match.user_can_view(request.user):
+            messages.error(request, "You don't have permission to convert this scheduled match.")
+            return redirect("pingpong:calendar")
+
+        # Check if already converted
+        if self.scheduled_match.is_converted:
+            messages.info(request, "This scheduled match has already been converted to a played match.")
+            return redirect("pingpong:match_detail", pk=self.scheduled_match.match.pk)
+
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_form_kwargs(self):
+        """Pass scheduled_match and user to form"""
+        kwargs = super().get_form_kwargs()
+        kwargs['scheduled_match'] = self.scheduled_match
+        kwargs['user'] = self.request.user
+        return kwargs
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['scheduled_match'] = self.scheduled_match
+        context['locations'] = Location.objects.all()
+        return context
+
+    def get_success_url(self):
+        """Redirect to match detail page"""
+        return reverse_lazy("pingpong:match_detail", kwargs={"pk": self.object.pk})
+
+    def form_valid(self, form):
+        """Create match, link to scheduled match, handle teams"""
+        user = self.request.user
+        is_double = form.cleaned_data.get('is_double')
+        player1 = form.cleaned_data["player1"]
+        player2 = form.cleaned_data["player2"]
+        player3 = form.cleaned_data.get("player3")
+        player4 = form.cleaned_data.get("player4")
+
+        # Validation for singles matches
+        if not is_double:
+            if player3 or player4:
+                messages.error(self.request, "Singles matches cannot have Player 3 or Player 4!")
+                return self.form_invalid(form)
+
+        # Validation for doubles matches
+        if is_double:
+            if not player3 or not player4:
+                messages.error(self.request, "Doubles matches require all 4 players!")
+                return self.form_invalid(form)
+
+            # Ensure all 4 players are unique
+            players = [player1, player2, player3, player4]
+            if len(set(players)) != 4:
+                messages.error(self.request, "All players must be different!")
+                return self.form_invalid(form)
+
+        # Ensure player1 != player2
+        if player1 == player2:
+            messages.error(self.request, "Player 1 and Player 2 must be different!")
+            return self.form_invalid(form)
+
+        # Non-staff users must be participants
+        if not user.is_staff:
+            try:
+                user_player = user.player
+
+                # Ensure user is one of the players
+                if user_player not in [player1, player2, player3, player4]:
+                    messages.error(
+                        self.request, "You can only convert matches you participate in!"
+                    )
+                    return self.form_invalid(form)
+
+            except Player.DoesNotExist:
+                messages.error(
+                    self.request, "You must have a player profile to convert matches."
+                )
+                return self.form_invalid(form)
+
+        # Create or reuse Team objects (same logic as MatchCreateView)
+        if is_double:
+            # Create 2-player teams
+            team1 = (Team.objects
+                     .filter(players=player1)
+                     .filter(players=player3)
+                     .annotate(num_players=Count('players'))
+                     .filter(num_players=2)
+                     .first()
+                     )
+            if not team1:
+                team1 = Team.objects.create()
+                team1.players.set([player1, player3])
+                team1.save()
+
+            team2 = (Team.objects
+                     .filter(players=player2)
+                     .filter(players=player4)
+                     .annotate(num_players=Count('players'))
+                     .filter(num_players=2)
+                     .first()
+                     )
+            if not team2:
+                team2 = Team.objects.create()
+                team2.players.set([player2, player4])
+                team2.save()
+        else:
+            # Create 1-player teams
+            team1 = (Team.objects
+                     .filter(players=player1)
+                     .annotate(num_players=Count('players'))
+                     .filter(num_players=1)
+                     .first()
+                     )
+            if not team1:
+                team1 = Team.objects.create()
+                team1.players.set([player1])
+                team1.save()
+
+            team2 = (Team.objects
+                     .filter(players=player2)
+                     .annotate(num_players=Count('players'))
+                     .filter(num_players=1)
+                     .first()
+                     )
+            if not team2:
+                team2 = Team.objects.create()
+                team2.players.set([player2])
+                team2.save()
+
+        # Assign teams to match
+        form.instance.team1 = team1
+        form.instance.team2 = team2
+        form.instance.is_double = is_double
+
+        # Save the match
+        response = super().form_valid(form)
+
+        # Link scheduled match to this match
+        self.scheduled_match.match = self.object
+        self.scheduled_match.save()
+
+        messages.success(
+            self.request,
+            "Match recorded successfully! Now add game scores to complete the match."
+        )
+        return response
 
 
 class CustomLoginView(LoginView):

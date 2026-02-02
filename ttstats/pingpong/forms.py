@@ -201,3 +201,131 @@ class ScheduledMatchForm(forms.ModelForm):
                 raise forms.ValidationError("Scheduled date must be today or in the future!")
 
         return cleaned_data
+
+
+class MatchConvertForm(forms.ModelForm):
+    """Form for converting scheduled matches to played matches"""
+    player1 = forms.ModelChoiceField(
+        queryset=Player.objects.all(),
+        required=True,
+        widget=forms.Select(attrs={'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'})
+    )
+    player2 = forms.ModelChoiceField(
+        queryset=Player.objects.all(),
+        required=True,
+        widget=forms.Select(attrs={'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'})
+    )
+    player3 = forms.ModelChoiceField(
+        queryset=Player.objects.all(),
+        required=False,
+        widget=forms.Select(attrs={'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'})
+    )
+    player4 = forms.ModelChoiceField(
+        queryset=Player.objects.all(),
+        required=False,
+        widget=forms.Select(attrs={'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'})
+    )
+
+    class Meta:
+        model = Match
+        fields = ['is_double', 'date_played', 'location', 'match_type', 'best_of', 'notes']
+        widgets = {
+            'is_double': forms.Select(
+                choices=[(False, 'Single'), (True, 'Double')],
+                attrs={'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'}
+            ),
+            'date_played': forms.DateTimeInput(attrs={
+                'type': 'datetime-local',
+                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
+            }),
+            'location': forms.Select(attrs={
+                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
+            }),
+            'match_type': forms.Select(attrs={
+                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
+            }),
+            'best_of': forms.NumberInput(attrs={
+                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm',
+                'min': 1,
+                'max': 11,
+                'step': 2
+            }),
+            'notes': forms.Textarea(attrs={
+                'class': 'flex min-h-[80px] w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm',
+                'rows': 3
+            }),
+        }
+
+    def __init__(self, *args, **kwargs):
+        scheduled_match = kwargs.pop('scheduled_match', None)
+        user = kwargs.pop('user', None)
+        super().__init__(*args, **kwargs)
+
+        if scheduled_match:
+            # Pre-fill from scheduled match
+            from datetime import datetime
+            from django.utils import timezone
+
+            # Get players from teams
+            team1_players = list(scheduled_match.team1.players.all())
+            team2_players = list(scheduled_match.team2.players.all())
+
+            # Set is_double based on team sizes
+            is_double = len(team1_players) == 2 and len(team2_players) == 2
+            self.initial['is_double'] = is_double
+
+            # Set players
+            if team1_players:
+                self.initial['player1'] = team1_players[0]
+                if len(team1_players) > 1:
+                    self.initial['player3'] = team1_players[1]
+
+            if team2_players:
+                self.initial['player2'] = team2_players[0]
+                if len(team2_players) > 1:
+                    self.initial['player4'] = team2_players[1]
+
+            # Combine scheduled_date and scheduled_time into date_played
+            scheduled_datetime = datetime.combine(
+                scheduled_match.scheduled_date,
+                scheduled_match.scheduled_time
+            )
+            # Make it timezone-aware
+            scheduled_datetime = timezone.make_aware(scheduled_datetime)
+            self.initial['date_played'] = scheduled_datetime
+
+            # Pre-fill location and notes
+            if scheduled_match.location:
+                self.initial['location'] = scheduled_match.location
+            if scheduled_match.notes:
+                self.initial['notes'] = scheduled_match.notes
+
+            # Lock player fields for non-staff users
+            if user and not user.is_staff:
+                for field_name in ['player1', 'player2', 'player3', 'player4', 'is_double']:
+                    self.fields[field_name].disabled = True
+                    self.fields[field_name].help_text = "Players are locked based on the scheduled match"
+
+    def clean(self):
+        """Validate player uniqueness and singles/doubles requirements"""
+        cleaned_data = super().clean()
+        player1 = cleaned_data.get('player1')
+        player2 = cleaned_data.get('player2')
+        player3 = cleaned_data.get('player3')
+        player4 = cleaned_data.get('player4')
+
+        # Ensure players are different
+        players = [player1, player2, player3, player4]
+        players = [player for player in players if player]
+        if len(players) != len(set(players)):
+            raise forms.ValidationError("All players must be different!")
+
+        # Two players for singles
+        if not cleaned_data.get('is_double') and len(players) > 2:
+            raise forms.ValidationError("Only two players are required for a singles match!")
+
+        # Four players for doubles
+        if cleaned_data.get('is_double') and len(players) != 4:
+            raise forms.ValidationError("Four players are required for a doubles match!")
+
+        return cleaned_data
