@@ -1,6 +1,8 @@
 import json
+import logging
 from typing import Any
 
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import login
 from django.contrib.auth.decorators import login_required
@@ -9,8 +11,10 @@ from django.contrib.auth.views import LoginView
 from django.core.mail import send_mail
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db.models import Count, F, Q, Sum
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse_lazy
+from django.utils.decorators import method_decorator
 from django.views import View
 from django.views.generic import (
     CreateView,
@@ -19,6 +23,10 @@ from django.views.generic import (
     TemplateView,
     UpdateView,
 )
+from django_ratelimit.decorators import ratelimit
+from django_ratelimit.exceptions import Ratelimited
+
+logger = logging.getLogger(__name__)
 
 from .forms import GameForm, MatchEditForm, MatchForm, PlayerRegistrationForm, ScheduledMatchForm, MatchConvertForm
 from .models import Game, Location, Match, Player, UserProfile, MatchConfirmation, ScheduledMatch, Team
@@ -1017,8 +1025,15 @@ class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
         return context
 
 
+@method_decorator(
+    ratelimit(key='ip', rate='5/h', method='POST', block=True),
+    name='post'
+)
 class PlayerRegistrationView(CreateView):
-    """View that creates User + Player"""
+    """View that creates User + Player
+
+    Rate limited to 5 registrations per hour per IP to prevent spam.
+    """
 
     form_class = PlayerRegistrationForm
     template_name = "registration/signup.html"
@@ -1043,9 +1058,9 @@ class PlayerRegistrationView(CreateView):
         send_mail(
             subject="Verify your email address",
             message=f"Welcome {user.username}! Click here to verify your email: {verification_url}",
-            from_email="pingpong@ubaldopuocci.org",
+            from_email=settings.DEFAULT_FROM_EMAIL,
             recipient_list=[user.email],
-            fail_silently=True,
+            fail_silently=False,
         )
 
         return render(
@@ -1058,8 +1073,8 @@ class PlayerRegistrationView(CreateView):
         )
 
     def form_invalid(self, form):
-        """Add error message on failed registration"""
-        messages.error(self.request, "Please correct the errors below.")
+        """Return generic error to prevent account enumeration"""
+        messages.error(self.request, "Registration failed. Please check the form and try again.")
         return super().form_invalid(form)
 
 
@@ -1128,8 +1143,15 @@ class EmailVerifyView(View):
             return redirect("pingpong:login")
 
 
+@method_decorator(
+    ratelimit(key='user', rate='3/h', method='POST', block=True),
+    name='post'
+)
 class EmailResendVerificationView(LoginRequiredMixin, View):
-    """Resend verification email"""
+    """Resend verification email
+
+    Rate limited to 3 resends per hour per user to prevent abuse.
+    """
 
     def post(self, request):
         profile = request.user.profile
@@ -1146,18 +1168,21 @@ class EmailResendVerificationView(LoginRequiredMixin, View):
                 f"/pingpong/verify-email/{token}/"
             )
 
-            send_mail(
-                subject="Verify your email address",
-                message=f"Welcome {user.username}! Click here to verify your email: {verification_url}",
-                from_email="pingpong@ubaldopuocci.org",
-                recipient_list=[user.email],
-                fail_silently=True,
-            )
-
-            messages.success(
-                request,
-                f"Verification email sent! Check your inbox at {request.user.email}",
-            )
+            try:
+                send_mail(
+                    subject="Verify your email address",
+                    message=f"Welcome {user.username}! Click here to verify your email: {verification_url}",
+                    from_email=settings.DEFAULT_FROM_EMAIL,
+                    recipient_list=[user.email],
+                    fail_silently=False,
+                )
+                messages.success(
+                    request,
+                    f"Verification email sent! Check your inbox at {request.user.email}",
+                )
+            except Exception as e:
+                logger.error(f"Failed to send verification email to {user.email}: {e}")
+                messages.error(request, "Failed to send verification email. Please try again later.")
 
         # Redirect to player profile if exists, otherwise dashboard
         if hasattr(request.user, "player"):
@@ -1629,8 +1654,15 @@ class ScheduledMatchConvertView(LoginRequiredMixin, CreateView):
         return response
 
 
+@method_decorator(
+    ratelimit(key='ip', rate='5/15m', method='POST', block=True),
+    name='post'
+)
 class CustomLoginView(LoginView):
-    """Custom login view with tailwind styling"""
+    """Custom login view with tailwind styling
+
+    Rate limited to 5 login attempts per 15 minutes per IP to prevent brute force.
+    """
 
     template_name = "registration/login.html"
     redirect_authenticated_user = True
@@ -1640,13 +1672,6 @@ class CustomLoginView(LoginView):
 
     def form_valid(self, form):
         user = form.get_user()
-        print(f"DEBUG: User {user.username} logging in.")
-        print(
-            f"DEBUG: Email verified: {getattr(user.profile, 'email_verified', 'No profile')}"
-        )
-        print(
-            f"DEBUG: Verification token: {getattr(user.profile, 'email_verification_token', 'No profile')}"
-        )
         # Check if email is verified
         if hasattr(user, "profile") and not user.profile.email_verified:
             messages.warning(

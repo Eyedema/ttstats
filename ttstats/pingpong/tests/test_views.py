@@ -502,6 +502,7 @@ class TestHeadToHeadStatsView:
 # ===========================================================================
 
 @pytest.mark.django_db
+@pytest.mark.django_db
 class TestPlayerRegistrationView:
     def test_successful_signup(self):
         c = Client()
@@ -537,6 +538,27 @@ class TestPlayerRegistrationView:
         })
         assert len(mail.outbox) == 1
         assert "verify" in mail.outbox[0].body.lower()
+
+    def test_registration_rate_limited(self):
+        """Test that registration is rate limited after too many attempts"""
+        c = Client()
+        # Make 6 registration attempts (limit is 5/hour)
+        for i in range(6):
+            resp = c.post(reverse("pingpong:signup"), {
+                "username": f"ratelimituser{i}",
+                "email": f"ratelimit{i}@example.com",
+                "password1": "Str0ngP@ssw0rd!",
+                "password2": "Str0ngP@ssw0rd!",
+                "full_name": f"Rate Limit User {i}",
+                "nickname": "",
+                "playing_style": "normal",
+            })
+            if i < 5:
+                # First 5 should succeed (status 200 or form error)
+                assert resp.status_code in [200, 302]
+            else:
+                # 6th should be rate limited (403)
+                assert resp.status_code == 403
 
 
 # ===========================================================================
@@ -607,6 +629,32 @@ class TestEmailVerifyView:
         c = Client()
         resp = c.get(reverse("pingpong:email_verify", args=[token]))
         assert resp.status_code == 302
+
+    def test_expired_token_rejected(self):
+        """Test that expired tokens (>24 hours old) are rejected"""
+        u = UserFactory()
+        token = u.profile.email_verification_token
+        # Set token creation time to 25 hours ago
+        u.profile.email_verification_sent_at = timezone.now() - timedelta(hours=25)
+        u.profile.save()
+        c = Client()
+        resp = c.get(reverse("pingpong:email_verify", args=[token]))
+        assert resp.status_code == 302  # Redirects to login
+        u.profile.refresh_from_db()
+        assert u.profile.email_verified is False  # Still not verified
+
+    def test_fresh_token_accepted(self):
+        """Test that fresh tokens (within 24 hours) are accepted"""
+        u = UserFactory()
+        token = u.profile.email_verification_token
+        # Set token creation time to 23 hours ago (within limit)
+        u.profile.email_verification_sent_at = timezone.now() - timedelta(hours=23)
+        u.profile.save()
+        c = Client()
+        resp = c.get(reverse("pingpong:email_verify", args=[token]))
+        assert resp.status_code == 302  # Redirects to dashboard on success
+        u.profile.refresh_from_db()
+        assert u.profile.email_verified is True
 
 
 # ===========================================================================
