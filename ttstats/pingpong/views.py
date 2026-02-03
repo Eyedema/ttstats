@@ -192,8 +192,25 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
         # Filter to confirmed matches only (using Python property)
         confirmed_matches = [m for m in all_matches if m.match_confirmed]
 
+        # Pagination for matches
+        from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
+
+        matches_per_page = 10
+        paginator = Paginator(confirmed_matches, matches_per_page)
+        page = self.request.GET.get('page', 1)
+
+        try:
+            confirmed_matches_page = paginator.page(page)
+        except PageNotAnInteger:
+            confirmed_matches_page = paginator.page(1)
+        except EmptyPage:
+            confirmed_matches_page = paginator.page(paginator.num_pages)
+
+        # Use paginated matches for the loop
+        confirmed_matches_to_process = confirmed_matches_page.object_list
+
         # Add p1_score, p2_score, and player_won to each match from player's perspective
-        for match in confirmed_matches:
+        for match in confirmed_matches_to_process:
             if player in match.team1.players.all():
                 match.p1_score = match.team1_score
                 match.p2_score = match.team2_score
@@ -214,7 +231,9 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
         stats = self._calculate_streaks(confirmed_matches)
 
         context.update({
-            'matches': confirmed_matches,  # List of confirmed matches
+            'matches': confirmed_matches_to_process,  # List of confirmed matches
+            'page_obj': confirmed_matches_page,  # Paginator object
+            'is_paginated': paginator.num_pages > 1,  # Show pagination if more than 1 page
             'total_matches': total_matches,
             'wins': wins,
             'losses': losses,
@@ -616,9 +635,40 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
     """Display player rankings and statistics"""
 
     template_name = "pingpong/leaderboard.html"
+    paginate_by = 10
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
+
+        # Get filter parameters
+        match_type = self.request.GET.get('match_type', 'all')  # 'all', 'singles', 'doubles'
+        date_filter = self.request.GET.get('date_filter', 'all')  # 'all', 'month', '3months', '6months', 'year', 'custom'
+        start_date = self.request.GET.get('start_date', '')
+        end_date = self.request.GET.get('end_date', '')
+
+        # Calculate date range
+        from datetime import datetime, timedelta
+        from django.utils import timezone
+
+        filter_start_date = None
+        filter_end_date = timezone.now()
+
+        if date_filter == 'month':
+            filter_start_date = filter_end_date - timedelta(days=30)
+        elif date_filter == '3months':
+            filter_start_date = filter_end_date - timedelta(days=90)
+        elif date_filter == '6months':
+            filter_start_date = filter_end_date - timedelta(days=180)
+        elif date_filter == 'year':
+            filter_start_date = filter_end_date - timedelta(days=365)
+        elif date_filter == 'custom' and start_date and end_date:
+            try:
+                filter_start_date = timezone.make_aware(datetime.strptime(start_date, '%Y-%m-%d'))
+                filter_end_date = timezone.make_aware(
+                    datetime.strptime(end_date, '%Y-%m-%d').replace(hour=23, minute=59, second=59))
+            except ValueError:
+                # Invalid date format, default to all
+                filter_start_date = None
 
         # Fetch all players with comprehensive prefetching
         player_stats_qs = Player.objects.select_related('user').prefetch_related(
@@ -649,29 +699,62 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
             # Filter to confirmed only (using Python property)
             confirmed_matches = [m for m in all_matches if m.match_confirmed]
 
-            total_matches = len(confirmed_matches)
-            wins = len([m for m in confirmed_matches if m.winner and player in m.winner.players.all()])
+            # Apply filters
+            filtered_matches = confirmed_matches
+
+            # Filter by match type (singles/doubles)
+            if match_type == 'singles':
+                filtered_matches = [m for m in filtered_matches if not m.is_double]
+            elif match_type == 'doubles':
+                filtered_matches = [m for m in filtered_matches if m.is_double]
+
+            # Filter by date range
+            if filter_start_date:
+                filtered_matches = [
+                    m for m in filtered_matches
+                    if filter_start_date <= m.date_played <= filter_end_date
+                ]
+
+            total_matches = len(filtered_matches)
+            wins = len([m for m in filtered_matches if m.winner and player in m.winner.players.all()])
             losses = total_matches - wins
             win_rate = (wins / total_matches * 100) if total_matches > 0 else 0
-            total_games = sum(m.games.count() for m in confirmed_matches)
+            total_games = sum(m.games.count() for m in filtered_matches)
 
-            player_stats.append({
-                "player": player,
-                "total_matches": total_matches,
-                "total_games": total_games,
-                "wins": wins,
-                "losses": losses,
-                "win_rate": win_rate,
-                "elo_rating": player.elo_rating,
-                "elo_peak": player.elo_peak,
-            })
+            # Only include players with at least one match in the filtered period
+            if total_matches > 0:
+                player_stats.append({
+                    "player": player,
+                    "total_matches": total_matches,
+                    "total_games": total_games,
+                    "wins": wins,
+                    "losses": losses,
+                    "win_rate": win_rate,
+                    "elo_rating": player.elo_rating,
+                    "elo_peak": player.elo_peak,
+                })
 
         # Sort by Elo rating (desc), then by total wins (desc), then by win rate (desc)
         player_stats.sort(
             key=lambda x: (x["elo_rating"], x["wins"], x["win_rate"]), reverse=True
         )
 
+        # Apply top X filter
+        top_x = self.request.GET.get('top_x', '10')  # Default to top 10
+        try:
+            top_x_int = int(top_x)
+            if top_x_int > 0:
+                player_stats = player_stats[:top_x_int]
+        except (ValueError, TypeError):
+            player_stats = player_stats[:10]  # Default to 10 if invalid
+
         context["player_stats"] = player_stats
+        context["top_x"] = top_x
+        context["match_type"] = match_type
+        context["date_filter"] = date_filter
+        context["start_date"] = start_date
+        context["end_date"] = end_date
+
         return context
 
 

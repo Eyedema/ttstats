@@ -282,14 +282,16 @@
 
         <!-- Mobile header -->
         <div class="lg:hidden fixed top-0 left-0 right-0 bg-white border-b z-10">
-            <div class="flex items-center justify-between p-4">
-                <h1 class="text-xl font-bold flex items-center gap-2">
-                    <span class="text-2xl">🏓</span>
-                    <span>Table Tennis</span>
-                </h1>
+            <div class="flex items-center p-4">
                 <button id="mobile-menu-btn" class="p-2 hover:bg-secondary rounded-md">
                     <img src="{% static 'pingpong/icons/menu.svg' %}" class="w-6 h-6" alt="Menu">
                 </button>
+                <a href="{% url 'pingpong:dashboard' %}">
+                    <h1 class="text-xl font-bold flex items-center gap-2">
+                        <span class="text-2xl">🏓</span>
+                        <span>Table Tennis</span>
+                    </h1>
+                </a>
             </div>
         </div>
 
