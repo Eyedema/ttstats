@@ -44,4 +44,12 @@ urlpatterns = [
     path("teams/", views.TeamsListView.as_view(), name="team_list"),
     path("teams/<int:pk>/", views.TeamDetailView.as_view(), name="team_detail"),
     path("teams/<int:pk>/edit/", views.TeamUpdateView.as_view(), name="team_edit"),
+
+    path('championships/', views.ChampionshipListView.as_view(), name='championship_list'),
+    path('championships/create/', views.ChampionshipCreateView.as_view(), name='championship_create'),
+    path('championships/<int:pk>/', views.ChampionshipDetailView.as_view(), name='championship_detail'),
+    path('championships/<int:pk>/edit/', views.ChampionshipEditView.as_view(), name='championship_edit'),
+    path('championships/<int:pk>/register/', views.ChampionshipRegisterView.as_view(), name='championship_register'),
+    path('championships/<int:pk>/unregister/', views.ChampionshipUnregisterView.as_view(), name='championship_unregister'),
+    path('championships/<int:pk>/start/', views.ChampionshipStartView.as_view(), name='championship_start'),
 ]

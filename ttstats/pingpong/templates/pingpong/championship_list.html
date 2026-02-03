@@ -1,0 +1,228 @@
+{% extends "pingpong/base.html" %}
+{% load static %}
+
+{% block title %}Championships - Table Tennis Tracker{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto space-y-6">
+    <!-- Header -->
+    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <div>
+            <h2 class="text-2xl md:text-3xl font-bold tracking-tight">Championships 🏆</h2>
+            <p class="text-muted-foreground mt-1 text-sm md:text-base">Manage and participate in championships</p>
+        </div>
+        {% if user.is_staff or user.player %}
+        <a href="{% url 'pingpong:championship_create' %}" class="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors min-h-[44px]">
+            <img src="{% static 'pingpong/icons/plus.svg' %}" class="w-4 h-4 invert" alt="">
+            Create Championship
+        </a>
+        {% endif %}
+    </div>
+
+    <!-- Filters -->
+    <div class="rounded-lg border bg-white p-4">
+        <form method="get" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div class="space-y-2">
+                <label class="text-sm font-medium" for="status">Status</label>
+                <select name="status" id="status" onchange="this.form.submit()"
+                        class="flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring">
+                    <option value="all" {% if status_filter == 'all' %}selected{% endif %}>All Statuses</option>
+                    <option value="registration" {% if status_filter == 'registration' %}selected{% endif %}>Registration Open</option>
+                    <option value="scheduled" {% if status_filter == 'scheduled' %}selected{% endif %}>Scheduled</option>
+                    <option value="in_progress" {% if status_filter == 'in_progress' %}selected{% endif %}>In Progress</option>
+                    <option value="completed" {% if status_filter == 'completed' %}selected{% endif %}>Completed</option>
+                </select>
+            </div>
+            <div class="space-y-2">
+                <label class="text-sm font-medium" for="participation">Participation</label>
+                <select name="participation" id="participation" onchange="this.form.submit()"
+                        class="flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring">
+                    <option value="all" {% if participation_filter == 'all' %}selected{% endif %}>All Championships</option>
+                    <option value="my_championships" {% if participation_filter == 'my_championships' %}selected{% endif %}>My Championships</option>
+                    <option value="public" {% if participation_filter == 'public' %}selected{% endif %}>Public Only</option>
+                </select>
+            </div>
+        </form>
+    </div>
+
+    <!-- Championships List -->
+    {% if championships %}
+    <div class="grid grid-cols-1 gap-4">
+        {% for championship in championships %}
+        <div class="rounded-lg border bg-white overflow-hidden hover:shadow-md transition-shadow">
+            <div class="p-4 md:p-6">
+                <div class="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
+                    <!-- Championship Info -->
+                    <div class="flex-1">
+                        <div class="flex items-start gap-3 mb-3">
+                            <div class="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
+                                <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-6 h-6 text-primary" alt="">
+                            </div>
+                            <div class="flex-1">
+                                <a href="{% url 'pingpong:championship_detail' championship.pk %}" class="text-xl font-bold hover:underline">
+                                    {{ championship.name }}
+                                </a>
+                                <div class="flex flex-wrap gap-2 mt-2">
+                                    <!-- Status Badge -->
+                                    {% if championship.status == 'registration' %}
+                                    <span class="inline-flex items-center rounded-md bg-success/10 px-2 py-1 text-xs font-medium text-success">
+                                        <img src="{% static 'pingpong/icons/clock.svg' %}" class="w-3 h-3 mr-1" alt="">
+                                        Registration Open
+                                    </span>
+                                    {% elif championship.status == 'scheduled' %}
+                                    <span class="inline-flex items-center rounded-md bg-warning/10 px-2 py-1 text-xs font-medium text-warning">
+                                        Scheduled
+                                    </span>
+                                    {% elif championship.status == 'in_progress' %}
+                                    <span class="inline-flex items-center rounded-md bg-primary/10 px-2 py-1 text-xs font-medium text-primary">
+                                        In Progress
+                                    </span>
+                                    {% elif championship.status == 'completed' %}
+                                    <span class="inline-flex items-center rounded-md bg-muted px-2 py-1 text-xs font-medium">
+                                        Completed
+                                    </span>
+                                    {% endif %}
+                                    
+                                    <!-- Type Badge -->
+                                    <span class="inline-flex items-center rounded-md bg-secondary px-2 py-1 text-xs font-medium">
+                                        {{ championship.get_championship_type_display }}
+                                    </span>
+                                    
+                                    <!-- Public/Private Badge -->
+                                    {% if championship.is_public %}
+                                    <span class="inline-flex items-center rounded-md bg-blue-100 px-2 py-1 text-xs font-medium text-blue-700">
+                                        Public
+                                    </span>
+                                    {% else %}
+                                    <span class="inline-flex items-center rounded-md bg-purple-100 px-2 py-1 text-xs font-medium text-purple-700">
+                                        Private
+                                    </span>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+                        
+                        {% if championship.description %}
+                        <p class="text-sm text-muted-foreground mb-3 line-clamp-2">{{ championship.description }}</p>
+                        {% endif %}
+                        
+                        <!-- Championship Details Grid -->
+                        <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+                            <div>
+                                <p class="text-xs text-muted-foreground">Start Date</p>
+                                <p class="text-sm font-medium">{{ championship.start_date|date:"M d, Y" }}</p>
+                            </div>
+                            <div>
+                                <p class="text-xs text-muted-foreground">Participants</p>
+                                <p class="text-sm font-medium">{{ championship.current_participants_count }}/{{ championship.max_participants }}</p>
+                            </div>
+                            {% if championship.registration_deadline %}
+                            <div>
+                                <p class="text-xs text-muted-foreground">Registration Ends</p>
+                                <p class="text-sm font-medium">{{ championship.registration_deadline|date:"M d" }}</p>
+                            </div>
+                            {% endif %}
+                            {% if championship.location %}
+                            <div>
+                                <p class="text-xs text-muted-foreground">Location</p>
+                                <p class="text-sm font-medium">{{ championship.location.name }}</p>
+                            </div>
+                            {% endif %}
+                        </div>
+                    </div>
+                    
+                    <!-- Actions -->
+                    <div class="flex flex-col gap-2 w-full md:w-auto">
+                        <a href="{% url 'pingpong:championship_detail' championship.pk %}"
+                           class="inline-flex items-center justify-center gap-2 rounded-md border bg-white px-4 py-2 text-sm font-medium hover:bg-secondary transition-colors min-h-[44px]">
+                            <img src="{% static 'pingpong/icons/eye.svg' %}" class="w-4 h-4" alt="">
+                            View Details
+                        </a>
+                        {% if championship.is_registration_open %}
+                        <a href="{% url 'pingpong:championship_detail' championship.pk %}#register"
+                           class="inline-flex items-center justify-center gap-2 rounded-md bg-success px-4 py-2 text-sm font-medium text-white hover:bg-success/90 transition-colors min-h-[44px]">
+                            <img src="{% static 'pingpong/icons/user-plus.svg' %}" class="w-4 h-4 invert" alt="">
+                            Register
+                        </a>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    
+    <!-- Pagination -->
+    {% if is_paginated %}
+    <div class="flex items-center justify-between border-t bg-white px-4 py-3 rounded-lg">
+        <div class="flex flex-1 justify-between sm:hidden">
+            {% if page_obj.has_previous %}
+            <a href="?page={{ page_obj.previous_page_number }}&status={{ status_filter }}&participation={{ participation_filter }}" 
+               class="inline-flex items-center rounded-md border bg-white px-4 py-2.5 text-sm font-medium hover:bg-secondary min-h-[44px]">
+                Previous
+            </a>
+            {% endif %}
+            {% if page_obj.has_next %}
+            <a href="?page={{ page_obj.next_page_number }}&status={{ status_filter }}&participation={{ participation_filter }}" 
+               class="inline-flex items-center rounded-md border bg-white px-4 py-2.5 text-sm font-medium hover:bg-secondary min-h-[44px]">
+                Next
+            </a>
+            {% endif %}
+        </div>
+        <div class="hidden sm:flex sm:flex-1 sm:items-center sm:justify-between">
+            <p class="text-sm text-muted-foreground">
+                Showing {{ page_obj.start_index }} to {{ page_obj.end_index }} of {{ page_obj.paginator.count }} championships
+            </p>
+            <nav class="inline-flex -space-x-px rounded-md shadow-sm">
+                {% if page_obj.has_previous %}
+                <a href="?page={{ page_obj.previous_page_number }}&status={{ status_filter }}&participation={{ participation_filter }}" 
+                   class="inline-flex items-center rounded-l-md border bg-white px-2 py-2 text-sm font-medium hover:bg-secondary">
+                    <img src="{% static 'pingpong/icons/chevron-left.svg' %}" class="w-5 h-5" alt="Previous">
+                </a>
+                {% endif %}
+                
+                {% for num in page_obj.paginator.page_range %}
+                    {% if page_obj.number == num %}
+                    <span class="inline-flex items-center border border-primary bg-primary px-4 py-2 text-sm font-medium text-primary-foreground">
+                        {{ num }}
+                    </span>
+                    {% elif num > page_obj.number|add:'-3' and num < page_obj.number|add:'3' %}
+                    <a href="?page={{ num }}&status={{ status_filter }}&participation={{ participation_filter }}" 
+                       class="inline-flex items-center border bg-white px-4 py-2 text-sm font-medium hover:bg-secondary">
+                        {{ num }}
+                    </a>
+                    {% endif %}
+                {% endfor %}
+                
+                {% if page_obj.has_next %}
+                <a href="?page={{ page_obj.next_page_number }}&status={{ status_filter }}&participation={{ participation_filter }}" 
+                   class="inline-flex items-center rounded-r-md border bg-white px-2 py-2 text-sm font-medium hover:bg-secondary">
+                    <img src="{% static 'pingpong/icons/chevron-right.svg' %}" class="w-5 h-5" alt="Next">
+                </a>
+                {% endif %}
+            </nav>
+        </div>
+    </div>
+    {% endif %}
+    
+    {% else %}
+    <div class="rounded-lg border bg-white p-8 md:p-12 text-center">
+        <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-16 h-16 mx-auto text-muted-foreground mb-4 opacity-30" alt="">
+        <h3 class="text-xl font-semibold mb-2">No Championships Found</h3>
+        <p class="text-muted-foreground mb-6 text-sm md:text-base">
+            {% if status_filter != 'all' or participation_filter != 'all' %}
+                No championships match the selected filters.
+            {% else %}
+                Create your first championship to get started!
+            {% endif %}
+        </p>
+        {% if user.is_staff or user.player %}
+        <a href="{% url 'pingpong:championship_create' %}" class="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors min-h-[44px]">
+            <img src="{% static 'pingpong/icons/plus.svg' %}" class="w-4 h-4 invert" alt="">
+            Create Championship
+        </a>
+        {% endif %}
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

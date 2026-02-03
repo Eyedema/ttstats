@@ -1,0 +1,424 @@
+{% extends "pingpong/base.html" %}
+{% load static %}
+
+{% block title %}{{ championship.name }} - Table Tennis Tracker{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto space-y-6">
+    <!-- Back button -->
+    <div>
+        <a href="{% url 'pingpong:championship_list' %}" class="inline-flex items-center gap-2 text-sm font-medium hover:underline min-h-[44px]">
+            <img src="{% static 'pingpong/icons/arrow-left.svg' %}" class="w-4 h-4" alt="">
+            Back to Championships
+        </a>
+    </div>
+
+    <!-- Championship Header -->
+    <div class="rounded-lg border bg-gradient-to-r from-primary to-primary/90 text-primary-foreground overflow-hidden">
+        <div class="p-4 md:p-6">
+            <div class="flex flex-col md:flex-row items-center md:items-start gap-4 md:gap-6">
+                <div class="w-20 h-20 md:w-24 md:h-24 rounded-full bg-white/20 flex items-center justify-center ring-4 ring-white/30 flex-shrink-0">
+                    <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-10 h-10 md:w-12 md:h-12 invert" alt="">
+                </div>
+                
+                <div class="flex-1 text-center md:text-left">
+                    <h1 class="text-2xl md:text-3xl font-bold mb-2">{{ championship.name }}</h1>
+                    
+                    <div class="flex flex-wrap gap-2 justify-center md:justify-start mb-4">
+                        {% if championship.status == 'registration' %}
+                        <span class="inline-flex items-center rounded-md bg-success px-3 py-1 text-xs md:text-sm font-medium text-white">
+                            Registration Open
+                        </span>
+                        {% elif championship.status == 'scheduled' %}
+                        <span class="inline-flex items-center rounded-md bg-warning px-3 py-1 text-xs md:text-sm font-medium text-white">
+                            Scheduled
+                        </span>
+                        {% elif championship.status == 'in_progress' %}
+                        <span class="inline-flex items-center rounded-md bg-white/20 px-3 py-1 text-xs md:text-sm font-medium">
+                            In Progress
+                        </span>
+                        {% elif championship.status == 'completed' %}
+                        <span class="inline-flex items-center rounded-md bg-white/20 px-3 py-1 text-xs md:text-sm font-medium">
+                            Completed
+                        </span>
+                        {% endif %}
+                        
+                        <span class="inline-flex items-center rounded-md bg-white/20 px-3 py-1 text-xs md:text-sm font-medium">
+                            {{ championship.get_championship_type_display }}
+                        </span>
+                        
+                        {% if championship.is_public %}
+                        <span class="inline-flex items-center rounded-md bg-white/20 px-3 py-1 text-xs md:text-sm font-medium">
+                            Public
+                        </span>
+                        {% else %}
+                        <span class="inline-flex items-center rounded-md bg-white/20 px-3 py-1 text-xs md:text-sm font-medium">
+                            Private
+                        </span>
+                        {% endif %}
+                    </div>
+                    
+                    {% if championship.description %}
+                    <div class="bg-white/10 rounded-lg p-3 md:p-4 text-left">
+                        <p class="opacity-90 text-xs md:text-sm">{{ championship.description }}</p>
+                    </div>
+                    {% endif %}
+                </div>
+                
+                <!-- Quick Actions -->
+                <div class="flex flex-row md:flex-col gap-2 w-full md:w-auto">
+                    {% if championship.user_can_edit %}
+                    <a href="{% url 'pingpong:championship_edit' championship.pk %}"
+                       class="flex-1 md:flex-none inline-flex items-center justify-center gap-2 rounded-md border-2 border-white/30 bg-white/10 px-4 py-2.5 text-sm font-medium hover:bg-white/20 transition-colors min-h-[44px]">
+                        <img src="{% static 'pingpong/icons/pencil.svg' %}" class="w-4 h-4 invert" alt="">
+                        Edit
+                    </a>
+                    {% endif %}
+                    {% if championship.status == 'registration' and championship.user_can_edit and championship.current_participants_count >= 2 %}
+                    <form method="post" action="{% url 'pingpong:championship_start' championship.pk %}" class="flex-1 md:flex-none">
+                        {% csrf_token %}
+                        <button type="submit" class="w-full inline-flex items-center justify-center gap-2 rounded-md border-2 border-white/30 bg-white/10 px-4 py-2.5 text-sm font-medium hover:bg-white/20 transition-colors min-h-[44px]">
+                            <img src="{% static 'pingpong/icons/play.svg' %}" class="w-4 h-4 invert" alt="">
+                            Start Championship
+                        </button>
+                    </form>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Championship Info Cards -->
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
+        <div class="rounded-lg border bg-white p-4 md:p-6">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="text-xs md:text-sm font-medium text-muted-foreground">Start Date</p>
+                    <p class="text-lg md:text-xl font-bold mt-1">{{ championship.start_date|date:"M d, Y" }}</p>
+                </div>
+                <img src="{% static 'pingpong/icons/calendar.svg' %}" class="w-6 h-6 md:w-8 md:h-8 text-primary flex-shrink-0" alt="">
+            </div>
+        </div>
+        
+        <div class="rounded-lg border bg-white p-4 md:p-6">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="text-xs md:text-sm font-medium text-muted-foreground">Participants</p>
+                    <p class="text-lg md:text-xl font-bold mt-1">{{ championship.current_participants_count }}/{{ championship.max_participants }}</p>
+                </div>
+                <img src="{% static 'pingpong/icons/users.svg' %}" class="w-6 h-6 md:w-8 md:h-8 text-primary flex-shrink-0" alt="">
+            </div>
+        </div>
+        
+        <div class="rounded-lg border bg-white p-4 md:p-6">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="text-xs md:text-sm font-medium text-muted-foreground">Scheduled</p>
+                    <p class="text-lg md:text-xl font-bold mt-1">{{ scheduled_matches.count }}</p>
+                    <p class="text-xs text-muted-foreground mt-1">Matches</p>
+                </div>
+                <img src="{% static 'pingpong/icons/clock.svg' %}" class="w-6 h-6 md:w-8 md:h-8 text-warning flex-shrink-0" alt="">
+            </div>
+        </div>
+        
+        <div class="rounded-lg border bg-white p-4 md:p-6">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="text-xs md:text-sm font-medium text-muted-foreground">Completed</p>
+                    <p class="text-lg md:text-xl font-bold text-success mt-1">{{ completed_matches.count }}</p>
+                    <p class="text-xs text-muted-foreground mt-1">Matches</p>
+                </div>
+                <img src="{% static 'pingpong/icons/check.svg' %}" class="w-6 h-6 md:w-8 md:h-8 text-success flex-shrink-0" alt="">
+            </div>
+        </div>
+    </div>
+
+    <!-- Registration Section (if open) -->
+    {% if championship.is_registration_open %}
+    <div id="register" class="rounded-lg border border-success/20 bg-success/5 p-4 md:p-6">
+        <h3 class="text-lg font-semibold mb-4 flex items-center gap-2">
+            <img src="{% static 'pingpong/icons/user-plus.svg' %}" class="w-5 h-5 text-success" alt="">
+            Registration Open
+        </h3>
+        
+        {% if can_register %}
+        <form method="post" action="{% url 'pingpong:championship_register' championship.pk %}" class="space-y-4">
+            {% csrf_token %}
+            <div class="space-y-2">
+                <label class="text-sm font-medium">Select Your Team</label>
+                <select name="team" required class="flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring">
+                    <option value="">Choose a team...</option>
+                    {% for team in user_teams %}
+                    <option value="{{ team.pk }}">{{ team }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <button type="submit" class="inline-flex items-center justify-center gap-2 rounded-md bg-success px-4 py-2 text-sm font-medium text-white hover:bg-success/90 transition-colors min-h-[44px]">
+                <img src="{% static 'pingpong/icons/check.svg' %}" class="w-4 h-4 invert" alt="">
+                Register for Championship
+            </button>
+        </form>
+        {% elif championship.is_full %}
+        <div class="flex items-center gap-2 text-warning">
+            <img src="{% static 'pingpong/icons/alert-circle.svg' %}" class="w-5 h-5" alt="">
+            <p class="text-sm font-medium">Championship is full</p>
+        </div>
+        {% else %}
+        <div class="flex items-center gap-2 text-muted-foreground">
+            <img src="{% static 'pingpong/icons/info.svg' %}" class="w-5 h-5" alt="">
+            <p class="text-sm">You don't have an eligible team to register</p>
+        </div>
+        {% endif %}
+        
+        {% if championship.registration_deadline %}
+        <p class="text-xs text-muted-foreground mt-4">
+            Registration closes on {{ championship.registration_deadline|date:"F d, Y" }}
+        </p>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    <!-- Standings Table -->
+    {% if standings %}
+    <div class="rounded-lg border bg-white overflow-hidden">
+        <div class="border-b p-4 md:p-6 bg-muted/50">
+            <h2 class="text-lg md:text-xl font-semibold">Standings</h2>
+            <p class="text-xs md:text-sm text-muted-foreground mt-1">Championship leaderboard</p>
+        </div>
+        
+        <!-- Desktop Table -->
+        <div class="hidden lg:block overflow-x-auto">
+            <table class="w-full">
+                <thead class="border-b bg-muted/50">
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Pos</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Team</th>
+                        <th class="px-6 py-3 text-center text-xs font-medium text-muted-foreground uppercase tracking-wider">Played</th>
+                        <th class="px-6 py-3 text-center text-xs font-medium text-muted-foreground uppercase tracking-wider">W</th>
+                        <th class="px-6 py-3 text-center text-xs font-medium text-muted-foreground uppercase tracking-wider">L</th>
+                        <th class="px-6 py-3 text-center text-xs font-medium text-muted-foreground uppercase tracking-wider">GF</th>
+                        <th class="px-6 py-3 text-center text-xs font-medium text-muted-foreground uppercase tracking-wider">GA</th>
+                        <th class="px-6 py-3 text-center text-xs font-medium text-muted-foreground uppercase tracking-wider">GD</th>
+                        <th class="px-6 py-3 text-center text-xs font-medium text-muted-foreground uppercase tracking-wider">Pts</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y">
+                    {% for entry in standings %}
+                    <tr class="hover:bg-muted/50 {% if forloop.counter <= 3 %}bg-success/5{% endif %}">
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <div class="flex items-center">
+                                {% if forloop.counter == 1 %}
+                                <span class="text-2xl">🥇</span>
+                                {% elif forloop.counter == 2 %}
+                                <span class="text-2xl" style="filter: grayscale(0.3);">🥈</span>
+                                {% elif forloop.counter == 3 %}
+                                <span class="text-2xl" style="filter: brightness(0.8);">🥉</span>
+                                {% else %}
+                                <span class="text-lg font-semibold text-muted-foreground ml-2">{{ forloop.counter }}</span>
+                                {% endif %}
+                            </div>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <div class="font-medium">{{ entry.team }}</div>
+                            <div class="text-xs text-muted-foreground">
+                                {% for player in entry.team.players.all %}
+                                    {{ player.name }}{% if not forloop.last %}, {% endif %}
+                                {% endfor %}
+                            </div>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-center">{{ entry.played }}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-center text-success font-semibold">{{ entry.wins }}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-center text-destructive font-semibold">{{ entry.losses }}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-center">{{ entry.games_won }}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-center">{{ entry.games_lost }}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-center {% if entry.goal_difference > 0 %}text-success{% elif entry.goal_difference < 0 %}text-destructive{% endif %}">
+                            {% if entry.goal_difference > 0 %}+{% endif %}{{ entry.goal_difference }}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-center">
+                            <span class="inline-flex items-center rounded-md bg-primary/10 px-2.5 py-1 text-sm font-bold text-primary">
+                                {{ entry.points }}
+                            </span>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        
+        <!-- Mobile Cards -->
+        <div class="lg:hidden divide-y">
+            {% for entry in standings %}
+            <div class="p-4 {% if forloop.counter <= 3 %}bg-success/5{% endif %}">
+                <div class="flex items-start gap-3 mb-3">
+                    <div class="flex-shrink-0 w-10 h-10 flex items-center justify-center">
+                        {% if forloop.counter == 1 %}
+                        <span class="text-2xl">🥇</span>
+                        {% elif forloop.counter == 2 %}
+                        <span class="text-2xl">🥈</span>
+                        {% elif forloop.counter == 3 %}
+                        <span class="text-2xl">🥉</span>
+                        {% else %}
+                        <div class="w-8 h-8 rounded-full bg-muted flex items-center justify-center">
+                            <span class="text-sm font-bold text-muted-foreground">{{ forloop.counter }}</span>
+                        </div>
+                        {% endif %}
+                    </div>
+                    <div class="flex-1">
+                        <div class="font-semibold">{{ entry.team }}</div>
+                        <div class="text-xs text-muted-foreground">
+                            {% for player in entry.team.players.all %}
+                                {{ player.name }}{% if not forloop.last %}, {% endif %}
+                            {% endfor %}
+                        </div>
+                    </div>
+                    <div class="text-right">
+                        <div class="text-xl font-bold text-primary">{{ entry.points }}</div>
+                        <div class="text-xs text-muted-foreground">Points</div>
+                    </div>
+                </div>
+                <div class="grid grid-cols-4 gap-2 text-center text-sm">
+                    <div>
+                        <div class="text-xs text-muted-foreground">Played</div>
+                        <div class="font-semibold">{{ entry.played }}</div>
+                    </div>
+                    <div>
+                        <div class="text-xs text-success">Wins</div>
+                        <div class="font-semibold text-success">{{ entry.wins }}</div>
+                    </div>
+                    <div>
+                        <div class="text-xs text-destructive">Losses</div>
+                        <div class="font-semibold text-destructive">{{ entry.losses }}</div>
+                    </div>
+                    <div>
+                        <div class="text-xs text-muted-foreground">GD</div>
+                        <div class="font-semibold {% if entry.goal_difference > 0 %}text-success{% elif entry.goal_difference < 0 %}text-destructive{% endif %}">
+                            {% if entry.goal_difference > 0 %}+{% endif %}{{ entry.goal_difference }}
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Participants List -->
+    <div class="rounded-lg border bg-white overflow-hidden">
+        <div class="border-b p-4 md:p-6">
+            <h2 class="text-lg md:text-xl font-semibold">Participants ({{ championship.current_participants_count }})</h2>
+        </div>
+        <div class="p-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+            {% for team in championship.participants.all %}
+            <div class="flex items-center gap-3 p-3 rounded-lg border hover:bg-muted/50">
+                <div class="w-10 h-10 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-semibold flex-shrink-0">
+                    {{ team.name|slice:":1"|default:"T"|upper }}
+                </div>
+                <div class="flex-1 min-w-0">
+                    <div class="font-medium truncate">{{ team }}</div>
+                    <div class="text-xs text-muted-foreground truncate">
+                        {% for player in team.players.all %}
+                            {{ player.name }}{% if not forloop.last %}, {% endif %}
+                        {% endfor %}
+                    </div>
+                </div>
+                {% if championship.status == 'registration' and user.player in team.players.all %}
+                <form method="post" action="{% url 'pingpong:championship_unregister' championship.pk %}">
+                    {% csrf_token %}
+                    <input type="hidden" name="team" value="{{ team.pk }}">
+                    <button type="submit" class="text-xs text-destructive hover:underline">
+                        Unregister
+                    </button>
+                </form>
+                {% endif %}
+            </div>
+            {% empty %}
+            <div class="col-span-2 text-center py-8 text-muted-foreground">
+                No participants yet
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- Scheduled Matches -->
+    {% if scheduled_matches %}
+    <div class="rounded-lg border bg-white overflow-hidden">
+        <div class="border-b p-4 md:p-6">
+            <h2 class="text-lg md:text-xl font-semibold">Scheduled Matches</h2>
+            <p class="text-xs md:text-sm text-muted-foreground mt-1">Upcoming matches</p>
+        </div>
+        <div class="divide-y">
+            {% for match in scheduled_matches %}
+            <div class="p-4 hover:bg-muted/50">
+                <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                    <div class="flex-1">
+                        <div class="text-xs text-muted-foreground mb-1">
+                            {{ match.scheduled_date|date:"l, F d, Y" }} at {{ match.scheduled_time|time:"H:i" }}
+                        </div>
+                        <div class="font-semibold">
+                            {{ match.team1 }} <span class="text-muted-foreground">vs</span> {{ match.team2 }}
+                        </div>
+                        {% if match.location %}
+                        <div class="text-xs text-muted-foreground mt-1">
+                            📍 {{ match.location.name }}
+                        </div>
+                        {% endif %}
+                    </div>
+                    <a href="{% url 'pingpong:scheduled_match_detail' match.pk %}" 
+                       class="inline-flex items-center justify-center gap-1 px-3 py-2 text-sm font-medium hover:bg-secondary rounded-md transition-colors border min-h-[44px]">
+                        View Details
+                        <img src="{% static 'pingpong/icons/arrow-right.svg' %}" class="w-4 h-4" alt="">
+                    </a>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Completed Matches -->
+    {% if completed_matches %}
+    <div class="rounded-lg border bg-white overflow-hidden">
+        <div class="border-b p-4 md:p-6">
+            <h2 class="text-lg md:text-xl font-semibold">Completed Matches</h2>
+            <p class="text-xs md:text-sm text-muted-foreground mt-1">Match results</p>
+        </div>
+        <div class="divide-y">
+            {% for match in completed_matches %}
+            <div class="p-4 hover:bg-muted/50">
+                <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                    <div class="flex-1">
+                        <div class="text-xs text-muted-foreground mb-1">
+                            {{ match.date_played|date:"M d, Y" }}
+                        </div>
+                        <div class="flex items-center gap-3 flex-wrap">
+                            <div class="font-semibold {% if match.winner == match.team1 %}text-success{% endif %}">
+                                {{ match.team1 }}
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <span class="inline-flex items-center rounded-md px-3 py-1 text-base font-bold {% if match.winner == match.team1 %}bg-success/10 text-success{% else %}bg-muted{% endif %}">
+                                    {{ match.team1_score }}
+                                </span>
+                                <span class="text-muted-foreground font-bold">-</span>
+                                <span class="inline-flex items-center rounded-md px-3 py-1 text-base font-bold {% if match.winner == match.team2 %}bg-success/10 text-success{% else %}bg-muted{% endif %}">
+                                    {{ match.team2_score }}
+                                </span>
+                            </div>
+                            <div class="font-semibold {% if match.winner == match.team2 %}text-success{% endif %}">
+                                {{ match.team2 }}
+                            </div>
+                        </div>
+                    </div>
+                    <a href="{% url 'pingpong:match_detail' match.pk %}" 
+                       class="inline-flex items-center justify-center gap-1 px-3 py-2 text-sm font-medium hover:bg-secondary rounded-md transition-colors border min-h-[44px]">
+                        View Details
+                        <img src="{% static 'pingpong/icons/arrow-right.svg' %}" class="w-4 h-4" alt="">
+                    </a>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+</div>
+{% endblock %}

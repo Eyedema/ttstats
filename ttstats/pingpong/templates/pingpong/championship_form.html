@@ -1,0 +1,278 @@
+{% extends "pingpong/base.html" %}
+{% load static %}
+
+{% block title %}{% if object %}Edit Championship{% else %}Create Championship{% endif %} - Table Tennis Tracker{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto space-y-6">
+    <!-- Back button -->
+    <div>
+        <a href="{% if object %}{% url 'pingpong:championship_detail' object.pk %}{% else %}{% url 'pingpong:championship_list' %}{% endif %}"
+           class="inline-flex items-center gap-2 text-sm font-medium hover:underline min-h-[44px]">
+            <img src="{% static 'pingpong/icons/arrow-left.svg' %}" class="w-4 h-4" alt="">
+            Back to {% if object %}Championship{% else %}Championships{% endif %}
+        </a>
+    </div>
+
+    <!-- Form Card -->
+    <div class="rounded-lg border bg-white">
+        <div class="p-4 md:p-6">
+            <!-- Header -->
+            <div class="flex items-center gap-4 mb-6 pb-6 border-b">
+                <div class="w-12 h-12 md:w-14 md:h-14 rounded-full bg-primary text-primary-foreground flex items-center justify-center flex-shrink-0">
+                    {% if object %}
+                    <img src="{% static 'pingpong/icons/pencil.svg' %}" class="w-5 h-5 md:w-6 md:h-6 invert" alt="">
+                    {% else %}
+                    <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-5 h-5 md:w-6 md:h-6 invert" alt="">
+                    {% endif %}
+                </div>
+                <div>
+                    <h2 class="text-xl md:text-2xl font-bold">
+                        {% if object %}Edit Championship{% else %}Create Championship{% endif %}
+                    </h2>
+                    <p class="text-xs md:text-sm text-muted-foreground">
+                        {% if object %}Update championship details{% else %}Set up a new championship{% endif %}
+                    </p>
+                </div>
+            </div>
+
+            <!-- Display form errors if any -->
+            {% if form.non_field_errors %}
+            <div class="rounded-lg border border-destructive bg-destructive/10 p-4 mb-6">
+                <div class="flex items-start gap-3">
+                    <img src="{% static 'pingpong/icons/circle-alert.svg' %}" class="w-5 h-5 text-destructive flex-shrink-0" alt="">
+                    <span class="font-medium text-sm text-destructive">{{ form.non_field_errors }}</span>
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- Form -->
+            <form method="post" class="space-y-6">
+                {% csrf_token %}
+
+                <!-- Championship Name -->
+                <div class="space-y-2">
+                    <label class="text-sm font-medium leading-none" for="id_name">
+                        Championship Name <span class="text-destructive">*</span>
+                    </label>
+                    {{ form.name }}
+                    {% if form.name.errors %}
+                    <p class="text-sm text-destructive">{{ form.name.errors.0 }}</p>
+                    {% else %}
+                    <p class="text-sm text-muted-foreground">Give your championship a memorable name</p>
+                    {% endif %}
+                </div>
+
+                <!-- Description -->
+                <div class="space-y-2">
+                    <div class="flex items-center justify-between">
+                        <label class="text-sm font-medium leading-none" for="id_description">Description</label>
+                        <span class="text-xs text-muted-foreground">Optional</span>
+                    </div>
+                    {{ form.description }}
+                    {% if form.description.errors %}
+                    <p class="text-sm text-destructive">{{ form.description.errors.0 }}</p>
+                    {% else %}
+                    <p class="text-sm text-muted-foreground">Championship rules, format, prizes, etc.</p>
+                    {% endif %}
+                </div>
+
+                {% if not object %}
+                <!-- Championship Settings (only for creation) -->
+                <div class="border-t pt-6"></div>
+                <h3 class="text-base md:text-lg font-semibold mb-4">Championship Settings</h3>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <!-- Championship Type -->
+                    <div class="space-y-2">
+                        <label class="text-sm font-medium leading-none" for="id_championship_type">
+                            Championship Type <span class="text-destructive">*</span>
+                        </label>
+                        {{ form.championship_type }}
+                        {% if form.championship_type.errors %}
+                        <p class="text-sm text-destructive">{{ form.championship_type.errors.0 }}</p>
+                        {% endif %}
+                    </div>
+
+                    <!-- Max Participants -->
+                    <div class="space-y-2">
+                        <label class="text-sm font-medium leading-none" for="id_max_participants">
+                            Max Participants <span class="text-destructive">*</span>
+                        </label>
+                        {{ form.max_participants }}
+                        {% if form.max_participants.errors %}
+                        <p class="text-sm text-destructive">{{ form.max_participants.errors.0 }}</p>
+                        {% else %}
+                        <p class="text-sm text-muted-foreground">Maximum number of teams/players</p>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <!-- Public/Private -->
+                <div class="space-y-2">
+                    <div class="flex items-center gap-3 p-4 rounded-lg border">
+                        {{ form.is_public }}
+                        <label for="id_is_public" class="text-sm font-medium cursor-pointer">
+                            Public Championship (allow anyone to register)
+                        </label>
+                    </div>
+                    {% if form.is_public.errors %}
+                    <p class="text-sm text-destructive">{{ form.is_public.errors.0 }}</p>
+                    {% else %}
+                    <p class="text-sm text-muted-foreground">Uncheck for private championships with fixed participants</p>
+                    {% endif %}
+                </div>
+                {% endif %}
+
+                <!-- Dates and Location -->
+                <div class="border-t pt-6"></div>
+                <h3 class="text-base md:text-lg font-semibold mb-4">Schedule & Location</h3>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <!-- Start Date -->
+                    <div class="space-y-2">
+                        <label class="text-sm font-medium leading-none" for="id_start_date">
+                            Start Date <span class="text-destructive">*</span>
+                        </label>
+                        {{ form.start_date }}
+                        {% if form.start_date.errors %}
+                        <p class="text-sm text-destructive">{{ form.start_date.errors.0 }}</p>
+                        {% endif %}
+                    </div>
+
+                    {% if not object %}
+                    <!-- Registration Deadline (only for creation) -->
+                    <div class="space-y-2" id="registration-deadline-field">
+                        <label class="text-sm font-medium leading-none" for="id_registration_deadline">
+                            Registration Deadline
+                        </label>
+                        {{ form.registration_deadline }}
+                        {% if form.registration_deadline.errors %}
+                        <p class="text-sm text-destructive">{{ form.registration_deadline.errors.0 }}</p>
+                        {% else %}
+                        <p class="text-sm text-muted-foreground">Last day to register</p>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                </div>
+
+                <!-- Location -->
+                <div class="space-y-2">
+                    <div class="flex items-center justify-between">
+                        <label class="text-sm font-medium leading-none" for="id_location">Location</label>
+                        <span class="text-xs text-muted-foreground">Optional</span>
+                    </div>
+                    {{ form.location }}
+                    {% if form.location.errors %}
+                    <p class="text-sm text-destructive">{{ form.location.errors.0 }}</p>
+                    {% else %}
+                    <p class="text-sm text-muted-foreground">Default location for championship matches</p>
+                    {% endif %}
+                </div>
+
+                {% if object %}
+                <!-- Status (only for edit) -->
+                <div class="space-y-2">
+                    <label class="text-sm font-medium leading-none" for="id_status">
+                        Status <span class="text-destructive">*</span>
+                    </label>
+                    {{ form.status }}
+                    {% if form.status.errors %}
+                    <p class="text-sm text-destructive">{{ form.status.errors.0 }}</p>
+                    {% endif %}
+                </div>
+                {% endif %}
+
+                {% if not object and form.private_participants %}
+                <!-- Private Participants (only for private championships) -->
+                <div class="border-t pt-6" id="private-participants-section" style="display: none;">
+                    <h3 class="text-base md:text-lg font-semibold mb-4">Select Participants</h3>
+                    <div class="space-y-2">
+                        <label class="text-sm font-medium leading-none">
+                            Participants <span class="text-destructive">*</span>
+                        </label>
+                        <div class="max-h-64 overflow-y-auto border rounded-md p-3 space-y-2">
+                            {% for choice in form.private_participants %}
+                            <div class="flex items-center gap-2">
+                                {{ choice.tag }}
+                                <label for="{{ choice.id_for_label }}" class="text-sm cursor-pointer">
+                                    {{ choice.choice_label }}
+                                </label>
+                            </div>
+                            {% endfor %}
+                        </div>
+                        {% if form.private_participants.errors %}
+                        <p class="text-sm text-destructive">{{ form.private_participants.errors.0 }}</p>
+                        {% else %}
+                        <p class="text-sm text-muted-foreground">Select teams/players for this private championship</p>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endif %}
+
+                <!-- Form Actions -->
+                <div class="border-t pt-6"></div>
+                <div class="flex flex-col sm:flex-row gap-3 justify-end">
+                    <a href="{% if object %}{% url 'pingpong:championship_detail' object.pk %}{% else %}{% url 'pingpong:championship_list' %}{% endif %}"
+                       class="inline-flex items-center justify-center gap-2 rounded-md border bg-white px-4 py-2 text-sm font-medium hover:bg-secondary transition-colors min-h-[44px]">
+                        <img src="{% static 'pingpong/icons/x.svg' %}" class="w-4 h-4" alt="">
+                        Cancel
+                    </a>
+                    <button type="submit" class="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors min-h-[44px]">
+                        <img src="{% static 'pingpong/icons/check.svg' %}" class="w-4 h-4 invert" alt="">
+                        {% if object %}Update Championship{% else %}Create Championship{% endif %}
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Help Card -->
+    <div class="rounded-lg border border-primary/20 bg-primary/5 p-4">
+        <div class="flex gap-3">
+            <img src="{% static 'pingpong/icons/info.svg' %}" class="w-5 h-5 text-primary flex-shrink-0" alt="">
+            <div>
+                <h3 class="font-semibold text-sm mb-1">Championship Tips</h3>
+                <ul class="text-sm text-muted-foreground space-y-1 list-disc list-inside">
+                    {% if not object %}
+                    <li>Public championships allow anyone to register until the deadline</li>
+                    <li>Private championships have fixed participants selected at creation</li>
+                    <li>Schedule will be auto-generated with home and away matches (round-robin)</li>
+                    <li>Singles championships are for individual players (1v1)</li>
+                    <li>Doubles championships are for teams of 2 players (2v2)</li>
+                    {% else %}
+                    <li>You can update championship details, but participants are fixed</li>
+                    <li>Change status to "In Progress" when matches begin</li>
+                    <li>Mark as "Completed" when all matches are finished</li>
+                    {% endif %}
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Toggle registration deadline and private participants based on is_public checkbox
+    document.addEventListener('DOMContentLoaded', function() {
+        const isPublicCheckbox = document.getElementById('id_is_public');
+        const registrationDeadlineField = document.getElementById('registration-deadline-field');
+        const privateParticipantsSection = document.getElementById('private-participants-section');
+        
+        if (isPublicCheckbox && registrationDeadlineField && privateParticipantsSection) {
+            function toggleFields() {
+                if (isPublicCheckbox.checked) {
+                    registrationDeadlineField.style.display = 'block';
+                    privateParticipantsSection.style.display = 'none';
+                } else {
+                    registrationDeadlineField.style.display = 'none';
+                    privateParticipantsSection.style.display = 'block';
+                }
+            }
+            
+            isPublicCheckbox.addEventListener('change', toggleFields);
+            toggleFields(); // Initial state
+        }
+    });
+</script>
+
+{% endblock %}

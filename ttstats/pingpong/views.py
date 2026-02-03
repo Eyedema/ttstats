@@ -20,8 +20,9 @@ from django.views.generic import (
     UpdateView,
 )
 
-from .forms import GameForm, MatchEditForm, MatchForm, PlayerRegistrationForm, ScheduledMatchForm, MatchConvertForm
-from .models import Game, Location, Match, Player, UserProfile, MatchConfirmation, ScheduledMatch, Team
+from .forms import GameForm, MatchEditForm, MatchForm, PlayerRegistrationForm, ScheduledMatchForm, MatchConvertForm, \
+    ChampionshipCreateForm, ChampionshipEditForm, ChampionshipRegistrationForm
+from .models import Game, Location, Match, Player, UserProfile, MatchConfirmation, ScheduledMatch, Team, Championship
 from .emails import send_scheduled_match_email, send_passkey_deleted_email
 
 try:
@@ -635,7 +636,6 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
     """Display player rankings and statistics"""
 
     template_name = "pingpong/leaderboard.html"
-    paginate_by = 10
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -1886,3 +1886,326 @@ class TeamDetailView(LoginRequiredMixin, DetailView):
             'best_win': best_win_score if best_win_score else 'N/A',
             'worst_loss': worst_loss_score if worst_loss_score else 'N/A',
         }
+
+
+class ChampionshipListView(LoginRequiredMixin, ListView):
+    """View to list all championships"""
+
+    template_name = "pingpong/championship_list.html"
+    context_object_name = "championships"
+    model = Championship
+    paginate_by = 10
+
+    def get_queryset(self):
+        user = self.request.user
+
+        # Get filter parameters
+        status_filter = self.request.GET.get('status', 'all')
+        participation_filter = self.request.GET.get('participation', 'all')
+
+        queryset = Championship.objects.select_related(
+            'created_by', 'location'
+        ).prefetch_related(
+            'participants', 'participants__players'
+        )
+
+        # Filter by status
+        if status_filter != 'all':
+            queryset = queryset.filter(status=status_filter)
+
+        # Filter by participation
+        if participation_filter == 'my_championships':
+            # Championships where user is a participant
+            try:
+                player = user.player
+                queryset = queryset.filter(participants__players=player)
+            except:
+                queryset = queryset.none()
+        elif participation_filter == 'public':
+            queryset = queryset.filter(is_public=True)
+        else:
+            # Show public championships + championships user is participating in
+            try:
+                player = user.player
+                queryset = queryset.filter(
+                    Q(is_public=True) | Q(participants__players=player)
+                )
+            except:
+                queryset = queryset.filter(is_public=True)
+
+        return queryset.distinct().order_by('-start_date', '-created_at')
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['status_filter'] = self.request.GET.get('status', 'all')
+        context['participation_filter'] = self.request.GET.get('participation', 'all')
+        return context
+
+
+class ChampionshipDetailView(LoginRequiredMixin, DetailView):
+    """View to show championship details"""
+
+    template_name = "pingpong/championship_detail.html"
+    context_object_name = "championship"
+    model = Championship
+
+    def get_queryset(self):
+        # Only show championships the user can view
+        user = self.request.user
+        if user.is_staff or user.is_superuser:
+            return Championship.objects.all()
+
+        try:
+            player = user.player
+            return Championship.objects.filter(
+                Q(is_public=True) | Q(participants__players=player)
+            ).distinct()
+        except:
+            return Championship.objects.filter(is_public=True)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        championship = self.get_object()
+
+        # Get standings
+        context['standings'] = championship.get_standings()
+
+        # Get scheduled matches
+        context['scheduled_matches'] = championship.scheduled_matches.filter(
+            championship=championship
+        ).select_related(
+            'team1', 'team2', 'location'
+        ).prefetch_related(
+            'team1__players', 'team2__players'
+        ).order_by('scheduled_date', 'scheduled_time')
+
+        # Get completed matches
+        context['completed_matches'] = championship.matches.filter(
+            championship=championship
+        ).select_related(
+            'team1', 'team2', 'winner', 'location'
+        ).prefetch_related(
+            'team1__players', 'team2__players', 'games', 'confirmations'
+        ).order_by('-date_played')
+
+        # Check if user can register
+        try:
+            player = self.request.user.player
+            # Get user's teams that match championship type
+            user_teams = Team.objects.filter(players=player).annotate(
+                player_count=Count('players')
+            )
+
+            if championship.championship_type == 'singles':
+                user_teams = user_teams.filter(player_count=1)
+            else:
+                user_teams = user_teams.filter(player_count=2)
+
+            # Exclude already registered teams
+            user_teams = user_teams.exclude(
+                pk__in=championship.participants.values_list('pk', flat=True)
+            )
+
+            context['can_register'] = (
+                    championship.is_registration_open and
+                    not championship.is_full and
+                    user_teams.exists()
+            )
+            context['user_teams'] = user_teams
+        except:
+            context['can_register'] = False
+            context['user_teams'] = []
+
+        return context
+
+
+class ChampionshipCreateView(LoginRequiredMixin, CreateView):
+    """View to create a new championship"""
+
+    template_name = "pingpong/championship_form.html"
+    form_class = ChampionshipCreateForm
+    model = Championship
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        # Pass championship_type if provided in GET params
+        championship_type = self.request.GET.get('type', 'singles')
+        kwargs['championship_type'] = championship_type
+        return kwargs
+
+    def form_valid(self, form):
+        # Set creator
+        try:
+            form.instance.created_by = self.request.user.player
+        except:
+            messages.error(self.request, "You need a player profile to create championships")
+            return redirect('pingpong:championship_list')
+
+        # Save championship
+        response = super().form_valid(form)
+        championship = self.object
+
+        # Add participants for private championships
+        if not championship.is_public:
+            private_participants = form.cleaned_data.get('private_participants')
+            if private_participants:
+                championship.participants.set(private_participants)
+                # Change status to scheduled
+                championship.status = 'scheduled'
+                championship.save()
+
+                # Generate schedule
+                if championship.generate_schedule():
+                    messages.success(
+                        self.request,
+                        f"Championship '{championship.name}' created successfully! Schedule generated with {championship.scheduled_matches.count()} matches."
+                    )
+                else:
+                    messages.warning(
+                        self.request,
+                        f"Championship created but schedule generation failed. Add more participants."
+                    )
+        else:
+            messages.success(
+                self.request,
+                f"Championship '{championship.name}' created! Registration is now open."
+            )
+
+        return response
+
+    def get_success_url(self):
+        return reverse_lazy('pingpong:championship_detail', kwargs={'pk': self.object.pk})
+
+
+class ChampionshipEditView(LoginRequiredMixin, UpdateView):
+    """View to edit championship details"""
+
+    template_name = "pingpong/championship_form.html"
+    form_class = ChampionshipEditForm
+    model = Championship
+
+    def get_queryset(self):
+        # Only allow editing own championships or staff
+        user = self.request.user
+        if user.is_staff or user.is_superuser:
+            return Championship.objects.all()
+
+        try:
+            player = user.player
+            return Championship.objects.filter(created_by=player)
+        except:
+            return Championship.objects.none()
+
+    def form_valid(self, form):
+        messages.success(self.request, "Championship updated successfully!")
+        return super().form_valid(form)
+
+    def get_success_url(self):
+        return reverse_lazy('pingpong:championship_detail', kwargs={'pk': self.object.pk})
+
+
+class ChampionshipRegisterView(LoginRequiredMixin, View):
+    """View to register a team for a championship"""
+
+    def post(self, request, pk):
+        championship = get_object_or_404(Championship, pk=pk)
+        team_id = request.POST.get('team')
+
+        if not team_id:
+            messages.error(request, "Please select a team to register")
+            return redirect('pingpong:championship_detail', pk=pk)
+
+        team = get_object_or_404(Team, pk=team_id)
+
+        # Verify user is part of this team
+        try:
+            player = request.user.player
+            if player not in team.players.all():
+                messages.error(request, "You can only register your own teams")
+                return redirect('pingpong:championship_detail', pk=pk)
+        except:
+            messages.error(request, "You need a player profile to register")
+            return redirect('pingpong:championship_detail', pk=pk)
+
+        # Try to register
+        if championship.register_team(team):
+            messages.success(
+                request,
+                f"Successfully registered {team} for {championship.name}!"
+            )
+        else:
+            messages.error(
+                request,
+                f"Unable to register. Championship may be full or registration closed."
+            )
+
+        return redirect('pingpong:championship_detail', pk=pk)
+
+
+class ChampionshipStartView(LoginRequiredMixin, View):
+    """View to start a championship (close registration and generate schedule)"""
+
+    def post(self, request, pk):
+        championship = get_object_or_404(Championship, pk=pk)
+
+        # Check permissions
+        if not championship.user_can_edit(request.user):
+            messages.error(request, "You don't have permission to start this championship")
+            return redirect('pingpong:championship_detail', pk=pk)
+
+        # Check if championship can be started
+        if championship.status != 'registration':
+            messages.error(request, "Championship is not in registration phase")
+            return redirect('pingpong:championship_detail', pk=pk)
+
+        if championship.current_participants_count < 2:
+            messages.error(request, "Need at least 2 participants to start championship")
+            return redirect('pingpong:championship_detail', pk=pk)
+
+        # Generate schedule
+        if championship.generate_schedule():
+            championship.status = 'scheduled'
+            championship.save()
+            messages.success(
+                request,
+                f"Championship started! Generated {championship.scheduled_matches.count()} matches."
+            )
+        else:
+            messages.error(request, "Failed to generate championship schedule")
+
+        return redirect('pingpong:championship_detail', pk=pk)
+
+
+class ChampionshipUnregisterView(LoginRequiredMixin, View):
+    """View to unregister from a championship"""
+
+    def post(self, request, pk):
+        championship = get_object_or_404(Championship, pk=pk)
+        team_id = request.POST.get('team')
+
+        if not team_id:
+            messages.error(request, "Invalid team")
+            return redirect('pingpong:championship_detail', pk=pk)
+
+        team = get_object_or_404(Team, pk=team_id)
+
+        # Verify user is part of this team
+        try:
+            player = request.user.player
+            if player not in team.players.all():
+                messages.error(request, "You can only unregister your own teams")
+                return redirect('pingpong:championship_detail', pk=pk)
+        except:
+            messages.error(request, "You need a player profile")
+            return redirect('pingpong:championship_detail', pk=pk)
+
+        # Check if championship allows unregistration
+        if championship.status != 'registration':
+            messages.error(request, "Cannot unregister after championship has started")
+            return redirect('pingpong:championship_detail', pk=pk)
+
+        # Unregister
+        championship.participants.remove(team)
+        messages.success(request, f"Successfully unregistered {team} from {championship.name}")
+
+        return redirect('pingpong:championship_detail', pk=pk)

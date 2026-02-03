@@ -2,7 +2,7 @@ from django import forms
 from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.models import User
 
-from .models import Game, Match, Player, ScheduledMatch, Team
+from .models import Game, Match, Player, ScheduledMatch, Team, Championship
 
 
 class MatchForm(forms.ModelForm):
@@ -336,3 +336,186 @@ class MatchConvertForm(forms.ModelForm):
             raise forms.ValidationError("Four players are required for a doubles match!")
 
         return cleaned_data
+
+
+class ChampionshipCreateForm(forms.ModelForm):
+    """Form for creating a new championship"""
+
+    # For private championships, allow selecting participants upfront
+    private_participants = forms.ModelMultipleChoiceField(
+        queryset=Team.objects.none(),  # Will be set in __init__
+        required=False,
+        widget=forms.CheckboxSelectMultiple,
+        help_text="Select participants for private championship"
+    )
+
+    class Meta:
+        model = Championship
+        fields = [
+            'name',
+            'description',
+            'championship_type',
+            'is_public',
+            'max_participants',
+            'start_date',
+            'registration_deadline',
+            'location',
+        ]
+        widgets = {
+            'name': forms.TextInput(attrs={
+                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
+                'placeholder': 'e.g., Summer Championship 2026'
+            }),
+            'description': forms.Textarea(attrs={
+                'class': 'flex min-h-[100px] w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
+                'rows': 4,
+                'placeholder': 'Championship rules, format, prizes, etc.'
+            }),
+            'championship_type': forms.Select(attrs={
+                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2'
+            }),
+            'is_public': forms.CheckboxInput(attrs={
+                'class': 'h-4 w-4 rounded border-input'
+            }),
+            'max_participants': forms.NumberInput(attrs={
+                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
+                'min': 2,
+                'max': 100
+            }),
+            'start_date': forms.DateInput(attrs={
+                'type': 'date',
+                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2'
+            }),
+            'registration_deadline': forms.DateInput(attrs={
+                'type': 'date',
+                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2'
+            }),
+            'location': forms.Select(attrs={
+                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2'
+            }),
+        }
+
+    def __init__(self, *args, **kwargs):
+        championship_type = kwargs.pop('championship_type', 'singles')
+        super().__init__(*args, **kwargs)
+
+        # Filter teams based on championship type
+        if championship_type == 'singles':
+            # Only teams with 1 player
+            from django.db.models import Count
+            self.fields['private_participants'].queryset = Team.objects.annotate(
+                player_count=Count('players')
+            ).filter(player_count=1).order_by('name')
+        else:
+            # Only teams with 2 players
+            from django.db.models import Count
+            self.fields['private_participants'].queryset = Team.objects.annotate(
+                player_count=Count('players')
+            ).filter(player_count=2).order_by('name')
+
+        # Make registration_deadline required only for public championships
+        if self.instance and not self.instance.is_public:
+            self.fields['registration_deadline'].required = False
+
+    def clean(self):
+        cleaned_data = super().clean()
+        is_public = cleaned_data.get('is_public')
+        registration_deadline = cleaned_data.get('registration_deadline')
+        start_date = cleaned_data.get('start_date')
+        private_participants = cleaned_data.get('private_participants')
+        max_participants = cleaned_data.get('max_participants')
+
+        # Validate registration deadline for public championships
+        if is_public and not registration_deadline:
+            raise forms.ValidationError(
+                "Registration deadline is required for public championships"
+            )
+
+        # Validate dates
+        if registration_deadline and start_date:
+            if registration_deadline >= start_date:
+                raise forms.ValidationError(
+                    "Registration deadline must be before championship start date"
+                )
+
+        # Validate start date is in the future
+        if start_date:
+            from django.utils import timezone
+            if start_date < timezone.now().date():
+                raise forms.ValidationError(
+                    "Championship start date must be in the future"
+                )
+
+        # Validate private championship has participants
+        if not is_public:
+            if not private_participants or private_participants.count() < 2:
+                raise forms.ValidationError(
+                    "Private championships must have at least 2 participants"
+                )
+            if private_participants.count() > max_participants:
+                raise forms.ValidationError(
+                    f"Number of participants ({private_participants.count()}) exceeds maximum ({max_participants})"
+                )
+
+        return cleaned_data
+
+
+class ChampionshipEditForm(forms.ModelForm):
+    """Form for editing championship details (limited fields)"""
+
+    class Meta:
+        model = Championship
+        fields = ['name', 'description', 'location', 'status']
+        widgets = {
+            'name': forms.TextInput(attrs={
+                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2'
+            }),
+            'description': forms.Textarea(attrs={
+                'class': 'flex min-h-[100px] w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
+                'rows': 4
+            }),
+            'location': forms.Select(attrs={
+                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2'
+            }),
+            'status': forms.Select(attrs={
+                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2'
+            }),
+        }
+
+
+class ChampionshipRegistrationForm(forms.Form):
+    """Form for registering a team to a public championship"""
+
+    team = forms.ModelChoiceField(
+        queryset=Team.objects.none(),
+        required=True,
+        widget=forms.Select(attrs={
+            'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2'
+        }),
+        help_text="Select your team to register"
+    )
+
+    def __init__(self, *args, **kwargs):
+        championship = kwargs.pop('championship', None)
+        user = kwargs.pop('user', None)
+        super().__init__(*args, **kwargs)
+
+        if championship and user:
+            from django.db.models import Count
+
+            # Filter by team size
+            if championship.championship_type == 'singles':
+                teams_query = Team.objects.annotate(
+                    player_count=Count('players', distinct=True)
+                ).filter(player_count=1).filter(players__user=user)
+            else:
+                teams_query = Team.objects.annotate(
+                    player_count=Count('players')
+                ).filter(player_count=2).filter(players__user=user)
+
+            # Exclude already registered teams
+            teams_query = teams_query.exclude(
+                pk__in=championship.participants.values_list('pk', flat=True)
+            )
+
+            self.fields['team'].queryset = teams_query.distinct()

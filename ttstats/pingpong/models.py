@@ -118,6 +118,14 @@ class Match(models.Model):
     team2 = models.ForeignKey(
         Team, on_delete=models.CASCADE, related_name="matches_as_team2", null=True
     )
+    championship = models.ForeignKey(
+        'Championship',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='matches',
+        help_text="Championship this match belongs to (if any)"
+    )
     date_played = models.DateTimeField(default=timezone.now)
     location = models.ForeignKey(
         Location, on_delete=models.SET_NULL, null=True, blank=True
@@ -362,6 +370,14 @@ class ScheduledMatch(models.Model):
     team2 = models.ForeignKey(
         Team, on_delete=models.CASCADE, related_name="scheduled_matches_as_team2"
     )
+    championship = models.ForeignKey(
+        'Championship',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='scheduled_matches',
+        help_text="Championship this match belongs to (if any)"
+    )
     scheduled_date = models.DateField(help_text="Date of the scheduled match")
     scheduled_time = models.TimeField(help_text="Time of the scheduled match")
     location = models.ForeignKey(
@@ -476,3 +492,282 @@ class EloHistory(models.Model):
     def __str__(self):
         sign = '+' if self.rating_change >= 0 else ''
         return f"{self.player} {sign}{self.rating_change} ({self.match})"
+
+
+class Championship(models.Model):
+    """Championship model"""
+
+    CHAMPIONSHIP_STATUS = [
+        ('registration', 'Registration Open'),
+        ('scheduled', 'Scheduled'),
+        ('in_progress', 'In Progress'),
+        ('completed', 'Completed'),
+        ('cancelled', 'Cancelled'),
+    ]
+
+    CHAMPIONSHIP_TYPE = [
+        ('singles', 'Singles (1v1)'),
+        ('doubles', 'Doubles (2v2)'),
+    ]
+
+    name = models.CharField(max_length=200, help_text="Championship name")
+    description = models.TextField(blank=True, help_text="Championship description and rules")
+
+    # Championship settings
+    championship_type = models.CharField(
+        max_length=20,
+        choices=CHAMPIONSHIP_TYPE,
+        default='singles',
+        help_text="Singles or Doubles championship"
+    )
+    is_public = models.BooleanField(
+        default=True,
+        help_text="Public championship allow anyone to register. Private championships have fixed participants."
+    )
+    max_participants = models.IntegerField(
+        default=8,
+        help_text="Maximum number of participants (players or teams)"
+    )
+
+    # Dates
+    start_date = models.DateField(help_text="Championship start date")
+    end_date = models.DateField(null=True, blank=True, help_text="Expected or actual end date")
+    registration_deadline = models.DateField(
+        null=True,
+        blank=True,
+        help_text="Last day to register (only for public championships)"
+    )
+
+    # Status
+    status = models.CharField(
+        max_length=20,
+        choices=CHAMPIONSHIP_STATUS,
+        default='registration'
+    )
+
+    # Participants (Teams - can be single player or doubles team)
+    participants = models.ManyToManyField(
+        Team,
+        related_name='championships',
+        blank=True,
+        help_text="Registered teams/players"
+    )
+
+    # Matches
+    # Note: matches are linked via ForeignKey in Match model
+
+    # Creator and timestamps
+    created_by = models.ForeignKey(
+        Player,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='championships_created'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    # Location (optional)
+    location = models.ForeignKey(
+        Location,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        help_text="Default location for championship matches"
+    )
+
+    class Meta:
+        ordering = ['-start_date', '-created_at']
+
+    def __str__(self):
+        return f"{self.name} ({self.get_status_display()})"
+
+    @property
+    def is_registration_open(self):
+        """Check if registration is still open"""
+        if not self.is_public:
+            return False
+        if self.status != 'registration':
+            return False
+        if self.registration_deadline:
+            from django.utils import timezone
+            return timezone.now().date() <= self.registration_deadline
+        return True
+
+    @property
+    def current_participants_count(self):
+        """Get current number of participants"""
+        return self.participants.count()
+
+    @property
+    def is_full(self):
+        """Check if championship is at capacity"""
+        return self.current_participants_count >= self.max_participants
+
+    def can_register(self, team):
+        """Check if a team can register for this championship"""
+        if not self.is_registration_open:
+            return False
+        if self.is_full:
+            return False
+        if self.participants.filter(pk=team.pk).exists():
+            return False
+        # Check team size matches championship type
+        team_size = team.players.count()
+        if self.championship_type == 'singles' and team_size != 1:
+            return False
+        if self.championship_type == 'doubles' and team_size != 2:
+            return False
+        return True
+
+    def register_team(self, team):
+        """Register a team for the championship"""
+        if self.can_register(team):
+            self.participants.add(team)
+            return True
+        return False
+
+    def generate_schedule(self):
+        """Generate round-robin schedule for the championship"""
+        from datetime import timedelta
+        from django.utils import timezone
+
+        participants = list(self.participants.all())
+        n = len(participants)
+
+        if n < 2:
+            return False
+
+        # Delete existing scheduled matches for this championship
+        ScheduledMatch.objects.filter(championship=self).delete()
+
+        # Generate round-robin pairings
+        matches = []
+
+        # Home and away (andata e ritorno)
+        for round_num in range(2):  # 0 = andata, 1 = ritorno
+            for i in range(n):
+                for j in range(i + 1, n):
+                    if round_num == 0:
+                        team1, team2 = participants[i], participants[j]
+                    else:
+                        team1, team2 = participants[j], participants[i]
+
+                    matches.append((team1, team2))
+
+        # Create scheduled matches
+        # Space matches out by days starting from start_date
+        current_date = self.start_date
+        match_time = timezone.now().time().replace(hour=18, minute=0, second=0)
+
+        for idx, (team1, team2) in enumerate(matches):
+            ScheduledMatch.objects.create(
+                championship=self,
+                team1=team1,
+                team2=team2,
+                scheduled_date=current_date,
+                scheduled_time=match_time,
+                location=self.location,
+                created_by=self.created_by
+            )
+            # Space matches - 1 per day for simplicity
+            # Adjust this logic based on your needs
+            current_date += timedelta(days=1)
+
+        return True
+
+    def get_standings(self):
+        """
+        Calculate championship standings.
+
+        Ranking criteria:
+        1. Points (3 for win, 0 for loss)
+        2. Head-to-head record (if tied on points)
+        3. Games difference (games won - games lost)
+        4. Total games won
+        5. Total games lost
+        """
+        from django.db.models import Q
+
+        standings = []
+
+        for team in self.participants.all():
+            # Get all confirmed matches for this team in this championship
+            matches = Match.objects.filter(
+                championship=self,
+            ).filter(
+                Q(team1=team) | Q(team2=team)
+            ).select_related('team1', 'team2', 'winner').prefetch_related(
+                'confirmations', 'games'
+            )
+
+            # Filter to confirmed matches only
+            confirmed_matches = [m for m in matches if m.match_confirmed]
+
+            played = len(confirmed_matches)
+            wins = 0
+            losses = 0
+            games_won = 0
+            games_lost = 0
+
+            for match in confirmed_matches:
+                is_team1 = match.team1 == team
+                team_score = match.team1_score if is_team1 else match.team2_score
+                opponent_score = match.team2_score if is_team1 else match.team1_score
+
+                games_won += team_score
+                games_lost += opponent_score
+
+                if match.winner == team:
+                    wins += 1
+                else:
+                    losses += 1
+
+            points = (wins * 3)
+            goal_difference = games_won - games_lost
+
+            standings.append({
+                'team': team,
+                'played': played,
+                'wins': wins,
+                'losses': losses,
+                'games_won': games_won,
+                'games_lost': games_lost,
+                'goal_difference': goal_difference,
+                'points': points,
+            })
+
+        # Sort by: points (desc), goal difference (desc), goals for (desc), goals against (asc)
+        standings.sort(
+            key=lambda x: (x['points'], x['goal_difference'], x['games_won'], -x['games_lost']),
+            reverse=True
+        )
+
+        return standings
+
+    def user_can_view(self, user):
+        """Check if user can view this championship"""
+        if not user or not user.is_authenticated:
+            return False
+        if self.is_public:
+            return True
+        if user.is_staff or user.is_superuser:
+            return True
+        # Check if user is a participant
+        try:
+            player = user.player
+            return self.participants.filter(players=player).exists()
+        except:
+            return False
+
+    def user_can_edit(self, user):
+        """Check if user can edit this championship"""
+        if not user or not user.is_authenticated:
+            return False
+        if user.is_staff or user.is_superuser:
+            return True
+        try:
+            player = user.player
+            return self.created_by == player
+        except:
+            return False
