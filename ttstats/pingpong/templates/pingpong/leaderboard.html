@@ -25,7 +25,7 @@
                 </button>
             </div>
 
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <!-- Match Type Filter -->
                 <div class="space-y-2">
                     <label class="text-sm font-medium leading-none" for="match_type">
@@ -57,6 +57,21 @@
                         <option value="custom" {% if date_filter == 'custom' %}selected{% endif %}>Custom Range</option>
                     </select>
                     <p class="text-xs text-muted-foreground">Filter by date range</p>
+                </div>
+
+                <!-- Top X Filter -->
+                <div class="space-y-2">
+                    <label class="text-sm font-medium leading-none" for="top_x">
+                        Show Top Players
+                    </label>
+                    <select name="top_x" id="top_x"
+                            class="flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2">
+                        <option value="10" {% if top_x == '10' %}selected{% endif %}>Top 10</option>
+                        <option value="20" {% if top_x == '20' %}selected{% endif %}>Top 20</option>
+                        <option value="50" {% if top_x == '50' %}selected{% endif %}>Top 50</option>
+                        <option value="100" {% if top_x == '100' %}selected{% endif %}>Top 100</option>
+                    </select>
+                    <p class="text-xs text-muted-foreground">Limit results by ranking</p>
                 </div>
             </div>
 
@@ -91,7 +106,7 @@
             </div>
 
             <!-- Active Filters Display -->
-            {% if match_type != 'all' or date_filter != 'all' %}
+            {% if match_type != 'all' or date_filter != 'all' or top_x != '10' %}
             <div class="flex flex-wrap gap-2 pt-4 border-t">
                 <span class="text-sm text-muted-foreground">Active filters:</span>
                 {% if match_type == 'singles' %}
@@ -130,6 +145,13 @@
                 <span class="inline-flex items-center gap-1 rounded-md bg-primary/10 px-2 py-1 text-xs font-medium">
                     Custom: {{ start_date }} to {{ end_date }}
                     <button type="button" onclick="clearFilter('date_filter')" class="hover:text-destructive">×</button>
+                </span>
+                {% endif %}
+
+                {% if top_x != '10' %}
+                <span class="inline-flex items-center gap-1 rounded-md bg-primary/10 px-2 py-1 text-xs font-medium">
+                    Top {{ top_x }}
+                    <button type="button" onclick="clearFilter('top_x')" class="hover:text-destructive">×</button>
                 </span>
                 {% endif %}
             </div>
@@ -389,6 +411,10 @@
             if (this.value !== 'custom') {
                 document.getElementById('filter-form').submit();
             }
+        });
+
+        document.getElementById('top_x').addEventListener('change', function() {
+            document.getElementById('filter-form').submit();
         });
     });
 </script>

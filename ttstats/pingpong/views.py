@@ -192,8 +192,25 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
         # Filter to confirmed matches only (using Python property)
         confirmed_matches = [m for m in all_matches if m.match_confirmed]
 
+        # Pagination for matches
+        from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
+
+        matches_per_page = 10
+        paginator = Paginator(confirmed_matches, matches_per_page)
+        page = self.request.GET.get('page', 1)
+
+        try:
+            confirmed_matches_page = paginator.page(page)
+        except PageNotAnInteger:
+            confirmed_matches_page = paginator.page(1)
+        except EmptyPage:
+            confirmed_matches_page = paginator.page(paginator.num_pages)
+
+        # Use paginated matches for the loop
+        confirmed_matches_to_process = confirmed_matches_page.object_list
+
         # Add p1_score, p2_score, and player_won to each match from player's perspective
-        for match in confirmed_matches:
+        for match in confirmed_matches_to_process:
             if player in match.team1.players.all():
                 match.p1_score = match.team1_score
                 match.p2_score = match.team2_score
@@ -214,7 +231,9 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
         stats = self._calculate_streaks(confirmed_matches)
 
         context.update({
-            'matches': confirmed_matches,  # List of confirmed matches
+            'matches': confirmed_matches_to_process,  # List of confirmed matches
+            'page_obj': confirmed_matches_page,  # Paginator object
+            'is_paginated': paginator.num_pages > 1,  # Show pagination if more than 1 page
             'total_matches': total_matches,
             'wins': wins,
             'losses': losses,
@@ -720,7 +739,17 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
             key=lambda x: (x["elo_rating"], x["wins"], x["win_rate"]), reverse=True
         )
 
+        # Apply top X filter
+        top_x = self.request.GET.get('top_x', '10')  # Default to top 10
+        try:
+            top_x_int = int(top_x)
+            if top_x_int > 0:
+                player_stats = player_stats[:top_x_int]
+        except (ValueError, TypeError):
+            player_stats = player_stats[:10]  # Default to 10 if invalid
+
         context["player_stats"] = player_stats
+        context["top_x"] = top_x
         context["match_type"] = match_type
         context["date_filter"] = date_filter
         context["start_date"] = start_date
