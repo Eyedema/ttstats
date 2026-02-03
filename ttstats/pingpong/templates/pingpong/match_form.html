@@ -5,6 +5,140 @@
 {% block title %}{% if object %}Edit Match{% else %}Record New Match{% endif %} - Table Tennis Tracker{% endblock %}
 
 
+{% block extra_css %}
+<!-- Tom Select CSS -->
+<link href="https://cdn.jsdelivr.net/npm/tom-select@2.4.4/dist/css/tom-select.bootstrap5.min.css" rel="stylesheet">
+<style>
+    /* Custom styling for Tom Select to match shadcn/ui */
+    .ts-wrapper.form-select .ts-control,
+    .ts-wrapper.single .ts-control {
+        border: 1px solid hsl(214.3 31.8% 91.4%) !important;
+        border-radius: 0.375rem !important;
+        background-color: white !important;
+        padding: 0.5rem 0.75rem !important;
+        min-height: 3rem !important;
+        font-size: 1rem !important;
+        line-height: 1.5 !important;
+    }
+
+    @media (min-width: 768px) {
+        .ts-wrapper.form-select .ts-control,
+        .ts-wrapper.single .ts-control {
+            font-size: 0.875rem !important;
+            line-height: 1.25rem !important;
+        }
+    }
+
+    .ts-wrapper.form-select .ts-control:focus,
+    .ts-wrapper.single .ts-control:focus {
+        outline: none !important;
+        border-color: hsl(222.2 84% 4.9%) !important;
+        box-shadow: 0 0 0 2px hsl(222.2 84% 4.9% / 0.2) !important;
+    }
+
+    /* CRITICAL: Force white background on ALL dropdowns */
+    .ts-dropdown,
+    .ts-wrapper .ts-dropdown,
+    .ts-dropdown.form-select,
+    .ts-dropdown.single {
+        background-color: white !important;
+        border: 1px solid hsl(214.3 31.8% 91.4%) !important;
+        border-radius: 0.375rem !important;
+        box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1) !important;
+        margin-top: 0.25rem !important;
+    }
+
+    /* Dropdown content wrapper */
+    .ts-dropdown-content,
+    .ts-wrapper .ts-dropdown-content {
+        background-color: white !important;
+    }
+
+    /* Options styling */
+    .ts-dropdown .option,
+    .ts-wrapper .ts-dropdown .option {
+        padding: 0.5rem 0.75rem !important;
+        cursor: pointer !important;
+        background-color: white !important;
+        color: hsl(222.2 84% 4.9%) !important;
+    }
+
+    .ts-dropdown .option:hover,
+    .ts-wrapper .ts-dropdown .option:hover,
+    .ts-dropdown .option.active,
+    .ts-wrapper .ts-dropdown .option.active {
+        background-color: hsl(210 40% 96.1%) !important;
+        color: hsl(222.2 47.4% 11.2%) !important;
+    }
+
+    .ts-dropdown .option.selected,
+    .ts-wrapper .ts-dropdown .option.selected {
+        background-color: hsl(222.2 47.4% 11.2%) !important;
+        color: hsl(210 40% 98%) !important;
+    }
+
+    .ts-wrapper.disabled .ts-control,
+    .ts-wrapper.disabled .ts-control * {
+        cursor: not-allowed !important;
+        background-color: hsl(210 40% 96.1%) !important;
+        opacity: 0.6 !important;
+    }
+
+    /* Error state */
+    .ts-wrapper.error .ts-control {
+        border-color: hsl(0 84.2% 60.2%) !important;
+    }
+
+    /* Search input styling */
+    .ts-wrapper .ts-control input,
+    .ts-control input {
+        font-size: 1rem !important;
+        color: hsl(222.2 84% 4.9%) !important;
+        background-color: transparent !important;
+    }
+
+    @media (min-width: 768px) {
+        .ts-wrapper .ts-control input,
+        .ts-control input {
+            font-size: 0.875rem !important;
+        }
+    }
+
+    .ts-dropdown .no-results,
+    .ts-wrapper .ts-dropdown .no-results {
+        padding: 0.5rem 0.75rem !important;
+        color: hsl(215.4 16.3% 46.9%) !important;
+        font-style: italic !important;
+        background-color: white !important;
+    }
+
+    /* Remove default dropdown arrow since Tom Select has its own */
+    .ts-wrapper .ts-control::after {
+        border-color: hsl(222.2 84% 4.9%) transparent transparent !important;
+        border-style: solid !important;
+        border-width: 5px 5px 0 !important;
+        content: "" !important;
+        position: absolute !important;
+        right: 15px !important;
+        top: 50% !important;
+        margin-top: -2.5px !important;
+    }
+
+    .ts-wrapper.dropdown-active .ts-control::after {
+        border-width: 0 5px 5px !important;
+        margin-top: -7.5px !important;
+    }
+
+    /* Ensure optgroup headers also have white background */
+    .ts-dropdown .optgroup-header,
+    .ts-wrapper .ts-dropdown .optgroup-header {
+        background-color: white !important;
+        color: hsl(215.4 16.3% 46.9%) !important;
+    }
+</style>
+{% endblock %}
+
+
 {% block content %}
 <div class="max-w-3xl mx-auto space-y-6">
     <!-- Back button -->
@@ -162,15 +296,17 @@
                                     <span class="text-destructive">*</span>
                                 </label>
                                 <select name="player1" id="id_player1"
-                                        class="flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.player1.errors %}border-destructive{% endif %} {% if form.player1.field.disabled %}bg-muted cursor-not-allowed{% endif %}"
+                                        class="player-select flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.player1.errors %}border-destructive{% endif %} "
                                         required {% if form.player1.field.disabled %}disabled{% endif %}>
                                     <option value="">Select Player 1...</option>
                                     {% for player in form.player1.field.queryset %}
-                                    <option value="{{ player.pk }}" {% if form.player1.value == player.pk or form.player1.value|stringformat:"s" == player.pk|stringformat:"s" %}selected{% endif %}>{{ player }}</option>
+                                    <option value="{{ player.pk }}" {% if form.player1.value == player.pk %}selected{% endif %}>
+                                        {{ player.nickname|default:player.name }}
+                                    </option>
                                     {% endfor %}
                                 </select>
                                 {% if form.player1.errors %}
-                                <p class="text-xs md:text-sm text-destructive">{{ form.player1.errors.0 }}</p>
+                                <p class="text-xs text-destructive">{{ form.player1.errors.0 }}</p>
                                 {% endif %}
                             </div>
 
@@ -183,11 +319,13 @@
                                     <span class="text-destructive">*</span>
                                 </label>
                                 <select name="player2" id="id_player2"
-                                        class="flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.player2.errors %}border-destructive{% endif %}"
+                                        class="player-select flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.player2.errors %}border-destructive{% endif %}"
                                         required>
                                     <option value="">Select Player 2...</option>
                                     {% for player in form.player2.field.queryset %}
-                                    <option value="{{ player.pk }}" {% if form.player2.value == player.pk or form.player2.value|stringformat:"s" == player.pk|stringformat:"s" %}selected{% endif %}>{{ player }}</option>
+                                    <option value="{{ player.pk }}" {% if form.player2.value == player.pk %}selected{% endif %}>
+                                        {{ player.nickname|default:player.name }}
+                                    </option>
                                     {% endfor %}
                                 </select>
                                 {% if form.player2.errors %}
@@ -209,10 +347,12 @@
                                     <span class="text-destructive doubles-required hidden">*</span>
                                 </label>
                                 <select name="player3" id="id_player3"
-                                        class="flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.player3.errors %}border-destructive{% endif %}">
+                                        class="player-select flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.player3.errors %}border-destructive{% endif %}">
                                     <option value="">Select Player 3...</option>
                                     {% for player in form.player3.field.queryset %}
-                                    <option value="{{ player.pk }}" {% if form.player3.value == player.pk or form.player3.value|stringformat:"s" == player.pk|stringformat:"s" %}selected{% endif %}>{{ player }}</option>
+                                    <option value="{{ player.pk }}" {% if form.player3.value == player.pk %}selected{% endif %}>
+                                        {{ player.nickname|default:player.name }}
+                                    </option>
                                     {% endfor %}
                                 </select>
                                 {% if form.player3.errors %}
@@ -228,10 +368,12 @@
                                     <span class="text-destructive doubles-required hidden">*</span>
                                 </label>
                                 <select name="player4" id="id_player4"
-                                        class="flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.player4.errors %}border-destructive{% endif %}">
+                                        class="player-select flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.player4.errors %}border-destructive{% endif %}">
                                     <option value="">Select Player 4...</option>
                                     {% for player in form.player4.field.queryset %}
-                                    <option value="{{ player.pk }}" {% if form.player4.value == player.pk or form.player4.value|stringformat:"s" == player.pk|stringformat:"s" %}selected{% endif %}>{{ player }}</option>
+                                    <option value="{{ player.pk }}" {% if form.player4.value == player.pk %}selected{% endif %}>
+                                        {{ player.nickname|default:player.name }}
+                                    </option>
                                     {% endfor %}
                                 </select>
                                 {% if form.player4.errors %}
@@ -443,6 +585,9 @@
     </div>
 </div>
 
+<!-- Tom Select JS -->
+<script src="https://cdn.jsdelivr.net/npm/tom-select@2.4.4/dist/js/tom-select.complete.min.js"></script>
+
 <script>
     document.addEventListener('DOMContentLoaded', function() {
         const isDoubleSelect = document.getElementById('id_is_double');
@@ -451,6 +596,101 @@
         const doublesRequired = document.querySelectorAll('.doubles-required');
         const player3Select = document.getElementById('id_player3');
         const player4Select = document.getElementById('id_player4');
+
+        // Store all available players (get from first select)
+        const allPlayers = [];
+        const firstSelect = document.getElementById('id_player1');
+        if (firstSelect) {
+            Array.from(firstSelect.querySelectorAll('option')).forEach(option => {
+                if (option.value) {  // Skip empty option
+                    allPlayers.push({
+                        value: option.value,
+                        text: option.textContent.trim()
+                    });
+                }
+            });
+        }
+
+        // Initialize Tom Select on all player select fields
+        const playerSelects = {};
+        const playerSelectElements = document.querySelectorAll('.player-select');
+
+        playerSelectElements.forEach(select => {
+            if (!select.disabled) {
+                const selectId = select.id;
+
+                playerSelects[selectId] = new TomSelect(select, {
+                    placeholder: select.querySelector('option[value=""]')?.textContent || 'Select a player...',
+                    maxOptions: null,
+                    searchField: ['text'],
+                    sortField: {
+                        field: 'text',
+                        direction: 'asc'
+                    },
+                    render: {
+                        no_results: function(data, escape) {
+                            return '<div class="no-results">No players found matching "' + escape(data.input) + '"</div>';
+                        }
+                    },
+                    onChange: function(value) {
+                        // Update all other dropdowns when this one changes
+                        updatePlayerOptions();
+                    }
+                });
+            }
+        });
+
+        // Function to update available options in all dropdowns
+        function updatePlayerOptions() {
+            // Get currently selected players
+            const selectedPlayers = {
+                player1: playerSelects['id_player1']?.getValue() || '',
+                player2: playerSelects['id_player2']?.getValue() || '',
+                player3: playerSelects['id_player3']?.getValue() || '',
+                player4: playerSelects['id_player4']?.getValue() || ''
+            };
+
+            // Update each dropdown
+            Object.keys(playerSelects).forEach(selectId => {
+                const tomSelect = playerSelects[selectId];
+                if (!tomSelect) return;
+
+                // Get current value to preserve it
+                const currentValue = tomSelect.getValue();
+
+                // Determine which players to exclude (all selected except this dropdown's value)
+                const excludeValues = Object.entries(selectedPlayers)
+                    .filter(([key, value]) => {
+                        // Don't exclude if it's this dropdown or if value is empty
+                        return key !== selectId.replace('id_', '') && value !== '';
+                    })
+                    .map(([key, value]) => value);
+
+                // Clear and rebuild options
+                tomSelect.clearOptions();
+
+                // Add all players that aren't selected elsewhere
+                allPlayers.forEach(player => {
+                    if (!excludeValues.includes(player.value)) {
+                        tomSelect.addOption({
+                            value: player.value,
+                            text: player.text
+                        });
+                    }
+                });
+
+                // Restore the current value if it's still valid
+                if (currentValue && !excludeValues.includes(currentValue)) {
+                    tomSelect.setValue(currentValue, true);  // true = silent (no onChange trigger)
+                } else if (currentValue && excludeValues.includes(currentValue)) {
+                    // If current value is now excluded, clear it
+                    tomSelect.clear(true);
+                }
+
+                // Refresh the dropdown
+                tomSelect.refreshOptions(false);
+            });
+        }
 
         function toggleDoublesMode() {
             const isDouble = isDoubleSelect.value === 'True';
@@ -482,12 +722,19 @@
             // Toggle required attribute
             if (player3Select) {
                 player3Select.required = isDouble;
-                if (!isDouble) player3Select.value = '';
+                if (!isDouble && playerSelects['id_player3']) {
+                    playerSelects['id_player3'].clear();
+                }
             }
             if (player4Select) {
                 player4Select.required = isDouble;
-                if (!isDouble) player4Select.value = '';
+                if (!isDouble && playerSelects['id_player4']) {
+                    playerSelects['id_player4'].clear();
+                }
             }
+
+            // Update options after toggling mode
+            updatePlayerOptions();
         }
 
         if (isDoubleSelect) {
@@ -495,6 +742,11 @@
 
             toggleDoublesMode();
         }
+
+        // Initial update to filter options based on pre-selected values (for edit mode)
+        setTimeout(() => {
+            updatePlayerOptions();
+        }, 100);
     });
 </script>
 
