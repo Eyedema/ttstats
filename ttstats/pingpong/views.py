@@ -670,31 +670,13 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
                 # Invalid date format, default to all
                 filter_start_date = None
 
-        # Fetch all players with comprehensive prefetching
-        player_stats_qs = Player.objects.select_related('user').prefetch_related(
-            'teams',
-            'teams__matches_as_team1',
-            'teams__matches_as_team2',
-            'teams__matches_as_team1__team1__players__user__profile',
-            'teams__matches_as_team1__team2__players__user__profile',
-            'teams__matches_as_team1__confirmations',
-            'teams__matches_as_team2__team1__players__user__profile',
-            'teams__matches_as_team2__team2__players__user__profile',
-            'teams__matches_as_team2__confirmations',
-            'teams__matches_as_team1__games',
-            'teams__matches_as_team2__games',
-            'teams__matches_as_team1__winner__players',
-            'teams__matches_as_team2__winner__players'
-        )
-
         # Calculate stats in Python
         player_stats = []
-        for player in player_stats_qs:
+        for player in Player.objects.all():
             # Get all matches (both teams)
-            all_matches = set()
-            for team in player.teams.all():
-                all_matches.update(team.matches_as_team1.all())
-                all_matches.update(team.matches_as_team2.all())
+            all_matches = Match._base_manager.filter(
+                Q(team1__players=player) | Q(team2__players=player)
+            ).distinct()
 
             # Filter to confirmed only (using Python property)
             confirmed_matches = [m for m in all_matches if m.match_confirmed]
