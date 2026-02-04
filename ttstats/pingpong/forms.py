@@ -399,19 +399,26 @@ class ChampionshipCreateForm(forms.ModelForm):
         championship_type = kwargs.pop('championship_type', 'singles')
         super().__init__(*args, **kwargs)
 
-        # Filter teams based on championship type
-        if championship_type == 'singles':
-            # Only teams with 1 player
-            from django.db.models import Count
-            self.fields['private_participants'].queryset = Team.objects.annotate(
-                player_count=Count('players')
-            ).filter(player_count=1).order_by('name')
-        else:
-            # Only teams with 2 players
-            from django.db.models import Count
-            self.fields['private_participants'].queryset = Team.objects.annotate(
-                player_count=Count('players')
-            ).filter(player_count=2).order_by('name')
+        if self.is_bound and 'championship_type' in self.data:
+            championship_type = self.data.get('championship_type', 'singles')
+
+        from django.db.models import Count
+
+        # Determine the required team size based on tournament type
+        required_size = 1 if championship_type == 'singles' else 2
+
+        # Get eligible teams:
+        # 1. Annotate all teams with player count
+        # 2. Filter by required size
+        # 3. Filter by user membership
+        # 4. Exclude already registered teams
+        eligible_teams = Team.objects.annotate(
+            player_count=Count('players', distinct=True)
+        ).filter(
+            player_count=required_size
+        ).distinct().order_by('name')
+
+        self.fields['private_participants'].queryset = eligible_teams
 
         # Make registration_deadline required only for public championships
         if self.instance and not self.instance.is_public:
@@ -503,19 +510,22 @@ class ChampionshipRegistrationForm(forms.Form):
         if championship and user:
             from django.db.models import Count
 
-            # Filter by team size
-            if championship.championship_type == 'singles':
-                teams_query = Team.objects.annotate(
-                    player_count=Count('players', distinct=True)
-                ).filter(player_count=1).filter(players__user=user)
-            else:
-                teams_query = Team.objects.annotate(
-                    player_count=Count('players')
-                ).filter(player_count=2).filter(players__user=user)
+            # Determine the required team size based on tournament type
+            required_size = 1 if championship.championship_type == 'singles' else 2
 
-            # Exclude already registered teams
-            teams_query = teams_query.exclude(
+            # Get eligible teams:
+            # 1. Annotate all teams with player count
+            # 2. Filter by required size
+            # 3. Filter by user membership
+            # 4. Exclude already registered teams
+            eligible_teams = Team.objects.annotate(
+                player_count=Count('players', distinct=True)
+            ).filter(
+                player_count=required_size
+            ).filter(
+                players__user=user
+            ).exclude(
                 pk__in=championship.participants.values_list('pk', flat=True)
-            )
+            ).distinct().order_by('name')
 
-            self.fields['team'].queryset = teams_query.distinct()
+            self.fields['team'].queryset = eligible_teams

@@ -257,7 +257,8 @@
         const isPublicCheckbox = document.getElementById('id_is_public');
         const registrationDeadlineField = document.getElementById('registration-deadline-field');
         const privateParticipantsSection = document.getElementById('private-participants-section');
-        
+        const championshipTypeSelect = document.getElementById('id_tournament_type');
+
         if (isPublicCheckbox && registrationDeadlineField && privateParticipantsSection) {
             function toggleFields() {
                 if (isPublicCheckbox.checked) {
@@ -268,9 +269,18 @@
                     privateParticipantsSection.style.display = 'block';
                 }
             }
-            
+
             isPublicCheckbox.addEventListener('change', toggleFields);
             toggleFields(); // Initial state
+        }
+
+        // Reload page when championship type changes to update participant list
+        if (championshipTypeSelect) {
+            championshipTypeSelect.addEventListener('change', function() {
+                const currentUrl = new URL(window.location.href);
+                currentUrl.searchParams.set('type', this.value);
+                window.location.href = currentUrl.toString();
+            });
         }
     });
 </script>

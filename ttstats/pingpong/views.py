@@ -1992,19 +1992,22 @@ class ChampionshipDetailView(LoginRequiredMixin, DetailView):
         try:
             player = self.request.user.player
             # Get user's teams that match championship type
-            user_teams = Team.objects.filter(players=player).annotate(
-                player_count=Count('players')
-            )
+            required_size = 1 if championship.championship_type == 'singles' else 2
 
-            if championship.championship_type == 'singles':
-                user_teams = user_teams.filter(player_count=1)
-            else:
-                user_teams = user_teams.filter(player_count=2)
-
-            # Exclude already registered teams
-            user_teams = user_teams.exclude(
+            # Get eligible teams:
+            # 1. Annotate all teams with player count
+            # 2. Filter by required size
+            # 3. Filter by user membership
+            # 4. Exclude already registered teams
+            user_teams = Team.objects.annotate(
+                player_count=Count('players', distinct=True)
+            ).filter(
+                player_count=required_size
+            ).filter(
+                players=player
+            ).exclude(
                 pk__in=championship.participants.values_list('pk', flat=True)
-            )
+            ).distinct().order_by('name')
 
             context['can_register'] = (
                     championship.is_registration_open and
@@ -2106,6 +2109,7 @@ class ChampionshipEditView(LoginRequiredMixin, UpdateView):
 
 class ChampionshipRegisterView(LoginRequiredMixin, View):
     """View to register a team for a championship"""
+    form_class = ChampionshipRegistrationForm
 
     def post(self, request, pk):
         championship = get_object_or_404(Championship, pk=pk)
