@@ -48,8 +48,18 @@ MIDDLEWARE.insert(1, 'csp.middleware.CSPMiddleware')
 
 # CSP settings - adjust based on your actual requirements
 CSP_DEFAULT_SRC = ("'self'",)
-CSP_SCRIPT_SRC = ("'self'", "'unsafe-inline'")  # Needed for inline scripts
-CSP_STYLE_SRC = ("'self'", "'unsafe-inline'")   # Needed for Tailwind inline styles
+CSP_SCRIPT_SRC = (
+    "'self'",
+    "'unsafe-inline'",
+    "https://cdn.tailwindcss.com",
+    "https://cdn.jsdelivr.net",
+    "https://unpkg.com",
+)
+CSP_STYLE_SRC = (
+    "'self'",
+    "'unsafe-inline'",
+    "https://cdn.jsdelivr.net",
+)
 CSP_IMG_SRC = ("'self'", "data:")
 CSP_FONT_SRC = ("'self'",)
 CSP_CONNECT_SRC = ("'self'",)
