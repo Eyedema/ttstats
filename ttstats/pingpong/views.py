@@ -1,6 +1,8 @@
 import json
+import logging
 from typing import Any
 
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import login
 from django.contrib.auth.decorators import login_required
@@ -9,8 +11,10 @@ from django.contrib.auth.views import LoginView
 from django.core.mail import send_mail
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db.models import Count, F, Q, Sum
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse_lazy
+from django.utils.decorators import method_decorator
 from django.views import View
 from django.views.generic import (
     CreateView,
@@ -19,6 +23,10 @@ from django.views.generic import (
     TemplateView,
     UpdateView,
 )
+from django_ratelimit.decorators import ratelimit
+from django_ratelimit.exceptions import Ratelimited
+
+logger = logging.getLogger(__name__)
 
 from .forms import GameForm, MatchEditForm, MatchForm, PlayerRegistrationForm, ScheduledMatchForm, MatchConvertForm
 from .models import Game, Location, Match, Player, UserProfile, MatchConfirmation, ScheduledMatch, Team
@@ -192,8 +200,25 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
         # Filter to confirmed matches only (using Python property)
         confirmed_matches = [m for m in all_matches if m.match_confirmed]
 
+        # Pagination for matches
+        from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
+
+        matches_per_page = 10
+        paginator = Paginator(confirmed_matches, matches_per_page)
+        page = self.request.GET.get('page', 1)
+
+        try:
+            confirmed_matches_page = paginator.page(page)
+        except PageNotAnInteger:
+            confirmed_matches_page = paginator.page(1)
+        except EmptyPage:
+            confirmed_matches_page = paginator.page(paginator.num_pages)
+
+        # Use paginated matches for the loop
+        confirmed_matches_to_process = confirmed_matches_page.object_list
+
         # Add p1_score, p2_score, and player_won to each match from player's perspective
-        for match in confirmed_matches:
+        for match in confirmed_matches_to_process:
             if player in match.team1.players.all():
                 match.p1_score = match.team1_score
                 match.p2_score = match.team2_score
@@ -214,7 +239,9 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
         stats = self._calculate_streaks(confirmed_matches)
 
         context.update({
-            'matches': confirmed_matches,  # List of confirmed matches
+            'matches': confirmed_matches_to_process,  # List of confirmed matches
+            'page_obj': confirmed_matches_page,  # Paginator object
+            'is_paginated': paginator.num_pages > 1,  # Show pagination if more than 1 page
             'total_matches': total_matches,
             'wins': wins,
             'losses': losses,
@@ -616,44 +643,124 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
     """Display player rankings and statistics"""
 
     template_name = "pingpong/leaderboard.html"
+    paginate_by = 10
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
 
-        # Fetch all players with comprehensive prefetching
-        player_stats_qs = Player.objects.select_related('user').prefetch_related(
-            'teams',
-            'teams__matches_as_team1',
-            'teams__matches_as_team2',
-            'teams__matches_as_team1__team1__players__user__profile',
-            'teams__matches_as_team1__team2__players__user__profile',
-            'teams__matches_as_team1__confirmations',
-            'teams__matches_as_team2__team1__players__user__profile',
-            'teams__matches_as_team2__team2__players__user__profile',
-            'teams__matches_as_team2__confirmations',
-            'teams__matches_as_team1__games',
-            'teams__matches_as_team2__games',
-            'teams__matches_as_team1__winner__players',
-            'teams__matches_as_team2__winner__players'
+        # Get filter parameters
+        match_type = self.request.GET.get('match_type', 'all')  # 'all', 'singles', 'doubles'
+        date_filter = self.request.GET.get('date_filter', 'all')  # 'all', 'month', '3months', '6months', 'year', 'custom'
+        start_date = self.request.GET.get('start_date', '')
+        end_date = self.request.GET.get('end_date', '')
+
+        # Calculate date range
+        from datetime import datetime, timedelta
+        from django.utils import timezone
+
+        filter_start_date = None
+        filter_end_date = timezone.now()
+
+        if date_filter == 'month':
+            filter_start_date = filter_end_date - timedelta(days=30)
+        elif date_filter == '3months':
+            filter_start_date = filter_end_date - timedelta(days=90)
+        elif date_filter == '6months':
+            filter_start_date = filter_end_date - timedelta(days=180)
+        elif date_filter == 'year':
+            filter_start_date = filter_end_date - timedelta(days=365)
+        elif date_filter == 'custom' and start_date and end_date:
+            try:
+                filter_start_date = timezone.make_aware(datetime.strptime(start_date, '%Y-%m-%d'))
+                filter_end_date = timezone.make_aware(
+                    datetime.strptime(end_date, '%Y-%m-%d').replace(hour=23, minute=59, second=59))
+            except ValueError:
+                # Invalid date format, default to all
+                filter_start_date = None
+
+        # Build base match query with filters applied at DB level
+        matches_query = Match._base_manager.all()
+
+        # Apply match type filter at DB level
+        if match_type == 'singles':
+            matches_query = matches_query.filter(is_double=False)
+        elif match_type == 'doubles':
+            matches_query = matches_query.filter(is_double=True)
+
+        # Apply date filter at DB level
+        if filter_start_date:
+            matches_query = matches_query.filter(
+                date_played__gte=filter_start_date,
+                date_played__lte=filter_end_date
+            )
+
+        # Prefetch only what we need for confirmation checking and stats
+        matches_query = matches_query.select_related(
+            'team1', 'team2', 'winner'
+        ).prefetch_related(
+            'team1__players__user__profile',
+            'team2__players__user__profile',
+            'confirmations',
+            'games'  # For counting games
         )
 
-        # Calculate stats in Python
+        # Load all matches once into memory
+        all_matches = list(matches_query)
+
+        # Pre-filter confirmed matches (using property)
+        confirmed_matches = [m for m in all_matches if m.match_confirmed]
+
+        # Build a lookup dictionary: player_id -> list of their matches
+        # This avoids N+1 queries
+        player_matches = {}
+        for match in confirmed_matches:
+            # Get players from team1
+            for player in match.team1.players.all():
+                if player.id not in player_matches:
+                    player_matches[player.id] = []
+                player_matches[player.id].append(match)
+
+            # Get players from team2
+            for player in match.team2.players.all():
+                if player.id not in player_matches:
+                    player_matches[player.id] = []
+                player_matches[player.id].append(match)
+
+        # Pre-cache game counts for all matches to avoid repeated queries
+        match_game_counts = {}
+        for match in confirmed_matches:
+            # Games are already prefetched, so this uses cached data
+            match_game_counts[match.id] = len(match.games.all())
+
+        # Get only players that have matches (optimization)
+        player_ids_with_matches = set(player_matches.keys())
+        player_stats_qs = Player.objects.filter(
+            id__in=player_ids_with_matches
+        ).select_related('user')
+
+        # Calculate stats in Python using pre-loaded data
         player_stats = []
         for player in player_stats_qs:
-            # Get all matches (both teams)
-            all_matches = set()
-            for team in player.teams.all():
-                all_matches.update(team.matches_as_team1.all())
-                all_matches.update(team.matches_as_team2.all())
+            # Get matches for this player from our lookup dict
+            player_match_list = player_matches.get(player.id, [])
 
-            # Filter to confirmed only (using Python property)
-            confirmed_matches = [m for m in all_matches if m.match_confirmed]
+            if not player_match_list:
+                continue
 
-            total_matches = len(confirmed_matches)
-            wins = len([m for m in confirmed_matches if m.winner and player in m.winner.players.all()])
+            total_matches = len(player_match_list)
+
+            # Calculate wins using cached data
+            wins = 0
+            for match in player_match_list:
+                # winner.players is already prefetched
+                if match.winner and player in match.winner.players.all():
+                    wins += 1
+
             losses = total_matches - wins
             win_rate = (wins / total_matches * 100) if total_matches > 0 else 0
-            total_games = sum(m.games.count() for m in confirmed_matches)
+
+            # Use pre-cached game counts
+            total_games = sum(match_game_counts.get(m.id, 0) for m in player_match_list)
 
             player_stats.append({
                 "player": player,
@@ -671,7 +778,22 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
             key=lambda x: (x["elo_rating"], x["wins"], x["win_rate"]), reverse=True
         )
 
+        # Apply top X filter
+        top_x = self.request.GET.get('top_x', '10')
+        try:
+            top_x_int = int(top_x)
+            if top_x_int > 0:
+                player_stats = player_stats[:top_x_int]
+        except (ValueError, TypeError):
+            player_stats = player_stats[:10]
+
         context["player_stats"] = player_stats
+        context["top_x"] = top_x
+        context["match_type"] = match_type
+        context["date_filter"] = date_filter
+        context["start_date"] = start_date
+        context["end_date"] = end_date
+
         return context
 
 
@@ -934,8 +1056,15 @@ class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
         return context
 
 
+@method_decorator(
+    ratelimit(key='ip', rate='5/h', method='POST', block=True),
+    name='post'
+)
 class PlayerRegistrationView(CreateView):
-    """View that creates User + Player"""
+    """View that creates User + Player
+
+    Rate limited to 5 registrations per hour per IP to prevent spam.
+    """
 
     form_class = PlayerRegistrationForm
     template_name = "registration/signup.html"
@@ -960,9 +1089,9 @@ class PlayerRegistrationView(CreateView):
         send_mail(
             subject="Verify your email address",
             message=f"Welcome {user.username}! Click here to verify your email: {verification_url}",
-            from_email="pingpong@ubaldopuocci.org",
+            from_email=settings.DEFAULT_FROM_EMAIL,
             recipient_list=[user.email],
-            fail_silently=True,
+            fail_silently=False,
         )
 
         return render(
@@ -975,8 +1104,8 @@ class PlayerRegistrationView(CreateView):
         )
 
     def form_invalid(self, form):
-        """Add error message on failed registration"""
-        messages.error(self.request, "Please correct the errors below.")
+        """Return generic error to prevent account enumeration"""
+        messages.error(self.request, "Registration failed. Please check the form and try again.")
         return super().form_invalid(form)
 
 
@@ -1045,8 +1174,15 @@ class EmailVerifyView(View):
             return redirect("pingpong:login")
 
 
+@method_decorator(
+    ratelimit(key='user', rate='3/h', method='POST', block=True),
+    name='post'
+)
 class EmailResendVerificationView(LoginRequiredMixin, View):
-    """Resend verification email"""
+    """Resend verification email
+
+    Rate limited to 3 resends per hour per user to prevent abuse.
+    """
 
     def post(self, request):
         profile = request.user.profile
@@ -1063,18 +1199,21 @@ class EmailResendVerificationView(LoginRequiredMixin, View):
                 f"/pingpong/verify-email/{token}/"
             )
 
-            send_mail(
-                subject="Verify your email address",
-                message=f"Welcome {user.username}! Click here to verify your email: {verification_url}",
-                from_email="pingpong@ubaldopuocci.org",
-                recipient_list=[user.email],
-                fail_silently=True,
-            )
-
-            messages.success(
-                request,
-                f"Verification email sent! Check your inbox at {request.user.email}",
-            )
+            try:
+                send_mail(
+                    subject="Verify your email address",
+                    message=f"Welcome {user.username}! Click here to verify your email: {verification_url}",
+                    from_email=settings.DEFAULT_FROM_EMAIL,
+                    recipient_list=[user.email],
+                    fail_silently=False,
+                )
+                messages.success(
+                    request,
+                    f"Verification email sent! Check your inbox at {request.user.email}",
+                )
+            except Exception as e:
+                logger.error(f"Failed to send verification email to {user.email}: {e}")
+                messages.error(request, "Failed to send verification email. Please try again later.")
 
         # Redirect to player profile if exists, otherwise dashboard
         if hasattr(request.user, "player"):
@@ -1546,8 +1685,15 @@ class ScheduledMatchConvertView(LoginRequiredMixin, CreateView):
         return response
 
 
+@method_decorator(
+    ratelimit(key='ip', rate='5/15m', method='POST', block=True),
+    name='post'
+)
 class CustomLoginView(LoginView):
-    """Custom login view with tailwind styling"""
+    """Custom login view with tailwind styling
+
+    Rate limited to 5 login attempts per 15 minutes per IP to prevent brute force.
+    """
 
     template_name = "registration/login.html"
     redirect_authenticated_user = True
@@ -1557,13 +1703,6 @@ class CustomLoginView(LoginView):
 
     def form_valid(self, form):
         user = form.get_user()
-        print(f"DEBUG: User {user.username} logging in.")
-        print(
-            f"DEBUG: Email verified: {getattr(user.profile, 'email_verified', 'No profile')}"
-        )
-        print(
-            f"DEBUG: Verification token: {getattr(user.profile, 'email_verification_token', 'No profile')}"
-        )
         # Check if email is verified
         if hasattr(user, "profile") and not user.profile.email_verified:
             messages.warning(

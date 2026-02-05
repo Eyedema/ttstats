@@ -473,6 +473,72 @@
             </div>
             {% endfor %}
         </div>
+
+        !-- Pagination -->
+        {% if is_paginated %}
+            <div class="border-t p-4">
+                <div class="flex flex-col sm:flex-row items-center justify-between gap-4">
+                    <!-- Mobile Pagination -->
+                    <div class="flex sm:hidden w-full justify-between">
+                        {% if page_obj.has_previous %}
+                        <a href="?page={{ page_obj.previous_page_number }}" class="inline-flex items-center rounded-md border bg-white px-4 py-2.5 text-sm font-medium hover:bg-secondary min-h-[44px]">
+                            Previous
+                        </a>
+                        {% else %}
+                        <span class="inline-flex items-center rounded-md border bg-muted px-4 py-2.5 text-sm font-medium text-muted-foreground">
+                            Previous
+                        </span>
+                        {% endif %}
+
+                        {% if page_obj.has_next %}
+                        <a href="?page={{ page_obj.next_page_number }}" class="inline-flex items-center rounded-md border bg-white px-4 py-2.5 text-sm font-medium hover:bg-secondary min-h-[44px]">
+                            Next
+                        </a>
+                        {% else %}
+                        <span class="inline-flex items-center rounded-md border bg-muted px-4 py-2.5 text-sm font-medium text-muted-foreground">
+                            Next
+                        </span>
+                        {% endif %}
+                    </div>
+
+                    <!-- Desktop Pagination -->
+                    <div class="hidden sm:flex sm:flex-1 sm:items-center sm:justify-between w-full">
+                        <div>
+                            <p class="text-sm text-muted-foreground">
+                                Showing <span class="font-medium">{{ page_obj.start_index }}</span> to <span class="font-medium">{{ page_obj.end_index }}</span> of <span class="font-medium">{{ page_obj.paginator.count }}</span> matches
+                            </p>
+                        </div>
+                        <div>
+                            <nav class="inline-flex -space-x-px rounded-md shadow-sm" aria-label="Pagination">
+                                {% if page_obj.has_previous %}
+                                <a href="?page={{ page_obj.previous_page_number }}" class="inline-flex items-center rounded-l-md border bg-white px-2 py-2 text-sm font-medium hover:bg-secondary">
+                                    <img src="{% static 'pingpong/icons/chevron-left.svg' %}" class="w-5 h-5" alt="Previous">
+                                </a>
+                                {% endif %}
+
+                                {% for num in page_obj.paginator.page_range %}
+                                    {% if page_obj.number == num %}
+                                    <span class="inline-flex items-center border border-primary bg-primary px-4 py-2 text-sm font-medium text-primary-foreground">
+                                        {{ num }}
+                                    </span>
+                                    {% elif num > page_obj.number|add:'-3' and num < page_obj.number|add:'3' %}
+                                    <a href="?page={{ num }}" class="inline-flex items-center border bg-white px-4 py-2 text-sm font-medium hover:bg-secondary">
+                                        {{ num }}
+                                    </a>
+                                    {% endif %}
+                                {% endfor %}
+
+                                {% if page_obj.has_next %}
+                                <a href="?page={{ page_obj.next_page_number }}" class="inline-flex items-center rounded-r-md border bg-white px-2 py-2 text-sm font-medium hover:bg-secondary">
+                                    <img src="{% static 'pingpong/icons/chevron-right.svg' %}" class="w-5 h-5" alt="Next">
+                                </a>
+                                {% endif %}
+                            </nav>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        {% endif %}
         {% else %}
         <div class="p-8 md:p-12 text-center">
             <img src="{% static 'pingpong/icons/info.svg' %}" class="w-12 h-12 mx-auto text-muted-foreground mb-4 opacity-50" alt="">
