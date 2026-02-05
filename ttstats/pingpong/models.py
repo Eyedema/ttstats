@@ -148,6 +148,12 @@ class Match(models.Model):
     )
 
     confirmations = models.ManyToManyField(Player, through='MatchConfirmation', related_name="player_matchconfirmations")
+
+    # Denormalized cache fields for performance
+    is_confirmed = models.BooleanField(default=False, db_index=True)
+    team1_score_cache = models.IntegerField(default=0)
+    team2_score_cache = models.IntegerField(default=0)
+
     notes = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -268,12 +274,42 @@ class Match(models.Model):
 
         return unverified
 
+    def update_cache_fields(self):
+        """Update all denormalized cache fields. Call from signals after changes."""
+        self.team1_score_cache = self.games.filter(winner=self.team1).count()
+        self.team2_score_cache = self.games.filter(winner=self.team2).count()
+        self.is_confirmed = self._calculate_confirmation_status()
+
+    def _calculate_confirmation_status(self):
+        """Calculate actual confirmation status from live data."""
+        team1_verified_ids = set(
+            self.team1.players.filter(
+                user__profile__email_verified=True
+            ).values_list('id', flat=True)
+        )
+        team2_verified_ids = set(
+            self.team2.players.filter(
+                user__profile__email_verified=True
+            ).values_list('id', flat=True)
+        )
+        confirmed_ids = set(
+            self.confirmations.all().values_list('id', flat=True)
+        )
+        return (
+            team1_verified_ids.issubset(confirmed_ids) and
+            team2_verified_ids.issubset(confirmed_ids)
+        )
+
     def save(self, *args, **kwargs):
         # Auto-determine winner based on games
         if self.pk:  # Only if match already exists
             t1_wins = self.games.filter(winner=self.team1).count()  # type: ignore
             t2_wins = self.games.filter(winner=self.team2).count()  # type: ignore
             games_to_win = (self.best_of // 2) + 1
+
+            # Update score cache
+            self.team1_score_cache = t1_wins
+            self.team2_score_cache = t2_wins
 
             if t1_wins >= games_to_win:
                 self.winner = self.team1

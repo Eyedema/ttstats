@@ -1,8 +1,8 @@
 # pingpong/context_processors.py
+from django.core.cache import cache
 from django.db import models
-from django.db.models import Q
 
-from .models import Match, Player
+from .models import Match
 
 
 def pingpong_context(request):
@@ -13,18 +13,21 @@ def pingpong_context(request):
     if not player:
         return {'pending_matches_count': 0}
 
-    # Fetch all matches for the player with comprehensive prefetching
-    all_matches = Match.objects.filter(
-        models.Q(team1__players=player) | models.Q(team2__players=player)
-    ).select_related('team1', 'team2').prefetch_related(
-        'team1__players__user__profile',
-        'team2__players__user__profile',
-        'confirmations'
-    ).distinct()
+    # Try cache first (5 minute TTL)
+    cache_key = f'pending_matches_{player.pk}'
+    cached_count = cache.get(cache_key)
 
-    # Filter in Python to find pending matches (not fully confirmed)
-    pending_matches = [m for m in all_matches if not m.match_confirmed]
-    pending_matches_count = len(pending_matches)
+    if cached_count is not None:
+        return {'pending_matches_count': cached_count}
+
+    # Cache miss - use denormalized is_confirmed field for DB-level filtering
+    pending_matches_count = Match.objects.filter(
+        models.Q(team1__players=player) | models.Q(team2__players=player),
+        is_confirmed=False,
+        winner__isnull=False,
+    ).distinct().count()
+
+    # Cache for 5 minutes
+    cache.set(cache_key, pending_matches_count, 300)
 
     return {'pending_matches_count': pending_matches_count}
-

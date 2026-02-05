@@ -2,6 +2,7 @@ import factory
 import pytest
 from datetime import date, time, timedelta
 from django.contrib.auth.models import User, AnonymousUser
+from django.core.cache import cache as django_cache
 from django.test import Client
 from factory.django import DjangoModelFactory
 
@@ -304,6 +305,14 @@ def confirm_team(match, team_num):
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _clear_cache():
+    """Clear Django cache before each test to prevent cross-test contamination."""
+    django_cache.clear()
+    yield
+    django_cache.clear()
+
 
 @pytest.fixture
 def user(db):

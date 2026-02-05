@@ -22,3 +22,6 @@ EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
 SECURE_SSL_REDIRECT = False
 SESSION_COOKIE_SECURE = False
 CSRF_COOKIE_SECURE = False
+
+# Cache debug headers (X-Cache-Hits, X-Cache-Misses, X-Request-Time)
+MIDDLEWARE += ['ttstats.middleware.CacheDebugMiddleware']
