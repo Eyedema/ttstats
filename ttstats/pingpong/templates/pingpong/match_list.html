@@ -4,6 +4,9 @@
 {% block title %}Matches - Table Tennis Tracker{% endblock %}
 
 {% block content %}
+<style>
+    [x-cloak] { display: none !important; }
+</style>
 <div class="max-w-7xl mx-auto space-y-6">
     <!-- Header -->
     <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
@@ -18,7 +21,7 @@
                 Create Match
                 <img src="{% static 'pingpong/icons/chevron-down.svg' %}" class="w-4 h-4 invert" alt="">
             </button>
-            <div x-show="open" @click.away="open = false" x-transition
+            <div x-show="open" x-cloak @click.away="open = false" x-transition
                 class="absolute right-0 mt-2 w-48 rounded-md shadow-lg bg-white ring-1 ring-black ring-opacity-5 z-10">
                 <div class="py-1">
                     <a href="{% url 'pingpong:match_add' %}"
