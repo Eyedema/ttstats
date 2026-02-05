@@ -1,12 +1,11 @@
 from django.contrib.auth.models import User
-from django.db.models import Count
-
-from django.db.models.signals import post_save, pre_save
+from django.db.models.signals import post_save, pre_save, post_delete
 from django.dispatch import receiver
 from django_otp_webauthn.models import WebAuthnCredential
 
+from .cache_utils import invalidate_match_caches, invalidate_player_caches
 from .emails import send_match_confirmation_email, send_passkey_registered_email
-from .models import Match, MatchConfirmation, UserProfile
+from .models import Game, Match, MatchConfirmation, Player, UserProfile
 from .elo import update_player_elo
 
 
@@ -55,21 +54,29 @@ def handle_match_completion(sender, instance, created, **kwargs):
         )
         # Reload instance to get updated confirmation fields
         instance.refresh_from_db()
-        return
+    else:
+        # 2. Send confirmation emails (only to verified users who need to confirm)
+        for player in (instance.team1.players.all() | instance.team2.players.all()):
+            if (
+                    player.user
+                    and player.user.email
+                    and hasattr(player.user, 'profile')
+                    and player.user.profile.email_verified
+                    and player.id not in [c.player_id for c in instance.confirmations.all()]
+            ):
+                send_match_confirmation_email(instance, player)
 
-    # 2. Send confirmation emails (only to verified users who need to confirm)
-    for player in (instance.team1.players.all() | instance.team2.players.all()):
-        if (
-                player.user
-                and player.user.email
-                and hasattr(player.user, 'profile')
-                and player.user.profile.email_verified
-                and player.id not in [c.player_id for c in instance.confirmations.all()]
-        ):
-            send_match_confirmation_email(instance, player)
+    # 3. Update is_confirmed denormalized field
+    new_confirmed = instance._calculate_confirmation_status()
+    if new_confirmed != instance.is_confirmed:
+        Match.objects.filter(pk=instance.pk).update(is_confirmed=new_confirmed)
+        instance.is_confirmed = new_confirmed
 
-    # 3. Update Elo ratings (only runs if confirmed)
+    # 4. Update Elo ratings (only runs if confirmed)
     update_player_elo(instance)
+
+    # Invalidate caches
+    invalidate_match_caches(instance)
 
 
 @receiver(post_save, sender=Match)
@@ -93,8 +100,37 @@ def update_elo_on_confirmation(sender, instance, created, **kwargs):
 def update_elo_on_match_confirmation(sender, instance, created, **kwargs):
     """Update Elo ratings when a player confirms a match"""
     if created:
+        match = instance.match
+
+        # Update is_confirmed denormalized field
+        new_status = match._calculate_confirmation_status()
+        if new_status != match.is_confirmed:
+            Match.objects.filter(pk=match.pk).update(is_confirmed=new_status)
+            match.is_confirmed = new_status
+
         # Try to update Elo for the match (has guards inside, safe to call anytime)
-        update_player_elo(instance.match)
+        update_player_elo(match)
+
+        # Invalidate caches
+        invalidate_match_caches(match)
+
+
+@receiver(post_save, sender=Game)
+def invalidate_caches_on_game_save(sender, instance, **kwargs):
+    """Invalidate caches when a game is saved (scores change)."""
+    invalidate_match_caches(instance.match)
+
+
+@receiver(post_save, sender=Player)
+def invalidate_on_player_save(sender, instance, created, **kwargs):
+    """Invalidate caches when player is created or updated."""
+    invalidate_player_caches(instance)
+
+
+@receiver(post_delete, sender=Player)
+def invalidate_on_player_delete(sender, instance, **kwargs):
+    """Invalidate caches when player is deleted."""
+    invalidate_player_caches(instance)
 
 
 @receiver(post_save, sender=WebAuthnCredential)

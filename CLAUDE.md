@@ -3,7 +3,7 @@
 ## Quick Reference
 
 - **Project:** TTStats (Table Tennis Stats Tracker)
-- **Stack:** Django 6.0, PostgreSQL 16, Tailwind CSS, Docker
+- **Stack:** Django 6.0, PostgreSQL 16, Redis 7, Tailwind CSS, Docker
 - **Python Version:** 3.12
 - **Main App:** `ttstats/pingpong/`
 - **Test Framework:** pytest + pytest-django + factory-boy 
@@ -32,6 +32,10 @@ cd ttstats && coverage html                                     # Generate HTML 
 # Management Commands
 cd ttstats && python manage.py recalculate_elo                  # Recalculate all Elo ratings
 cd ttstats && python manage.py recalculate_elo --dry-run        # Preview Elo changes
+cd ttstats && python manage.py cache_control --stats            # View Redis cache statistics
+cd ttstats && python manage.py cache_control --clear            # Clear all caches
+cd ttstats && python manage.py cache_control --test             # Test cache connectivity
+cd ttstats && python manage.py warm_cache                       # Pre-populate common caches
 
 # Production
 docker compose -f compose.prod.yml up --build -d
@@ -52,12 +56,13 @@ docker compose -f compose.prod.yml up --build -d
 │   │   ├── elo.py                    # Elo rating calculation system
 │   │   ├── urls.py                   # URL routing
 │   │   ├── signals.py                # Django signals
+│   │   ├── cache_utils.py            # Cache invalidation utilities
 │   │   ├── managers.py               # Custom QuerySet managers
 │   │   ├── emails.py                 # Email utilities
 │   │   ├── admin.py                  # Django admin config
 │   │   ├── context_processors.py     # Template context
-│   │   ├── management/commands/      # Management commands (recalculate_elo)
-│   │   ├── migrations/               # Database migrations (16 total)
+│   │   ├── management/commands/      # Management commands (recalculate_elo, cache_control, warm_cache)
+│   │   ├── migrations/               # Database migrations (18 total)
 │   │   ├── templates/pingpong/       # Django templates
 │   │   ├── templates/registration/   # Auth templates
 │   │   ├── static/pingpong/icons/    # SVG icons (800+)
@@ -79,7 +84,8 @@ docker compose -f compose.prod.yml up --build -d
 │   │       ├── test_commands.py            # Management command tests
 │   │       ├── test_elo.py                 # Elo rating calculation tests
 │   │       ├── test_match_list_performance.py  # Performance optimization tests
-│   │       └── test_scheduled_match_conversion.py  # Scheduled match conversion tests
+│   │       ├── test_scheduled_match_conversion.py  # Scheduled match conversion tests
+│   │       └── test_cache.py                  # Redis cache invalidation & view caching tests
 
 │   └── ttstats/                      # Django configuration
 │       ├── settings/
@@ -87,7 +93,7 @@ docker compose -f compose.prod.yml up --build -d
 │       │   ├── dev.py                # Development settings
 │       │   └── prod.py               # Production settings
 │       ├── urls.py                   # Root URL config
-│       ├── middleware.py             # CurrentUserMiddleware
+│       ├── middleware.py             # CurrentUserMiddleware, CacheDebugMiddleware
 │       └── wsgi.py / asgi.py         # Application servers
 ├── docker/django/                    # Docker configuration
 │   ├── Dockerfile                    # Multi-stage build
@@ -129,6 +135,7 @@ Each source module has a corresponding test file:
 | `middleware.py` | `test_middleware.py` | Thread-local set/cleanup, exception safety |
 | `context_processors.py` | `test_context_processors.py` | Context dict values per auth state |
 | `elo.py` | `test_elo.py` | Elo calculation formulas, K-factors, doubles averaging |
+| `cache_utils.py` | `test_cache.py` | Cache invalidation, cached views, denormalized fields, management commands |
 | `management/commands/` | `test_commands.py` | Management command execution, output validation |
 
 When adding new source code, **always create or update the corresponding test file**.
@@ -191,6 +198,7 @@ Key fixtures:
 7. **Manager tests need thread-local manipulation.** Import `_thread_locals` from `ttstats.middleware` and set/clear `_thread_locals.user` directly. Use an `autouse` fixture to clean up.
 8. **base.html requires user.player.pk.** Any view test where the user has no Player profile will crash during template rendering with `NoReverseMatch`. Always create a player for the test user.
 9. **Email backend in tests.** Dev settings use `console.EmailBackend`. pytest-django's `mailoutbox` fixture or `django.core.mail.outbox` works for asserting sent emails.
+10. **LocMemCache persists between tests.** Django's LocMemCache (used when no Redis is available) persists across pytest tests in the same process. An autouse `_clear_cache` fixture in `conftest.py` calls `cache.clear()` before and after each test to prevent cross-test contamination.
 
 ### TDD Workflow for New Features
 
@@ -274,16 +282,19 @@ These integration tests simulate real user sessions. They catch regressions wher
 ```python
 # Fields: is_double, team1, team2, date_played, location, match_type, best_of,
 #         winner, confirmations (ManyToMany through MatchConfirmation),
+#         is_confirmed (denormalized, db_index=True),
+#         team1_score_cache, team2_score_cache (denormalized),
 #         notes, created_at, updated_at
 # match_type choices: casual, practice, tournament
 # best_of choices: 3, 5, 7
 # Properties: team1_score, team2_score, team1_confirmed, team2_confirmed, match_confirmed,
 #             player1, player2 (backward-compatible)
 # Methods: user_can_edit(user), user_can_view(user), should_auto_confirm(),
-#          get_unverified_players()
-# save() auto-determines winner from games when match already exists (has pk)
+#          get_unverified_players(), update_cache_fields(), _calculate_confirmation_status()
+# save() auto-determines winner from games AND updates score cache fields
 # Manager: MatchManager (row-level security based on user)
 # Purpose: Completed or in-progress match (singles or doubles)
+# Note: is_confirmed is maintained by signals, enabling DB-level filtering instead of Python
 ```
 
 ### MatchConfirmation
@@ -397,9 +408,12 @@ These integration tests simulate real user sessions. They catch regressions wher
 |--------|---------|--------|
 | `create_user_profile` | User post_save (created=True) | Creates UserProfile + verification token |
 | `track_match_winner_change` | Match pre_save | Sets `_winner_just_set` flag if winner goes from None to set |
-| `handle_match_completion` | Match post_save | If `_winner_just_set`: auto-confirm (unverified) OR send confirmation emails (verified), update Elo if fully confirmed |
+| `handle_match_completion` | Match post_save | If `_winner_just_set`: auto-confirm (unverified) OR send emails (verified), update `is_confirmed` field, update Elo, invalidate caches |
 | `update_elo_on_confirmation` | Match post_save | If match becomes fully confirmed, calculate and update Elo ratings |
-| `update_elo_on_match_confirmation` | MatchConfirmation post_save (created=True) | Triggers Elo update when individual player confirms |
+| `update_elo_on_match_confirmation` | MatchConfirmation post_save (created=True) | Updates `is_confirmed` field, triggers Elo update, invalidates caches |
+| `invalidate_caches_on_game_save` | Game post_save | Invalidates match-related caches when scores change |
+| `invalidate_on_player_save` | Player post_save | Invalidates player-related caches |
+| `invalidate_on_player_delete` | Player post_delete | Invalidates player-related caches |
 | `notify_passkey_registered` | WebAuthnCredential post_save (created=True) | Sends email notification when new passkey is registered |
 
 ## Business Logic
@@ -488,6 +502,69 @@ python manage.py recalculate_elo --dry-run  # Preview changes without saving
 
 **Testing:** `test_match_list_performance.py` validates query count stays under limits
 
+### Redis Cache System
+
+**Stack:** Redis 7 Alpine + django-redis. Falls back to LocMemCache when `REDIS_URL` is not set.
+
+**Configuration (`settings/base.py`):**
+- Uses `REDIS_URL` env var to determine backend
+- Connection pool: max 50 connections, retry on timeout, 5s socket timeouts
+- Key prefix: `ttstats`, default TTL: 300s (5min)
+
+**Denormalized Database Fields (Match model):**
+- `is_confirmed` (BooleanField, indexed) - enables `Match.objects.filter(is_confirmed=True)` instead of Python-level filtering
+- `team1_score_cache`, `team2_score_cache` (IntegerField) - game win counts maintained by `Match.save()`
+- Maintained by signals (`handle_match_completion`, `update_elo_on_match_confirmation`) and `Match.save()`
+
+**Cache Keys & TTLs:**
+
+| Key Pattern | TTL | Invalidated By | Used In |
+|-------------|-----|----------------|---------|
+| `pending_matches_{player_pk}` | 5min | Match/confirmation changes | `pingpong_context` context processor |
+| `dashboard_total_players` | 15min | Player create/delete | DashboardView |
+| `dashboard_total_matches` | 10min | Match changes | DashboardView |
+| `dashboard_recent_matches` | 5min | Match changes | DashboardView |
+| `leaderboard_{generation}_{params}` | 10min | Generation counter bump | LeaderboardView |
+| `player_stats_{player_pk}` | 10min | Match/confirmation changes | PlayerDetailView |
+| `h2h_{min_pk}_{max_pk}` | 30min | Match/confirmation changes | HeadToHeadStatsView |
+
+**Leaderboard Generation Counter:**
+- Instead of deleting all filter-variant cache keys, uses `cache.incr('leaderboard_generation')` to version keys
+- Old entries expire naturally via TTL
+- Key format: `leaderboard_{generation}_{match_type}_{min_matches}_{playing_style}`
+
+**Cache Invalidation (`cache_utils.py`):**
+- `invalidate_match_caches(match)` - clears player stats, pending matches, h2h, dashboard keys for all players in the match
+- `invalidate_player_caches(player)` - clears player stats, pending matches, dashboard player count
+- `invalidate_leaderboard()` - increments generation counter
+- `invalidate_all_caches()` - calls `cache.clear()`
+- All invalidation functions are called from signals
+
+**Debug Middleware (`CacheDebugMiddleware`):**
+- Enabled in dev.py only (`MIDDLEWARE += [...]`)
+- Adds response headers: `X-Request-Time`, `X-Cache-Hits`, `X-Cache-Misses`
+- Only active when `settings.DEBUG` is True
+- Requires django-redis (silently skips for LocMemCache)
+
+**Files:**
+
+| File | Purpose |
+|------|---------|
+| `pingpong/cache_utils.py` | Cache invalidation functions |
+| `pingpong/signals.py` | Signal handlers that call invalidation |
+| `pingpong/management/commands/cache_control.py` | --clear, --stats, --test management command |
+| `pingpong/management/commands/warm_cache.py` | Pre-populate common dashboard caches |
+| `ttstats/middleware.py` | CacheDebugMiddleware (debug headers) |
+| `pingpong/tests/test_cache.py` | 32 tests covering invalidation, views, denormalized fields |
+| `pingpong/migrations/0017_match_denormalized_cache_fields.py` | Schema migration (3 new fields) |
+| `pingpong/migrations/0018_populate_match_cache_fields.py` | Data migration (populate existing records) |
+
+**Known Gotchas:**
+1. `is_confirmed` must be updated in ALL signal paths (auto-confirm AND email paths), not just the auto-confirm path. When all players are unverified, `match_confirmed` is already True, so `should_auto_confirm()` returns False.
+2. Use `Match.objects.filter(pk=instance.pk).update(is_confirmed=...)` in signals to avoid re-triggering pre/post_save signals.
+3. LocMemCache persists between pytest tests. The autouse `_clear_cache` fixture in conftest.py handles this.
+4. Views that filter confirmed matches should use `Match.objects.filter(is_confirmed=True)` (DB-level) instead of `[m for m in matches if m.match_confirmed]` (Python-level).
+
 ## Templates
 
 ### Base Template Constraint
@@ -519,10 +596,12 @@ python manage.py recalculate_elo --dry-run  # Preview changes without saving
 ### Development (`.env.dev`)
 - `DEBUG=True`, SQLite, Console email backend
 - `DJANGO_SETTINGS_MODULE=ttstats.settings.dev`
+- `REDIS_URL=redis://redis:6379/1` (Docker) or unset for LocMemCache fallback
 
 ### Production (`.env.prod`)
 - `DEBUG=False`, PostgreSQL, Mailgun email, HTTPS, WhiteNoise
 - `DJANGO_SETTINGS_MODULE=ttstats.settings.prod`
+- `REDIS_URL=redis://:password@redis:6379/1`, `REDIS_PASSWORD=...`
 
 ## Docker
 
@@ -533,6 +612,11 @@ docker compose -f compose.dev.yml up --build       # http://localhost:8000
 # Production
 docker compose -f compose.prod.yml up --build -d   # Gunicorn (3 workers)
 ```
+
+### Services
+Both compose files include: **web** (Django), **db** (PostgreSQL), **redis** (Redis 7 Alpine).
+- Dev Redis: no auth, port 6379 exposed
+- Prod Redis: password auth (`REDIS_PASSWORD` env var), no port exposed, `appendonly yes`
 
 ### Entrypoint (`docker/django/entrypoint.sh`)
 1. Wait for database
@@ -570,6 +654,8 @@ sqlparse==0.5.5
 psycopg2-binary  # PostgreSQL driver
 gunicorn         # WSGI server (production)
 whitenoise==6.11.0
+redis==5.0.1     # Redis client
+django-redis==5.4.0  # Django cache backend for Redis
 ```
 
 **Authentication:**
@@ -598,6 +684,7 @@ faker==33.3.1
 | Add a form | `pingpong/forms.py` |
 | Add a template | `pingpong/templates/pingpong/` |
 | Add a signal | `pingpong/signals.py` |
+| Modify cache invalidation | `pingpong/cache_utils.py` |
 | Add email logic | `pingpong/emails.py` |
 | Modify security | `pingpong/managers.py` |
 | Add context vars | `pingpong/context_processors.py` |
@@ -618,7 +705,7 @@ python manage.py migrate                     # Apply migrations
 python manage.py showmigrations              # List migrations
 ```
 
-Current migrations (16 total):
+Current migrations (18 total):
 1. `0001_initial` - Initial schema
 2. `0002-0005` - Location and best_of field adjustments
 3. `0006` - Match confirmation fields (old boolean approach)
@@ -632,6 +719,8 @@ Current migrations (16 total):
 11. `0014` - **Major:** Added Elo fields (elo_rating, elo_peak, matches_for_elo, EloHistory)
 12. `0015` - MatchConfirmation metadata cleanup
 13. `0016_scheduledmatch_match_link` - Added conversion tracking to ScheduledMatch
+14. `0017_match_denormalized_cache_fields` - **Major:** Added is_confirmed, team1_score_cache, team2_score_cache to Match
+15. `0018_populate_match_cache_fields` - Data migration to populate denormalized fields for existing records
 
 ## Management Commands
 
@@ -659,6 +748,30 @@ python manage.py recalculate_elo --dry-run    # Preview changes without saving
 - Testing new K-factor or formula changes
 
 **File:** `pingpong/management/commands/recalculate_elo.py`
+
+### cache_control
+**Purpose:** Manage the Redis cache (clear, test connectivity, view stats).
+
+**Usage:**
+```bash
+cd ttstats
+python manage.py cache_control --test      # Test cache read/write
+python manage.py cache_control --clear     # Clear all cached data
+python manage.py cache_control --stats     # Show Redis memory/hit stats
+```
+
+**File:** `pingpong/management/commands/cache_control.py`
+
+### warm_cache
+**Purpose:** Pre-populate frequently accessed caches after deployment.
+
+**Usage:**
+```bash
+cd ttstats
+python manage.py warm_cache    # Warms dashboard_total_players, dashboard_total_matches, dashboard_recent_matches
+```
+
+**File:** `pingpong/management/commands/warm_cache.py`
 
 ## Passkey Authentication
 
