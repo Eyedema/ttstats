@@ -678,69 +678,100 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
                 # Invalid date format, default to all
                 filter_start_date = None
 
-        # Fetch all players with comprehensive prefetching
-        player_stats_qs = Player.objects.select_related('user').prefetch_related(
-            'teams',
-            'teams__matches_as_team1',
-            'teams__matches_as_team2',
-            'teams__matches_as_team1__team1__players__user__profile',
-            'teams__matches_as_team1__team2__players__user__profile',
-            'teams__matches_as_team1__confirmations',
-            'teams__matches_as_team2__team1__players__user__profile',
-            'teams__matches_as_team2__team2__players__user__profile',
-            'teams__matches_as_team2__confirmations',
-            'teams__matches_as_team1__games',
-            'teams__matches_as_team2__games',
-            'teams__matches_as_team1__winner__players',
-            'teams__matches_as_team2__winner__players'
+        # Build base match query with filters applied at DB level
+        matches_query = Match._base_manager.all()
+
+        # Apply match type filter at DB level
+        if match_type == 'singles':
+            matches_query = matches_query.filter(is_double=False)
+        elif match_type == 'doubles':
+            matches_query = matches_query.filter(is_double=True)
+
+        # Apply date filter at DB level
+        if filter_start_date:
+            matches_query = matches_query.filter(
+                date_played__gte=filter_start_date,
+                date_played__lte=filter_end_date
+            )
+
+        # Prefetch only what we need for confirmation checking and stats
+        matches_query = matches_query.select_related(
+            'team1', 'team2', 'winner'
+        ).prefetch_related(
+            'team1__players__user__profile',
+            'team2__players__user__profile',
+            'confirmations',
+            'games'  # For counting games
         )
 
-        # Calculate stats in Python
+        # Load all matches once into memory
+        all_matches = list(matches_query)
+
+        # Pre-filter confirmed matches (using property)
+        confirmed_matches = [m for m in all_matches if m.match_confirmed]
+
+        # Build a lookup dictionary: player_id -> list of their matches
+        # This avoids N+1 queries
+        player_matches = {}
+        for match in confirmed_matches:
+            # Get players from team1
+            for player in match.team1.players.all():
+                if player.id not in player_matches:
+                    player_matches[player.id] = []
+                player_matches[player.id].append(match)
+
+            # Get players from team2
+            for player in match.team2.players.all():
+                if player.id not in player_matches:
+                    player_matches[player.id] = []
+                player_matches[player.id].append(match)
+
+        # Pre-cache game counts for all matches to avoid repeated queries
+        match_game_counts = {}
+        for match in confirmed_matches:
+            # Games are already prefetched, so this uses cached data
+            match_game_counts[match.id] = len(match.games.all())
+
+        # Get only players that have matches (optimization)
+        player_ids_with_matches = set(player_matches.keys())
+        player_stats_qs = Player.objects.filter(
+            id__in=player_ids_with_matches
+        ).select_related('user')
+
+        # Calculate stats in Python using pre-loaded data
         player_stats = []
         for player in player_stats_qs:
-            # Get all matches (both teams)
-            all_matches = set()
-            for team in player.teams.all():
-                all_matches.update(team.matches_as_team1.all())
-                all_matches.update(team.matches_as_team2.all())
+            # Get matches for this player from our lookup dict
+            player_match_list = player_matches.get(player.id, [])
 
-            # Filter to confirmed only (using Python property)
-            confirmed_matches = [m for m in all_matches if m.match_confirmed]
+            if not player_match_list:
+                continue
 
-            # Apply filters
-            filtered_matches = confirmed_matches
+            total_matches = len(player_match_list)
 
-            # Filter by match type (singles/doubles)
-            if match_type == 'singles':
-                filtered_matches = [m for m in filtered_matches if not m.is_double]
-            elif match_type == 'doubles':
-                filtered_matches = [m for m in filtered_matches if m.is_double]
+            # Calculate wins using cached data
+            wins = 0
+            for match in player_match_list:
+                # winner.players is already prefetched
+                if match.winner and player in match.winner.players.all():
+                    wins += 1
 
-            # Filter by date range
-            if filter_start_date:
-                filtered_matches = [
-                    m for m in filtered_matches
-                    if filter_start_date <= m.date_played <= filter_end_date
-                ]
-
-            total_matches = len(filtered_matches)
-            wins = len([m for m in filtered_matches if m.winner and player in m.winner.players.all()])
             losses = total_matches - wins
             win_rate = (wins / total_matches * 100) if total_matches > 0 else 0
-            total_games = sum(m.games.count() for m in filtered_matches)
 
-            # Only include players with at least one match in the filtered period
-            if total_matches > 0:
-                player_stats.append({
-                    "player": player,
-                    "total_matches": total_matches,
-                    "total_games": total_games,
-                    "wins": wins,
-                    "losses": losses,
-                    "win_rate": win_rate,
-                    "elo_rating": player.elo_rating,
-                    "elo_peak": player.elo_peak,
-                })
+            # Use pre-cached game counts
+            total_games = sum(match_game_counts.get(m.id, 0) for m in player_match_list)
+
+            player_stats.append({
+                "player": player,
+                "total_matches": total_matches,
+                "total_games": total_games,
+                "wins": wins,
+                "losses": losses,
+                "win_rate": win_rate,
+                "elo_rating": player.elo_rating,
+                "elo_peak": player.elo_peak,
+            })
 
         # Sort by Elo rating (desc), then by total wins (desc), then by win rate (desc)
         player_stats.sort(
@@ -748,13 +779,13 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
         )
 
         # Apply top X filter
-        top_x = self.request.GET.get('top_x', '10')  # Default to top 10
+        top_x = self.request.GET.get('top_x', '10')
         try:
             top_x_int = int(top_x)
             if top_x_int > 0:
                 player_stats = player_stats[:top_x_int]
         except (ValueError, TypeError):
-            player_stats = player_stats[:10]  # Default to 10 if invalid
+            player_stats = player_stats[:10]
 
         context["player_stats"] = player_stats
         context["top_x"] = top_x
