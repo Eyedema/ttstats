@@ -1,11 +1,15 @@
 # Create your models here.
 import uuid
+from datetime import timedelta
 
 from django.contrib.auth.models import User
 from django.db import models
 from django.utils import timezone
 
 from .managers import GameManager, MatchManager, PlayerManager, ScheduledMatchManager
+
+# Email verification token expires after 24 hours
+VERIFICATION_TOKEN_EXPIRY = timedelta(hours=24)
 
 
 class Location(models.Model):
@@ -342,12 +346,25 @@ class UserProfile(models.Model):
         return self.email_verification_token
 
     def verify_email(self, token):
-        if self.email_verification_token == token:
-            self.email_verified = True
-            self.email_verification_token = ""
-            self.save()
+        """Verify email with token. Returns True if successful, False if invalid/expired."""
+        if self.email_verification_token != token:
+            return False
+
+        # Check if token has expired (24 hours)
+        if self.email_verification_sent_at:
+            if timezone.now() - self.email_verification_sent_at > VERIFICATION_TOKEN_EXPIRY:
+                return False
+
+        self.email_verified = True
+        self.email_verification_token = ""
+        self.save()
+        return True
+
+    def is_token_expired(self):
+        """Check if the verification token has expired."""
+        if not self.email_verification_sent_at:
             return True
-        return False
+        return timezone.now() - self.email_verification_sent_at > VERIFICATION_TOKEN_EXPIRY
 
     def __str__(self):
         return f"Profile of {self.user.username}"

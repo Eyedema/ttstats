@@ -118,6 +118,18 @@ STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 LOGOUT_REDIRECT_URL = '/pingpong/'
 ADMIN_LOGOUT_URL = '/accounts/logout/'
 
+# Session security settings
+SESSION_COOKIE_HTTPONLY = True  # Prevent JavaScript access to session cookie
+SESSION_COOKIE_SAMESITE = 'Lax'  # Prevent CSRF via cross-site requests
+SESSION_COOKIE_AGE = 1209600  # 2 weeks
+
+# CSRF security
+CSRF_COOKIE_HTTPONLY = True  # Prevent JavaScript access to CSRF token
+CSRF_COOKIE_SAMESITE = 'Lax'
+
+# Default email settings (override in prod.py)
+DEFAULT_FROM_EMAIL = 'noreply@localhost'
+
 # Authentication backends (for passkey + password login)
 AUTHENTICATION_BACKENDS = [
     'django_otp_webauthn.backends.WebAuthnBackend',  # Passkey login
