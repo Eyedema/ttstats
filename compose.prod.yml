@@ -8,6 +8,16 @@ services:
     networks:
       - pingpong_network
 
+  redis:
+    image: redis:7-alpine
+    container_name: ttstats_redis_prod
+    restart: unless-stopped
+    volumes:
+      - redis_data_prod:/data
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    networks:
+      - pingpong_network
+
   web:
     build:
       context: .
@@ -20,12 +30,14 @@ services:
       - static_volume:/app/static
     depends_on:
       - db
+      - redis
     networks:
       - pingpong_network
       - pangolin
 
 volumes:
   pgdata:
+  redis_data_prod:
   static_volume:
 
 networks:
