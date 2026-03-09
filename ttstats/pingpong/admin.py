@@ -11,6 +11,7 @@ from django_otp_webauthn.models import WebAuthnCredential
 
 from .emails import send_verification_email
 from .models import (
+    Championship,
     EloHistory,
     Game,
     Location,
@@ -907,6 +908,42 @@ class ScheduledMatchAdmin(admin.ModelAdmin):
         """Mark selected matches as not notified"""
         count = queryset.update(notification_sent=False)
         self.message_user(request, f"Marked {count} match(es) as not notified.")
+
+
+@admin.register(Championship)
+class ChampionshipAdmin(admin.ModelAdmin):
+    """Championship admin"""
+
+    list_display = (
+        "name",
+        "championship_type",
+        "status",
+        "is_public",
+        "participant_count",
+        "start_date",
+        "created_by",
+    )
+    list_filter = ("status", "championship_type", "is_public", "start_date")
+    search_fields = ("name", "description", "created_by__name")
+    readonly_fields = ("created_at", "updated_at", "participant_count")
+    filter_horizontal = ("participants",)
+
+    fieldsets = (
+        ("Basic Info", {"fields": ("name", "description", "championship_type", "is_public")}),
+        ("Settings", {"fields": ("max_participants", "start_date", "end_date", "registration_deadline", "location")}),
+        ("Status", {"fields": ("status", "participants", "created_by")}),
+        ("Metadata", {"fields": ("created_at", "updated_at"), "classes": ("collapse",)}),
+    )
+
+    def get_queryset(self, request):
+        from django.db.models import Count
+        qs = super().get_queryset(request)
+        return qs.annotate(_participant_count=Count('participants', distinct=True))
+
+    def participant_count(self, obj):
+        return obj._participant_count
+
+    participant_count.short_description = "Participants"
 
 
 @admin.register(EloHistory)

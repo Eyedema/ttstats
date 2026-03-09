@@ -114,6 +114,10 @@ def update_elo_on_match_confirmation(sender, instance, created, **kwargs):
         # Invalidate caches
         invalidate_match_caches(match)
 
+        # Check if this completes a championship
+        if hasattr(match, 'championship') and match.championship:
+            match.championship.check_completion()
+
 
 @receiver(post_save, sender=Game)
 def invalidate_caches_on_game_save(sender, instance, **kwargs):

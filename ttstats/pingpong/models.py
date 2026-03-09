@@ -6,7 +6,7 @@ from django.contrib.auth.models import User
 from django.db import models
 from django.utils import timezone
 
-from .managers import GameManager, MatchManager, PlayerManager, ScheduledMatchManager
+from .managers import ChampionshipManager, GameManager, MatchManager, PlayerManager, ScheduledMatchManager
 
 # Email verification token expires after 24 hours
 VERIFICATION_TOKEN_EXPIRY = timedelta(hours=24)
@@ -122,6 +122,14 @@ class Match(models.Model):
     team2 = models.ForeignKey(
         Team, on_delete=models.CASCADE, related_name="matches_as_team2", null=True
     )
+    championship = models.ForeignKey(
+        'Championship',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='matches',
+        help_text="Championship this match belongs to (if any)"
+    )
     date_played = models.DateTimeField(default=timezone.now)
     location = models.ForeignKey(
         Location, on_delete=models.SET_NULL, null=True, blank=True
@@ -158,6 +166,7 @@ class Match(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    all_objects = models.Manager()
     objects = MatchManager()
 
     def user_can_edit(self, user):
@@ -178,6 +187,7 @@ class Match(models.Model):
         return self.user_can_edit(user)
 
     class Meta:
+        default_manager_name = 'objects'
         ordering = ["-date_played"]
         verbose_name_plural = "matches"
 
@@ -415,6 +425,14 @@ class ScheduledMatch(models.Model):
     team2 = models.ForeignKey(
         Team, on_delete=models.CASCADE, related_name="scheduled_matches_as_team2"
     )
+    championship = models.ForeignKey(
+        'Championship',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='scheduled_matches',
+        help_text="Championship this match belongs to (if any)"
+    )
     scheduled_date = models.DateField(help_text="Date of the scheduled match")
     scheduled_time = models.TimeField(help_text="Time of the scheduled match")
     location = models.ForeignKey(
@@ -430,6 +448,13 @@ class ScheduledMatch(models.Model):
         related_name="scheduled_matches_created",
     )
 
+    # Round number for championship scheduling
+    round_number = models.IntegerField(
+        null=True,
+        blank=True,
+        help_text="Round/matchday number within a championship"
+    )
+
     # Track if emails were sent
     notification_sent = models.BooleanField(default=False)
 
@@ -443,9 +468,11 @@ class ScheduledMatch(models.Model):
         help_text="Linked match if this scheduled match was converted to a played match"
     )
 
+    all_objects = models.Manager()
     objects = ScheduledMatchManager()
 
     class Meta:
+        default_manager_name = 'objects'
         ordering = ["scheduled_date", "scheduled_time"]
         verbose_name = "Scheduled Match"
         verbose_name_plural = "Scheduled Matches"
@@ -529,3 +556,358 @@ class EloHistory(models.Model):
     def __str__(self):
         sign = '+' if self.rating_change >= 0 else ''
         return f"{self.player} {sign}{self.rating_change} ({self.match})"
+
+
+class Championship(models.Model):
+    """Championship model"""
+
+    class Status(models.TextChoices):
+        REGISTRATION = 'registration', 'Registration Open'
+        SCHEDULED = 'scheduled', 'Scheduled'
+        IN_PROGRESS = 'in_progress', 'In Progress'
+        COMPLETED = 'completed', 'Completed'
+        CANCELLED = 'cancelled', 'Cancelled'
+
+    class ChampionshipType(models.TextChoices):
+        SINGLES = 'singles', 'Singles (1v1)'
+        DOUBLES = 'doubles', 'Doubles (2v2)'
+
+    name = models.CharField(max_length=200, help_text="Championship name")
+    description = models.TextField(blank=True, help_text="Championship description and rules")
+
+    # Championship settings
+    championship_type = models.CharField(
+        max_length=20,
+        choices=ChampionshipType.choices,
+        default=ChampionshipType.SINGLES,
+        help_text="Singles or Doubles championship"
+    )
+    is_public = models.BooleanField(
+        default=True,
+        help_text="Public championship allow anyone to register. Private championships have fixed participants."
+    )
+    max_participants = models.IntegerField(
+        default=8,
+        help_text="Maximum number of participants (players or teams)"
+    )
+
+    # Dates
+    start_date = models.DateField(help_text="Championship start date")
+    end_date = models.DateField(null=True, blank=True, help_text="Expected or actual end date")
+    registration_deadline = models.DateField(
+        null=True,
+        blank=True,
+        help_text="Last day to register (only for public championships)"
+    )
+
+    # Status
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.REGISTRATION
+    )
+
+    # Participants (Teams - can be single player or doubles team)
+    participants = models.ManyToManyField(
+        Team,
+        related_name='championships',
+        blank=True,
+        help_text="Registered teams/players"
+    )
+
+    # Matches
+    # Note: matches are linked via ForeignKey in Match model
+
+    # Creator and timestamps
+    created_by = models.ForeignKey(
+        Player,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='championships_created'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    # Location (optional)
+    location = models.ForeignKey(
+        Location,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        help_text="Default location for championship matches"
+    )
+
+    all_objects = models.Manager()
+    objects = ChampionshipManager()
+
+    class Meta:
+        default_manager_name = 'objects'
+        ordering = ['-start_date', '-created_at']
+
+    def __str__(self):
+        return f"{self.name} ({self.get_status_display()})"
+
+    @property
+    def is_registration_open(self):
+        """Check if registration is still open"""
+        if not self.is_public:
+            return False
+        if self.status != self.Status.REGISTRATION:
+            return False
+        if self.registration_deadline:
+            from django.utils import timezone
+            return timezone.now().date() <= self.registration_deadline
+        return True
+
+    @property
+    def current_participants_count(self):
+        """Get current number of participants"""
+        return self.participants.count()
+
+    @property
+    def is_full(self):
+        """Check if championship is at capacity"""
+        return self.current_participants_count >= self.max_participants
+
+    def can_register(self, team):
+        """Check if a team can register for this championship"""
+        if not self.is_registration_open:
+            return False
+        if self.is_full:
+            return False
+        if self.participants.filter(pk=team.pk).exists():
+            return False
+        # Check team size matches championship type
+        team_size = team.players.count()
+        if self.championship_type == self.ChampionshipType.SINGLES and team_size != 1:
+            return False
+        if self.championship_type == self.ChampionshipType.DOUBLES and team_size != 2:
+            return False
+        return True
+
+    def register_team(self, team):
+        """Register a team for the championship"""
+        if self.can_register(team):
+            self.participants.add(team)
+            return True
+        return False
+
+    def generate_schedule(self):
+        """
+        Generate round-robin schedule for the championship using the circle method.
+
+        Creates home and away rounds (andata e ritorno). Each round has n/2 matches
+        where every team plays exactly once. Rounds are spaced 7 days apart.
+        """
+        from datetime import timedelta, time
+
+        participants = list(self.participants.all())
+        n = len(participants)
+
+        if n < 2:
+            return False
+
+        # Delete existing scheduled matches for this championship
+        ScheduledMatch.all_objects.filter(championship=self).delete()
+
+        # Circle method for round-robin scheduling
+        # If odd number of participants, add a "bye" (None)
+        teams = list(participants)
+        if n % 2 == 1:
+            teams.append(None)  # bye
+
+        num_teams = len(teams)
+        num_rounds = num_teams - 1
+
+        # Generate rounds using circle method:
+        # Fix first team, rotate the rest
+        rounds = []  # List of (round_number, [(team1, team2), ...])
+
+        for round_idx in range(num_rounds):
+            round_matches = []
+            for i in range(num_teams // 2):
+                t1 = teams[i]
+                t2 = teams[num_teams - 1 - i]
+                if t1 is not None and t2 is not None:
+                    round_matches.append((t1, t2))
+            rounds.append((round_idx + 1, round_matches))
+
+            # Rotate: keep teams[0] fixed, rotate the rest clockwise
+            teams = [teams[0]] + [teams[-1]] + teams[1:-1]
+
+        # Create home leg (andata) and away leg (ritorno)
+        all_rounds = []
+        for round_num, matches in rounds:
+            all_rounds.append((round_num, matches))
+        for round_num, matches in rounds:
+            # Swap home/away for return leg
+            away_matches = [(t2, t1) for t1, t2 in matches]
+            all_rounds.append((round_num + num_rounds, away_matches))
+
+        # Create scheduled matches, 1 round per week
+        match_time = time(hour=18, minute=0)
+
+        matches_to_create = []
+        for round_num, round_matches in all_rounds:
+            round_date = self.start_date + timedelta(weeks=round_num - 1)
+            for team1, team2 in round_matches:
+                matches_to_create.append(ScheduledMatch(
+                    championship=self,
+                    team1=team1,
+                    team2=team2,
+                    scheduled_date=round_date,
+                    scheduled_time=match_time,
+                    location=self.location,
+                    created_by=self.created_by,
+                    round_number=round_num,
+                ))
+        ScheduledMatch.all_objects.bulk_create(matches_to_create)
+
+        # Set end_date based on last round
+        if all_rounds:
+            last_round_num = all_rounds[-1][0]
+            self.end_date = self.start_date + timedelta(weeks=last_round_num - 1)
+            self.save(update_fields=['end_date'])
+
+        return True
+
+    def get_standings(self):
+        """
+        Calculate championship standings.
+
+        Ranking criteria:
+        1. Points (3 for win, 0 for loss)
+        2. Game difference (games won - games lost)
+        3. Total games won
+        4. Total games lost
+        """
+        standings = []
+
+        # Fetch all championship matches once with prefetch
+        all_matches_qs = Match.all_objects.filter(
+            championship=self,
+        ).select_related('team1', 'team2', 'winner').prefetch_related(
+            'games', 'confirmations',
+            'team1__players', 'team1__players__user__profile',
+            'team2__players', 'team2__players__user__profile',
+        )
+        # Filter to confirmed matches in Python using prefetched data
+        all_matches = [m for m in all_matches_qs if m.match_confirmed]
+
+        # Pre-compute game scores using prefetched data (avoids N+1)
+        match_scores = {}
+        for match in all_matches:
+            t1_score = sum(1 for g in match.games.all() if g.winner_id == match.team1_id)
+            t2_score = sum(1 for g in match.games.all() if g.winner_id == match.team2_id)
+            match_scores[match.pk] = (t1_score, t2_score)
+
+        participants = self.participants.prefetch_related('players').all()
+
+        for team in participants:
+            played = 0
+            wins = 0
+            losses = 0
+            games_won = 0
+            games_lost = 0
+
+            for match in all_matches:
+                if match.team1_id != team.pk and match.team2_id != team.pk:
+                    continue
+
+                played += 1
+                is_team1 = match.team1_id == team.pk
+                t1_score, t2_score = match_scores[match.pk]
+                team_score = t1_score if is_team1 else t2_score
+                opponent_score = t2_score if is_team1 else t1_score
+
+                games_won += team_score
+                games_lost += opponent_score
+
+                if match.winner_id == team.pk:
+                    wins += 1
+                else:
+                    losses += 1
+
+            points = (wins * 3)
+            game_difference = games_won - games_lost
+
+            standings.append({
+                'team': team,
+                'played': played,
+                'wins': wins,
+                'losses': losses,
+                'games_won': games_won,
+                'games_lost': games_lost,
+                'game_difference': game_difference,
+                'points': points,
+            })
+
+        # Sort by: points (desc), game difference (desc), games won (desc), games lost (asc)
+        standings.sort(
+            key=lambda x: (x['points'], x['game_difference'], x['games_won'], -x['games_lost']),
+            reverse=True
+        )
+
+        return standings
+
+    def check_completion(self):
+        """Check if all championship matches are completed and confirmed.
+        If so, auto-transition to 'completed' status.
+        """
+        if self.status != self.Status.IN_PROGRESS:
+            return False
+
+        total_scheduled = ScheduledMatch.all_objects.filter(championship=self).count()
+        if total_scheduled == 0:
+            return False
+
+        # Check all scheduled matches are converted
+        converted = ScheduledMatch.all_objects.filter(
+            championship=self, match__isnull=False
+        ).count()
+        if converted < total_scheduled:
+            return False
+
+        # Check all linked matches are confirmed
+        championship_matches = Match.all_objects.filter(
+            championship=self
+        ).prefetch_related(
+            'confirmations',
+            'team1__players__user__profile',
+            'team2__players__user__profile',
+        )
+        for match in championship_matches:
+            if not match.match_confirmed:
+                return False
+
+        self.status = self.Status.COMPLETED
+        self.save(update_fields=['status'])
+        return True
+
+    def user_can_view(self, user):
+        """Check if user can view this championship"""
+        if not user or not user.is_authenticated:
+            return False
+        if self.is_public:
+            return True
+        if user.is_staff or user.is_superuser:
+            return True
+        # Check if user is a participant
+        try:
+            player = user.player
+            return self.participants.filter(players=player).exists()
+        except (AttributeError, Player.DoesNotExist):
+            return False
+
+    def user_can_edit(self, user):
+        """Check if user can edit this championship"""
+        if not user or not user.is_authenticated:
+            return False
+        if user.is_staff or user.is_superuser:
+            return True
+        try:
+            player = user.player
+            return self.created_by == player
+        except (AttributeError, Player.DoesNotExist):
+            return False
