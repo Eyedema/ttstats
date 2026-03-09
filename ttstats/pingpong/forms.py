@@ -2,29 +2,34 @@ from django import forms
 from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.models import User
 
-from .models import Game, Match, Player, ScheduledMatch, Team
+from .models import Game, Match, Player, ScheduledMatch, Team, Championship
+
+INPUT_CSS = 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
+INPUT_CSS_FOCUS = f'{INPUT_CSS} focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2'
+TEXTAREA_CSS = 'flex min-h-[80px] w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
+TEXTAREA_CSS_FOCUS = 'flex min-h-[100px] w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2'
 
 
 class MatchForm(forms.ModelForm):
     player1 = forms.ModelChoiceField(
     queryset=Player.objects.all(),
     required=True,
-    widget=forms.Select(attrs={'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'})
+    widget=forms.Select(attrs={'class': INPUT_CSS})
     )
     player2 = forms.ModelChoiceField(
         queryset=Player.objects.all(),
         required=True,
-        widget=forms.Select(attrs={'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'})
+        widget=forms.Select(attrs={'class': INPUT_CSS})
     )
     player3 = forms.ModelChoiceField(
         queryset=Player.objects.all(),
         required=False,  # Optional for singles
-        widget=forms.Select(attrs={'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'})
+        widget=forms.Select(attrs={'class': INPUT_CSS})
     )
     player4 = forms.ModelChoiceField(
         queryset=Player.objects.all(),
         required=False,  # Optional for singles
-        widget=forms.Select(attrs={'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'})
+        widget=forms.Select(attrs={'class': INPUT_CSS})
     )
     class Meta:
         model = Match
@@ -34,26 +39,26 @@ class MatchForm(forms.ModelForm):
                 (False, 'Single'),
                 (True, 'Double')],
                 attrs={
-                    'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'}
+                    'class': INPUT_CSS}
             ),
             'date_played': forms.DateTimeInput(attrs={
                 'type': 'datetime-local',
-                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
+                'class': INPUT_CSS
             }),
             'location': forms.Select(attrs={
-                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
+                'class': INPUT_CSS
             }),
             'match_type': forms.Select(attrs={
-                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
+                'class': INPUT_CSS
             }),
             'best_of': forms.NumberInput(attrs={
-                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm',
+                'class': INPUT_CSS,
                 'min': 1,
                 'max': 11,
                 'step': 2
             }),
             'notes': forms.Textarea(attrs={
-                'class': 'flex min-h-[80px] w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm',
+                'class': TEXTAREA_CSS,
                 'rows': 3
             }),
         }
@@ -74,7 +79,7 @@ class MatchForm(forms.ModelForm):
 
         # Two players for singles
         if not cleaned_data.get('is_double') and len(players) > 2:
-            raise forms.ValidationError("Only two players are required for a doubles match!")
+            raise forms.ValidationError("Only two players are required for a singles match!")
         # Four players for doubles
         if cleaned_data.get('is_double') and len(players) != 4:
             raise forms.ValidationError("Four players are required for a doubles match!")
@@ -159,12 +164,12 @@ class ScheduledMatchForm(forms.ModelForm):
     player1 = forms.ModelChoiceField(
     queryset=Player.objects.all(),
     required=True,
-    widget=forms.Select(attrs={'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'})
+    widget=forms.Select(attrs={'class': INPUT_CSS})
     )
     player2 = forms.ModelChoiceField(
         queryset=Player.objects.all(),
         required=True,
-        widget=forms.Select(attrs={'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'})
+        widget=forms.Select(attrs={'class': INPUT_CSS})
     )
 
     class Meta:
@@ -173,17 +178,17 @@ class ScheduledMatchForm(forms.ModelForm):
         widgets = {
             'scheduled_date': forms.DateInput(attrs={
                 'type': 'date',
-                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
+                'class': INPUT_CSS
             }),
             'scheduled_time': forms.TimeInput(attrs={
                 'type': 'time',
-                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
+                'class': INPUT_CSS
             }),
             'location': forms.Select(attrs={
-                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
+                'class': INPUT_CSS
             }),
             'notes': forms.Textarea(attrs={
-                'class': 'flex min-h-[80px] w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm',
+                'class': TEXTAREA_CSS,
                 'rows': 3,
                 'placeholder': 'Any additional notes about the scheduled match...'
             }),
@@ -215,22 +220,22 @@ class MatchConvertForm(forms.ModelForm):
     player1 = forms.ModelChoiceField(
         queryset=Player.objects.all(),
         required=True,
-        widget=forms.Select(attrs={'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'})
+        widget=forms.Select(attrs={'class': INPUT_CSS})
     )
     player2 = forms.ModelChoiceField(
         queryset=Player.objects.all(),
         required=True,
-        widget=forms.Select(attrs={'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'})
+        widget=forms.Select(attrs={'class': INPUT_CSS})
     )
     player3 = forms.ModelChoiceField(
         queryset=Player.objects.all(),
         required=False,
-        widget=forms.Select(attrs={'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'})
+        widget=forms.Select(attrs={'class': INPUT_CSS})
     )
     player4 = forms.ModelChoiceField(
         queryset=Player.objects.all(),
         required=False,
-        widget=forms.Select(attrs={'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'})
+        widget=forms.Select(attrs={'class': INPUT_CSS})
     )
 
     class Meta:
@@ -239,26 +244,26 @@ class MatchConvertForm(forms.ModelForm):
         widgets = {
             'is_double': forms.Select(
                 choices=[(False, 'Single'), (True, 'Double')],
-                attrs={'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'}
+                attrs={'class': INPUT_CSS}
             ),
             'date_played': forms.DateTimeInput(attrs={
                 'type': 'datetime-local',
-                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
+                'class': INPUT_CSS
             }),
             'location': forms.Select(attrs={
-                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
+                'class': INPUT_CSS
             }),
             'match_type': forms.Select(attrs={
-                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
+                'class': INPUT_CSS
             }),
             'best_of': forms.NumberInput(attrs={
-                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm',
+                'class': INPUT_CSS,
                 'min': 1,
                 'max': 11,
                 'step': 2
             }),
             'notes': forms.Textarea(attrs={
-                'class': 'flex min-h-[80px] w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm',
+                'class': TEXTAREA_CSS,
                 'rows': 3
             }),
         }
@@ -336,3 +341,215 @@ class MatchConvertForm(forms.ModelForm):
             raise forms.ValidationError("Four players are required for a doubles match!")
 
         return cleaned_data
+
+
+class ChampionshipCreateForm(forms.ModelForm):
+    """Form for creating a new championship"""
+
+    # For private championships, allow selecting participants upfront
+    private_participants = forms.ModelMultipleChoiceField(
+        queryset=Team.objects.none(),  # Will be set in __init__
+        required=False,
+        widget=forms.CheckboxSelectMultiple,
+        help_text="Select participants for private championship"
+    )
+
+    class Meta:
+        model = Championship
+        fields = [
+            'name',
+            'description',
+            'championship_type',
+            'is_public',
+            'max_participants',
+            'start_date',
+            'registration_deadline',
+            'location',
+        ]
+        widgets = {
+            'name': forms.TextInput(attrs={
+                'class': INPUT_CSS_FOCUS,
+                'placeholder': 'e.g., Summer Championship 2026'
+            }),
+            'description': forms.Textarea(attrs={
+                'class': TEXTAREA_CSS_FOCUS,
+                'rows': 4,
+                'placeholder': 'Championship rules, format, prizes, etc.'
+            }),
+            'championship_type': forms.Select(attrs={
+                'class': INPUT_CSS_FOCUS
+            }),
+            'is_public': forms.CheckboxInput(attrs={
+                'class': 'h-4 w-4 rounded border-input'
+            }),
+            'max_participants': forms.NumberInput(attrs={
+                'class': INPUT_CSS_FOCUS,
+                'min': 2,
+                'max': 100
+            }),
+            'start_date': forms.DateInput(attrs={
+                'type': 'date',
+                'class': INPUT_CSS_FOCUS
+            }),
+            'registration_deadline': forms.DateInput(attrs={
+                'type': 'date',
+                'class': INPUT_CSS_FOCUS
+            }),
+            'location': forms.Select(attrs={
+                'class': INPUT_CSS_FOCUS
+            }),
+        }
+
+    def __init__(self, *args, **kwargs):
+        championship_type = kwargs.pop('championship_type', Championship.ChampionshipType.SINGLES)
+        super().__init__(*args, **kwargs)
+
+        if self.is_bound and 'championship_type' in self.data:
+            championship_type = self.data.get('championship_type', Championship.ChampionshipType.SINGLES)
+
+        from django.db.models import Count
+
+        # Determine the required team size based on tournament type
+        required_size = 1 if championship_type == Championship.ChampionshipType.SINGLES else 2
+
+        # Get eligible teams:
+        # 1. Annotate all teams with player count
+        # 2. Filter by required size
+        # 3. Filter by user membership
+        # 4. Exclude already registered teams
+        eligible_teams = Team.objects.annotate(
+            player_count=Count('players', distinct=True)
+        ).filter(
+            player_count=required_size
+        ).distinct().order_by('name')
+
+        self.fields['private_participants'].queryset = eligible_teams
+
+        # Make registration_deadline required only for public championships
+        if self.instance and not self.instance.is_public:
+            self.fields['registration_deadline'].required = False
+
+    def clean(self):
+        cleaned_data = super().clean()
+        is_public = cleaned_data.get('is_public')
+        registration_deadline = cleaned_data.get('registration_deadline')
+        start_date = cleaned_data.get('start_date')
+        private_participants = cleaned_data.get('private_participants')
+        max_participants = cleaned_data.get('max_participants')
+
+        # Validate registration deadline for public championships
+        if is_public and not registration_deadline:
+            raise forms.ValidationError(
+                "Registration deadline is required for public championships"
+            )
+
+        # Validate dates
+        if registration_deadline and start_date:
+            if registration_deadline >= start_date:
+                raise forms.ValidationError(
+                    "Registration deadline must be before championship start date"
+                )
+
+        # Validate start date is in the future
+        if start_date:
+            from django.utils import timezone
+            if start_date < timezone.now().date():
+                raise forms.ValidationError(
+                    "Championship start date must be in the future"
+                )
+
+        # Validate private championship has participants
+        if not is_public:
+            if not private_participants or private_participants.count() < 2:
+                raise forms.ValidationError(
+                    "Private championships must have at least 2 participants"
+                )
+            if private_participants.count() > max_participants:
+                raise forms.ValidationError(
+                    f"Number of participants ({private_participants.count()}) exceeds maximum ({max_participants})"
+                )
+
+        return cleaned_data
+
+
+class ChampionshipEditForm(forms.ModelForm):
+    """Form for editing championship details (limited fields)"""
+
+    class Meta:
+        model = Championship
+        fields = ['name', 'description', 'location', 'status']
+        widgets = {
+            'name': forms.TextInput(attrs={
+                'class': INPUT_CSS_FOCUS
+            }),
+            'description': forms.Textarea(attrs={
+                'class': TEXTAREA_CSS_FOCUS,
+                'rows': 4
+            }),
+            'location': forms.Select(attrs={
+                'class': INPUT_CSS_FOCUS
+            }),
+            'status': forms.Select(attrs={
+                'class': INPUT_CSS_FOCUS
+            }),
+        }
+
+
+class ChampionshipRegistrationForm(forms.Form):
+    """Form for registering a team to a public championship"""
+
+    team = forms.ModelChoiceField(
+        queryset=Team.objects.none(),
+        required=True,
+        widget=forms.Select(attrs={
+            'class': INPUT_CSS_FOCUS
+        }),
+        help_text="Select your team to register"
+    )
+
+    def __init__(self, *args, **kwargs):
+        championship = kwargs.pop('championship', None)
+        user = kwargs.pop('user', None)
+        super().__init__(*args, **kwargs)
+
+        if championship and user:
+            from django.db.models import Count
+
+            # Determine the required team size based on tournament type
+            required_size = 1 if championship.championship_type == Championship.ChampionshipType.SINGLES else 2
+
+            # Get eligible teams:
+            # 1. Annotate all teams with player count
+            # 2. Filter by required size
+            # 3. Filter by user membership
+            # 4. Exclude already registered teams
+            eligible_teams = Team.objects.annotate(
+                player_count=Count('players', distinct=True)
+            ).filter(
+                player_count=required_size
+            ).filter(
+                players__user=user
+            ).exclude(
+                pk__in=championship.participants.values_list('pk', flat=True)
+            ).distinct().order_by('name')
+
+            self.fields['team'].queryset = eligible_teams
+
+
+class ScheduledMatchEditForm(forms.ModelForm):
+    """Form for editing scheduled match date/time (championship organizer use)."""
+
+    class Meta:
+        model = ScheduledMatch
+        fields = ['scheduled_date', 'scheduled_time', 'location']
+        widgets = {
+            'scheduled_date': forms.DateInput(
+                attrs={'type': 'date', 'class': INPUT_CSS}
+            ),
+            'scheduled_time': forms.TimeInput(
+                attrs={'type': 'time', 'class': INPUT_CSS}
+            ),
+            'location': forms.Select(
+                attrs={'class': INPUT_CSS}
+            ),
+        }

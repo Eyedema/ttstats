@@ -45,6 +45,12 @@
                         <span class="inline-flex items-center rounded-md bg-white/20 px-2 md:px-3 py-1 text-xs md:text-sm font-medium">Casual</span>
                         {% endif %}
                         <span class="inline-flex items-center rounded-md bg-white/20 px-2 md:px-3 py-1 text-xs md:text-sm font-medium">Best of {{ match.best_of }}</span>
+                        {% if match.championship %}
+                        <a href="{% url 'pingpong:championship_detail' match.championship.pk %}" class="inline-flex items-center rounded-md bg-white/20 px-2 md:px-3 py-1 text-xs md:text-sm font-medium hover:bg-white/30 transition-colors">
+                            <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-3 h-3 mr-1 invert" alt="">
+                            {{ match.championship.name }}
+                        </a>
+                        {% endif %}
                     </div>
                 </div>
                 <div class="flex flex-col sm:flex-row gap-2">

@@ -14,5 +14,6 @@ redis==5.0.1
 django-redis==5.4.0
 whitenoise==6.11.0
 pytest-cov
+pytest-xdist
 psycopg2-binary
 gunicorn
