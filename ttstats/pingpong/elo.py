@@ -86,7 +86,7 @@ def update_player_elo(match):
         team1_players = list(match.team1.players.all())
         team2_players = list(match.team2.players.all())
         
-        is_double = len(team1_players) > 1 or len(team2_players) > 1
+        is_double = match.is_double
 
         if is_double:
             # Calculate Team Elo (Average)

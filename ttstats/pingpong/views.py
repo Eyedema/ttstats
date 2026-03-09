@@ -1,16 +1,21 @@
 import json
+import logging
 from typing import Any
 
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import login
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.auth.views import LoginView
+from django.core.cache import cache
 from django.core.mail import send_mail
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db.models import Count, F, Q, Sum
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse_lazy
+from django.utils.decorators import method_decorator
 from django.views import View
 from django.views.generic import (
     CreateView,
@@ -19,6 +24,10 @@ from django.views.generic import (
     TemplateView,
     UpdateView,
 )
+from django_ratelimit.decorators import ratelimit
+from django_ratelimit.exceptions import Ratelimited
+
+logger = logging.getLogger(__name__)
 
 from .forms import GameForm, MatchEditForm, MatchForm, PlayerRegistrationForm, ScheduledMatchForm, MatchConvertForm, \
     ChampionshipCreateForm, ChampionshipEditForm, ScheduledMatchEditForm
@@ -181,27 +190,55 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
         context = super().get_context_data(**kwargs)
 
         player = self.get_object()
+        page = self.request.GET.get('page', 1)
 
-        # Fetch all matches for player with comprehensive prefetching
-        all_matches = Match.objects.filter(
-            Q(team1__players=player) | Q(team2__players=player)
+        # Try cache for aggregate stats (10 minute TTL)
+        stats_cache_key = f'player_stats_{player.pk}'
+        cached_stats = cache.get(stats_cache_key)
+
+        if cached_stats is None:
+            # Cache miss - fetch and compute stats
+            # Use is_confirmed=True to filter at DB level
+            all_matches = Match.objects.filter(
+                Q(team1__players=player) | Q(team2__players=player),
+                is_confirmed=True,
+            ).select_related('team1', 'team2', 'winner').prefetch_related(
+                'team1__players',
+                'team2__players',
+            ).order_by('-date_played').distinct()
+
+            confirmed_matches = list(all_matches)
+
+            total_matches = len(confirmed_matches)
+            wins = len([m for m in confirmed_matches if m.winner and player in m.winner.players.all()])
+            losses = total_matches - wins
+            streaks = self._calculate_streaks(confirmed_matches)
+
+            cached_stats = {
+                'total_matches': total_matches,
+                'wins': wins,
+                'losses': losses,
+                'win_rate': (wins / total_matches * 100) if total_matches > 0 else 0,
+                'current_streak': streaks['current_streak'],
+                'streak_type': streaks['streak_type'],
+                'longest_win_streak': streaks['longest_win_streak'],
+                'longest_loss_streak': streaks['longest_loss_streak'],
+            }
+            cache.set(stats_cache_key, cached_stats, 600)
+
+        # Always fetch paginated matches fresh (lightweight with DB-level filtering)
+        confirmed_matches_qs = Match.objects.filter(
+            Q(team1__players=player) | Q(team2__players=player),
+            is_confirmed=True,
         ).select_related('team1', 'team2', 'winner').prefetch_related(
             'team1__players',
             'team2__players',
-            'team1__players__user__profile',
-            'team2__players__user__profile',
-            'confirmations'
         ).order_by('-date_played').distinct()
 
-        # Filter to confirmed matches only (using Python property)
-        confirmed_matches = [m for m in all_matches if m.match_confirmed]
-
-        # Pagination for matches
         from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
 
         matches_per_page = 10
-        paginator = Paginator(confirmed_matches, matches_per_page)
-        page = self.request.GET.get('page', 1)
+        paginator = Paginator(confirmed_matches_qs, matches_per_page)
 
         try:
             confirmed_matches_page = paginator.page(page)
@@ -210,11 +247,8 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
         except EmptyPage:
             confirmed_matches_page = paginator.page(paginator.num_pages)
 
-        # Use paginated matches for the loop
-        confirmed_matches_to_process = confirmed_matches_page.object_list
-
         # Add p1_score, p2_score, and player_won to each match from player's perspective
-        for match in confirmed_matches_to_process:
+        for match in confirmed_matches_page.object_list:
             if player in match.team1.players.all():
                 match.p1_score = match.team1_score
                 match.p2_score = match.team2_score
@@ -225,27 +259,11 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
             # Check if player won (works for both 1v1 and 2v2)
             match.player_won = match.winner and player in match.winner.players.all()
 
-        total_matches = len(confirmed_matches)
-
-        # Won matches
-        wins = len([m for m in confirmed_matches if m.winner and player in m.winner.players.all()])
-        losses = total_matches - wins
-
-        # Calculate current streak
-        stats = self._calculate_streaks(confirmed_matches)
-
         context.update({
-            'matches': confirmed_matches_to_process,  # List of confirmed matches
-            'page_obj': confirmed_matches_page,  # Paginator object
-            'is_paginated': paginator.num_pages > 1,  # Show pagination if more than 1 page
-            'total_matches': total_matches,
-            'wins': wins,
-            'losses': losses,
-            'win_rate': (wins / total_matches * 100) if total_matches > 0 else 0,
-            'current_streak': stats['current_streak'],
-            'streak_type': stats['streak_type'],
-            'longest_win_streak': stats['longest_win_streak'],
-            'longest_loss_streak': stats['longest_loss_streak'],
+            'matches': confirmed_matches_page.object_list,
+            'page_obj': confirmed_matches_page,
+            'is_paginated': paginator.num_pages > 1,
+            **cached_stats,
         })
 
         return context
@@ -293,15 +311,23 @@ class DashboardView(LoginRequiredMixin, TemplateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
 
-        # Get statistics
-        total_players = Player.objects.count()
-        matches = Match.objects.prefetch_related(
-            "team1__players__user__profile",
-            "team2__players__user__profile",
-            "confirmations",
-        ).all()
-        total_matches = len([m for m in matches if m.match_confirmed])
-        recent_matches = Match.objects.all().order_by("-date_played")[:5]
+        # Cache total players (15 min TTL)
+        total_players = cache.get('dashboard_total_players')
+        if total_players is None:
+            total_players = Player.objects.count()
+            cache.set('dashboard_total_players', total_players, 900)
+
+        # Cache total confirmed matches using denormalized field (10 min TTL)
+        total_matches = cache.get('dashboard_total_matches')
+        if total_matches is None:
+            total_matches = Match.objects.filter(is_confirmed=True).count()
+            cache.set('dashboard_total_matches', total_matches, 600)
+
+        # Recent matches (5 min TTL)
+        recent_matches = cache.get('dashboard_recent_matches')
+        if recent_matches is None:
+            recent_matches = list(Match.objects.all().order_by("-date_played")[:5])
+            cache.set('dashboard_recent_matches', recent_matches, 300)
 
         context.update(
             {
@@ -640,6 +666,11 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
 
     template_name = "pingpong/leaderboard.html"
 
+    def _leaderboard_cache_key(self, match_type, date_filter, start_date, end_date, top_x):
+        """Build a cache key that includes filter params and a generation counter."""
+        generation = cache.get('leaderboard_generation', 0)
+        return f'leaderboard_{generation}_{match_type}_{date_filter}_{start_date}_{end_date}_{top_x}'
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
 
@@ -648,6 +679,20 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
         date_filter = self.request.GET.get('date_filter', 'all')  # 'all', 'month', '3months', '6months', 'year', 'custom'
         start_date = self.request.GET.get('start_date', '')
         end_date = self.request.GET.get('end_date', '')
+        top_x = self.request.GET.get('top_x', '10')
+
+        # Try cache first (10 minute TTL)
+        cache_key = self._leaderboard_cache_key(match_type, date_filter, start_date, end_date, top_x)
+        cached_data = cache.get(cache_key)
+
+        if cached_data is not None:
+            context["player_stats"] = cached_data
+            context["top_x"] = top_x
+            context["match_type"] = match_type
+            context["date_filter"] = date_filter
+            context["start_date"] = start_date
+            context["end_date"] = end_date
+            return context
 
         # Calculate date range
         from datetime import datetime, timedelta
@@ -673,69 +718,98 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
                 # Invalid date format, default to all
                 filter_start_date = None
 
-        # Fetch all players with comprehensive prefetching
-        player_stats_qs = Player.objects.select_related('user').prefetch_related(
-            'teams',
-            'teams__matches_as_team1',
-            'teams__matches_as_team2',
-            'teams__matches_as_team1__team1__players__user__profile',
-            'teams__matches_as_team1__team2__players__user__profile',
-            'teams__matches_as_team1__confirmations',
-            'teams__matches_as_team2__team1__players__user__profile',
-            'teams__matches_as_team2__team2__players__user__profile',
-            'teams__matches_as_team2__confirmations',
-            'teams__matches_as_team1__games',
-            'teams__matches_as_team2__games',
-            'teams__matches_as_team1__winner__players',
-            'teams__matches_as_team2__winner__players'
+        # Build base match query with filters applied at DB level
+        # Use is_confirmed=True to filter at DB level instead of Python
+        matches_query = Match._base_manager.filter(is_confirmed=True)
+
+        # Apply match type filter at DB level
+        if match_type == 'singles':
+            matches_query = matches_query.filter(is_double=False)
+        elif match_type == 'doubles':
+            matches_query = matches_query.filter(is_double=True)
+
+        # Apply date filter at DB level
+        if filter_start_date:
+            matches_query = matches_query.filter(
+                date_played__gte=filter_start_date,
+                date_played__lte=filter_end_date
+            )
+
+        # Prefetch only what we need for stats
+        matches_query = matches_query.select_related(
+            'team1', 'team2', 'winner'
+        ).prefetch_related(
+            'team1__players',
+            'team2__players',
+            'winner__players',
+            'games'
         )
 
-        # Calculate stats in Python
+        # Load all confirmed matches once into memory
+        confirmed_matches = list(matches_query)
+
+        # Build a lookup dictionary: player_id -> list of their matches
+        # This avoids N+1 queries
+        player_matches = {}
+        for match in confirmed_matches:
+            # Get players from team1
+            for player in match.team1.players.all():
+                if player.id not in player_matches:
+                    player_matches[player.id] = []
+                player_matches[player.id].append(match)
+
+            # Get players from team2
+            for player in match.team2.players.all():
+                if player.id not in player_matches:
+                    player_matches[player.id] = []
+                player_matches[player.id].append(match)
+
+        # Pre-cache game counts for all matches to avoid repeated queries
+        match_game_counts = {}
+        for match in confirmed_matches:
+            # Games are already prefetched, so this uses cached data
+            match_game_counts[match.id] = len(match.games.all())
+
+        # Get only players that have matches (optimization)
+        player_ids_with_matches = set(player_matches.keys())
+        player_stats_qs = Player.objects.filter(
+            id__in=player_ids_with_matches
+        ).select_related('user')
+
+        # Calculate stats in Python using pre-loaded data
         player_stats = []
         for player in player_stats_qs:
-            # Get all matches (both teams)
-            all_matches = set()
-            for team in player.teams.all():
-                all_matches.update(team.matches_as_team1.all())
-                all_matches.update(team.matches_as_team2.all())
+            # Get matches for this player from our lookup dict
+            player_match_list = player_matches.get(player.id, [])
 
-            # Filter to confirmed only (using Python property)
-            confirmed_matches = [m for m in all_matches if m.match_confirmed]
+            if not player_match_list:
+                continue
 
-            # Apply filters
-            filtered_matches = confirmed_matches
+            total_matches = len(player_match_list)
 
-            # Filter by match type (singles/doubles)
-            if match_type == 'singles':
-                filtered_matches = [m for m in filtered_matches if not m.is_double]
-            elif match_type == 'doubles':
-                filtered_matches = [m for m in filtered_matches if m.is_double]
+            # Calculate wins using cached data
+            wins = 0
+            for match in player_match_list:
+                # winner.players is already prefetched
+                if match.winner and player in match.winner.players.all():
+                    wins += 1
 
-            # Filter by date range
-            if filter_start_date:
-                filtered_matches = [
-                    m for m in filtered_matches
-                    if filter_start_date <= m.date_played <= filter_end_date
-                ]
-
-            total_matches = len(filtered_matches)
-            wins = len([m for m in filtered_matches if m.winner and player in m.winner.players.all()])
             losses = total_matches - wins
             win_rate = (wins / total_matches * 100) if total_matches > 0 else 0
-            total_games = sum(m.games.count() for m in filtered_matches)
 
-            # Only include players with at least one match in the filtered period
-            if total_matches > 0:
-                player_stats.append({
-                    "player": player,
-                    "total_matches": total_matches,
-                    "total_games": total_games,
-                    "wins": wins,
-                    "losses": losses,
-                    "win_rate": win_rate,
-                    "elo_rating": player.elo_rating,
-                    "elo_peak": player.elo_peak,
-                })
+            # Use pre-cached game counts
+            total_games = sum(match_game_counts.get(m.id, 0) for m in player_match_list)
+
+            player_stats.append({
+                "player": player,
+                "total_matches": total_matches,
+                "total_games": total_games,
+                "wins": wins,
+                "losses": losses,
+                "win_rate": win_rate,
+                "elo_rating": player.elo_rating,
+                "elo_peak": player.elo_peak,
+            })
 
         # Sort by Elo rating (desc), then by total wins (desc), then by win rate (desc)
         player_stats.sort(
@@ -743,13 +817,15 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
         )
 
         # Apply top X filter
-        top_x = self.request.GET.get('top_x', '10')  # Default to top 10
         try:
             top_x_int = int(top_x)
             if top_x_int > 0:
                 player_stats = player_stats[:top_x_int]
         except (ValueError, TypeError):
-            player_stats = player_stats[:10]  # Default to 10 if invalid
+            player_stats = player_stats[:10]
+
+        # Cache for 10 minutes
+        cache.set(cache_key, player_stats, 600)
 
         context["player_stats"] = player_stats
         context["top_x"] = top_x
@@ -777,6 +853,14 @@ class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
             player1 = get_object_or_404(Player, pk=player1_id)
             player2 = get_object_or_404(Player, pk=player2_id)
 
+            # Try cache first (30 minute TTL)
+            h2h_cache_key = f'h2h_{min(player1.pk, player2.pk)}_{max(player1.pk, player2.pk)}'
+            cached_h2h = cache.get(h2h_cache_key)
+
+            if cached_h2h is not None:
+                context.update(cached_h2h)
+                return context
+
             # Check if any 2v2 matches exist between these players
             has_2v2_matches = Match.objects.filter(
                 Q(team1__players=player1) | Q(team2__players=player1)
@@ -787,35 +871,33 @@ class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
             ).exists()
             context['has_2v2_matches'] = has_2v2_matches
 
-            # Get all matches between these players
+            # Get all confirmed 1v1 matches between these players
+            # Use is_confirmed=True for DB-level filtering
             all_matches = (
                 Match.objects.annotate(
                     team1_player_count=Count('team1__players', distinct=True),
                     team2_player_count=Count('team2__players', distinct=True)
                 )
                 .filter(
-                    # Only matches between these two exact players
                     team1_player_count=1,
-                    team2_player_count=1
+                    team2_player_count=1,
+                    is_confirmed=True,
                 )
                 .filter(
-                    # Check if there are only the two selected players in the match, no one else
                     Q(team1__players=player1, team2__players=player2) |
                     Q(team1__players=player2, team2__players=player1)
                 )
                 .select_related("team1", "team2", "winner")
                 .prefetch_related(
                     "games",
-                    "team1__players__user__profile",
-                    "team2__players__user__profile",
-                    "confirmations"
+                    "team1__players",
+                    "team2__players",
                 )
                 .distinct()
                 .order_by("date_played")
             )
 
-            # Filter to confirmed matches only (using Python property)
-            matches = [m for m in all_matches if m.match_confirmed]
+            matches = list(all_matches)
 
             if matches:
                 # Basic stats (matches is now a list, not QuerySet)
@@ -960,68 +1042,79 @@ class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
                     running_total += m["margin"]
                     cumulative_avg.append(running_total / i)
 
-                context.update(
-                    {
-                        "player1": player1,
-                        "player2": player2,
-                        "has_data": True,
-                        "total_matches": total_matches,
-                        "total_games": total_games,
-                        "player1_match_wins": player1_match_wins,
-                        "player2_match_wins": player2_match_wins,
-                        "player1_game_wins": player1_game_wins,
-                        "player2_game_wins": player2_game_wins,
-                        "player1_match_win_rate": (
-                            player1_match_wins / total_matches * 100
-                        )
-                        if total_matches > 0
-                        else 0,
-                        "player2_match_win_rate": (
-                            player2_match_wins / total_matches * 100
-                        )
-                        if total_matches > 0
-                        else 0,
-                        "player1_game_win_rate": (player1_game_wins / total_games * 100)
-                        if total_games > 0
-                        else 0,
-                        "player2_game_win_rate": (player2_game_wins / total_games * 100)
-                        if total_games > 0
-                        else 0,
-                        "close_games": close_games,
-                        "player1_dominant": player1_dominant,
-                        "player2_dominant": player2_dominant,
-                        "avg_point_diff": avg_point_diff,
-                        "player1_max_margin": player1_max_margin,
-                        "player2_max_margin": player2_max_margin,
-                        "avg_p1_score": avg_p1_score,
-                        "avg_p2_score": avg_p2_score,
-                        "player1_recent_wins": player1_recent_wins,
-                        "player2_recent_wins": player2_recent_wins,
-                        "recent_total": min(5, total_matches),
-                        "point_differences_json": json.dumps(
-                            point_differences, cls=DjangoJSONEncoder
-                        ),
-                        "match_margins_json": json.dumps(
-                            match_margins, cls=DjangoJSONEncoder
-                        ),
-                        "cumulative_avg_json": json.dumps(cumulative_avg),
-                        "matches": list(reversed(matches)),  # Reverse for descending order
-                    }
-                )
+                h2h_data = {
+                    "player1": player1,
+                    "player2": player2,
+                    "has_data": True,
+                    "has_2v2_matches": has_2v2_matches,
+                    "total_matches": total_matches,
+                    "total_games": total_games,
+                    "player1_match_wins": player1_match_wins,
+                    "player2_match_wins": player2_match_wins,
+                    "player1_game_wins": player1_game_wins,
+                    "player2_game_wins": player2_game_wins,
+                    "player1_match_win_rate": (
+                        player1_match_wins / total_matches * 100
+                    )
+                    if total_matches > 0
+                    else 0,
+                    "player2_match_win_rate": (
+                        player2_match_wins / total_matches * 100
+                    )
+                    if total_matches > 0
+                    else 0,
+                    "player1_game_win_rate": (player1_game_wins / total_games * 100)
+                    if total_games > 0
+                    else 0,
+                    "player2_game_win_rate": (player2_game_wins / total_games * 100)
+                    if total_games > 0
+                    else 0,
+                    "close_games": close_games,
+                    "player1_dominant": player1_dominant,
+                    "player2_dominant": player2_dominant,
+                    "avg_point_diff": avg_point_diff,
+                    "player1_max_margin": player1_max_margin,
+                    "player2_max_margin": player2_max_margin,
+                    "avg_p1_score": avg_p1_score,
+                    "avg_p2_score": avg_p2_score,
+                    "player1_recent_wins": player1_recent_wins,
+                    "player2_recent_wins": player2_recent_wins,
+                    "recent_total": min(5, total_matches),
+                    "point_differences_json": json.dumps(
+                        point_differences, cls=DjangoJSONEncoder
+                    ),
+                    "match_margins_json": json.dumps(
+                        match_margins, cls=DjangoJSONEncoder
+                    ),
+                    "cumulative_avg_json": json.dumps(cumulative_avg),
+                    "matches": list(reversed(matches)),
+                }
+
+                # Cache for 30 minutes
+                cache.set(h2h_cache_key, h2h_data, 1800)
+                context.update(h2h_data)
             else:
-                context.update(
-                    {
-                        "player1": player1,
-                        "player2": player2,
-                        "has_data": False,
-                    }
-                )
+                h2h_data = {
+                    "player1": player1,
+                    "player2": player2,
+                    "has_data": False,
+                    "has_2v2_matches": has_2v2_matches,
+                }
+                cache.set(h2h_cache_key, h2h_data, 1800)
+                context.update(h2h_data)
 
         return context
 
 
+@method_decorator(
+    ratelimit(key='ip', rate='5/h', method='POST', block=True),
+    name='post'
+)
 class PlayerRegistrationView(CreateView):
-    """View that creates User + Player"""
+    """View that creates User + Player
+
+    Rate limited to 5 registrations per hour per IP to prevent spam.
+    """
 
     form_class = PlayerRegistrationForm
     template_name = "registration/signup.html"
@@ -1046,9 +1139,9 @@ class PlayerRegistrationView(CreateView):
         send_mail(
             subject="Verify your email address",
             message=f"Welcome {user.username}! Click here to verify your email: {verification_url}",
-            from_email="pingpong@ubaldopuocci.org",
+            from_email=settings.DEFAULT_FROM_EMAIL,
             recipient_list=[user.email],
-            fail_silently=True,
+            fail_silently=False,
         )
 
         return render(
@@ -1061,8 +1154,8 @@ class PlayerRegistrationView(CreateView):
         )
 
     def form_invalid(self, form):
-        """Add error message on failed registration"""
-        messages.error(self.request, "Please correct the errors below.")
+        """Return generic error to prevent account enumeration"""
+        messages.error(self.request, "Registration failed. Please check the form and try again.")
         return super().form_invalid(form)
 
 
@@ -1131,8 +1224,15 @@ class EmailVerifyView(View):
             return redirect("pingpong:login")
 
 
+@method_decorator(
+    ratelimit(key='user', rate='3/h', method='POST', block=True),
+    name='post'
+)
 class EmailResendVerificationView(LoginRequiredMixin, View):
-    """Resend verification email"""
+    """Resend verification email
+
+    Rate limited to 3 resends per hour per user to prevent abuse.
+    """
 
     def post(self, request):
         profile = request.user.profile
@@ -1149,18 +1249,21 @@ class EmailResendVerificationView(LoginRequiredMixin, View):
                 f"/pingpong/verify-email/{token}/"
             )
 
-            send_mail(
-                subject="Verify your email address",
-                message=f"Welcome {user.username}! Click here to verify your email: {verification_url}",
-                from_email="pingpong@ubaldopuocci.org",
-                recipient_list=[user.email],
-                fail_silently=True,
-            )
-
-            messages.success(
-                request,
-                f"Verification email sent! Check your inbox at {request.user.email}",
-            )
+            try:
+                send_mail(
+                    subject="Verify your email address",
+                    message=f"Welcome {user.username}! Click here to verify your email: {verification_url}",
+                    from_email=settings.DEFAULT_FROM_EMAIL,
+                    recipient_list=[user.email],
+                    fail_silently=False,
+                )
+                messages.success(
+                    request,
+                    f"Verification email sent! Check your inbox at {request.user.email}",
+                )
+            except Exception as e:
+                logger.error(f"Failed to send verification email to {user.email}: {e}")
+                messages.error(request, "Failed to send verification email. Please try again later.")
 
         # Redirect to player profile if exists, otherwise dashboard
         if hasattr(request.user, "player"):
@@ -1644,8 +1747,15 @@ class ScheduledMatchConvertView(LoginRequiredMixin, CreateView):
         return response
 
 
+@method_decorator(
+    ratelimit(key='ip', rate='5/15m', method='POST', block=True),
+    name='post'
+)
 class CustomLoginView(LoginView):
-    """Custom login view with tailwind styling"""
+    """Custom login view with tailwind styling
+
+    Rate limited to 5 login attempts per 15 minutes per IP to prevent brute force.
+    """
 
     template_name = "registration/login.html"
     redirect_authenticated_user = True
@@ -1655,13 +1765,6 @@ class CustomLoginView(LoginView):
 
     def form_valid(self, form):
         user = form.get_user()
-        print(f"DEBUG: User {user.username} logging in.")
-        print(
-            f"DEBUG: Email verified: {getattr(user.profile, 'email_verified', 'No profile')}"
-        )
-        print(
-            f"DEBUG: Verification token: {getattr(user.profile, 'email_verification_token', 'No profile')}"
-        )
         # Check if email is verified
         if hasattr(user, "profile") and not user.profile.email_verified:
             messages.warning(
@@ -1753,20 +1856,15 @@ class TeamDetailView(LoginRequiredMixin, DetailView):
 
         team = self.get_object()
 
-        # Fetch all matches for team with comprehensive prefetching
-        all_matches = Match.objects.filter(
-            Q(team1=team) | Q(team2=team)
+        # Fetch confirmed matches for team using DB-level filtering
+        confirmed_matches = list(Match.objects.filter(
+            Q(team1=team) | Q(team2=team),
+            is_confirmed=True,
         ).select_related('team1', 'team2', 'winner').prefetch_related(
             'team1__players',
             'team2__players',
-            'team1__players__user__profile',
-            'team2__players__user__profile',
-            'confirmations',
             'games'
-        ).order_by('-date_played').distinct()
-
-        # Filter to confirmed matches only (using Python property)
-        confirmed_matches = [m for m in all_matches if m.match_confirmed]
+        ).order_by('-date_played').distinct())
 
         # Add custom attributes to each match from team's perspective
         for match in confirmed_matches:

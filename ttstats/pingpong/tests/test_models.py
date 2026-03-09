@@ -886,7 +886,53 @@ class UserProfileModelTest(TestCase):
         """Test profile default values"""
         new_user = User.objects.create_user(username="new", password="pass")
         profile = new_user.profile
-        
+
         self.assertFalse(profile.email_verified)
         self.assertIsNotNone(profile.email_verification_token)  # Set by signal
         self.assertIsNotNone(profile.created_at)
+
+    def test_verify_email_with_expired_token(self):
+        """Test email verification fails with expired token (24+ hours old)"""
+        token = self.user.profile.create_verification_token()
+        # Set token creation time to 25 hours ago (past 24h expiry)
+        self.user.profile.email_verification_sent_at = timezone.now() - timedelta(hours=25)
+        self.user.profile.save()
+
+        result = self.user.profile.verify_email(token)
+
+        self.assertFalse(result)
+        self.assertFalse(self.user.profile.email_verified)
+
+    def test_verify_email_with_fresh_token(self):
+        """Test email verification succeeds with fresh token (within 24 hours)"""
+        token = self.user.profile.create_verification_token()
+        # Set token creation time to 23 hours ago (within 24h expiry)
+        self.user.profile.email_verification_sent_at = timezone.now() - timedelta(hours=23)
+        self.user.profile.save()
+
+        result = self.user.profile.verify_email(token)
+
+        self.assertTrue(result)
+        self.assertTrue(self.user.profile.email_verified)
+
+    def test_is_token_expired_true(self):
+        """Test is_token_expired returns True for old tokens"""
+        self.user.profile.create_verification_token()
+        self.user.profile.email_verification_sent_at = timezone.now() - timedelta(hours=25)
+        self.user.profile.save()
+
+        self.assertTrue(self.user.profile.is_token_expired())
+
+    def test_is_token_expired_false(self):
+        """Test is_token_expired returns False for fresh tokens"""
+        self.user.profile.create_verification_token()
+        self.user.profile.save()
+
+        self.assertFalse(self.user.profile.is_token_expired())
+
+    def test_is_token_expired_no_sent_time(self):
+        """Test is_token_expired returns True when no sent time is set"""
+        self.user.profile.email_verification_sent_at = None
+        self.user.profile.save()
+
+        self.assertTrue(self.user.profile.is_token_expired())

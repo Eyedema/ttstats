@@ -14,15 +14,21 @@ Including another URLconf
     1. Import the include() function: from django.urls import include, path
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
+import os
+
 from django.contrib import admin
 from django.urls import path, include
 from django.views.generic import RedirectView
 
 from pingpong.views import CustomLoginView
 
+# Admin URL can be customized via environment variable for security
+# Set ADMIN_URL to a random string in production (e.g., 'secret-admin-abc123/')
+ADMIN_URL = os.environ.get('ADMIN_URL', 'admin/')
+
 urlpatterns = [
     path('', RedirectView.as_view(url='pingpong/', permanent=False)),
-    path('admin/', admin.site.urls),
+    path(ADMIN_URL, admin.site.urls),
     path('accounts/login/', CustomLoginView.as_view(), name='login'),
     path('accounts/', include('django.contrib.auth.urls')),
     path('pingpong/', include('pingpong.urls')),

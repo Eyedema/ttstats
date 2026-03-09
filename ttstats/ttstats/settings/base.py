@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
+import os
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -118,6 +119,18 @@ STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 LOGOUT_REDIRECT_URL = '/pingpong/'
 ADMIN_LOGOUT_URL = '/accounts/logout/'
 
+# Session security settings
+SESSION_COOKIE_HTTPONLY = True  # Prevent JavaScript access to session cookie
+SESSION_COOKIE_SAMESITE = 'Lax'  # Prevent CSRF via cross-site requests
+SESSION_COOKIE_AGE = 1209600  # 2 weeks
+
+# CSRF security
+CSRF_COOKIE_HTTPONLY = True  # Prevent JavaScript access to CSRF token
+CSRF_COOKIE_SAMESITE = 'Lax'
+
+# Default email settings (override in prod.py)
+DEFAULT_FROM_EMAIL = 'noreply@localhost'
+
 # Authentication backends (for passkey + password login)
 AUTHENTICATION_BACKENDS = [
     'django_otp_webauthn.backends.WebAuthnBackend',  # Passkey login
@@ -133,3 +146,33 @@ OTP_WEBAUTHN_RP_ID = "localhost"
 OTP_WEBAUTHN_ALLOWED_ORIGINS = [
     "http://localhost:8000",  # Must match RP_ID
 ]
+
+# Redis Cache Configuration
+REDIS_URL = os.environ.get('REDIS_URL')
+
+if REDIS_URL:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django_redis.cache.RedisCache',
+            'LOCATION': REDIS_URL,
+            'OPTIONS': {
+                'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+                'SOCKET_CONNECT_TIMEOUT': 5,
+                'SOCKET_TIMEOUT': 5,
+                'CONNECTION_POOL_KWARGS': {
+                    'max_connections': 50,
+                    'retry_on_timeout': True,
+                },
+            },
+            'KEY_PREFIX': 'ttstats',
+            'TIMEOUT': 300,  # 5 minutes default
+        }
+    }
+else:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+            'KEY_PREFIX': 'ttstats',
+            'TIMEOUT': 300,
+        }
+    }

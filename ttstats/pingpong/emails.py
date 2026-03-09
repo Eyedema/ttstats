@@ -1,5 +1,9 @@
+import logging
+
 from django.conf import settings
 from django.core.mail import send_mail
+
+logger = logging.getLogger(__name__)
 
 
 def send_match_confirmation_email(match, player):
@@ -76,7 +80,7 @@ Table Tennis Tracker Team
         <h2>{emoji} Match Complete!</h2>
         <p>Hi {player.name},</p>
         <p>Your match against <strong>{opponent_team}</strong> is complete!</p>
-        
+
         <div style="background: #f3f4f6; padding: 20px; border-radius: 8px; margin: 20px 0;">
             <h3 style="margin-top: 0;">📊 Match Summary</h3>
             <p style="font-size: 24px; font-weight: bold; margin: 10px 0;">
@@ -101,26 +105,18 @@ Table Tennis Tracker Team
     </html>
     """
 
-    # Print to console for development
-    print(f"\n{'=' * 60}")
-    print(f"📧 MATCH CONFIRMATION EMAIL TO: {user.email}")
-    print(f"   Match: {match.team1} vs {match.team2}")
-    print(f"   Result: {player.name} {result} {score}")
-    print(f"   URL: {confirmation_url}")
-    print(f"{'=' * 60}\n")
-
-    # Send email
     try:
         send_mail(
             subject=subject,
             message=message,
             html_message=html_message,
-            from_email="noreply@tabletennis.com",
+            from_email=settings.DEFAULT_FROM_EMAIL,
             recipient_list=[user.email],
-            fail_silently=True,
+            fail_silently=False,
         )
+        logger.info(f"Match confirmation email sent to {user.email} for match {match.pk}")
     except Exception as e:
-        print(f"❌ Email send error: {e}")
+        logger.error(f"Failed to send match confirmation email to {user.email}: {e}")
 
 
 def send_scheduled_match_email(scheduled_match, player):
@@ -193,26 +189,19 @@ Table Tennis Tracker Team
     </html>
     """
 
-    # Print to console for development
-    print(f"\n{'=' * 60}")
-    print(f"📧 SCHEDULED MATCH EMAIL TO: {user.email}")
-    print(f"   Match: {scheduled_match.team1} vs {scheduled_match.team2}")
-    print(f"   Date: {date_str} at {time_str}")
-    print(f"   Location: {location_str}")
-    print(f"{'=' * 60}\n")
-
-    # Send email
     try:
         send_mail(
             subject=subject,
             message=message,
             html_message=html_message,
-            from_email="noreply@tabletennis.com",
+            from_email=settings.DEFAULT_FROM_EMAIL,
             recipient_list=[user.email],
-            fail_silently=True,
+            fail_silently=False,
         )
+        logger.info(f"Scheduled match email sent to {user.email}")
     except Exception as e:
-        print(f"❌ Email send error: {e}")
+        logger.error(f"Failed to send scheduled match email to {user.email}: {e}")
+
 
 def send_passkey_registered_email(user, device_name):
     """Notify user when new passkey is registered"""
@@ -263,25 +252,18 @@ If you have any concerns, please contact support.
     </html>
     """
 
-    # Print to console for development
-    print(f"\n{'=' * 60}")
-    print(f"📧 PASSKEY REGISTERED EMAIL TO: {user.email}")
-    print(f"   Device: {device_name}")
-    print(f"   URL: {passkey_url}")
-    print(f"{'=' * 60}\n")
-
-    # Send email
     try:
         send_mail(
             subject=subject,
             message=message,
             html_message=html_message,
-            from_email="noreply@tabletennis.com",
+            from_email=settings.DEFAULT_FROM_EMAIL,
             recipient_list=[user.email],
-            fail_silently=True,
+            fail_silently=False,
         )
+        logger.info(f"Passkey registered email sent to {user.email}")
     except Exception as e:
-        print(f"❌ Email send error: {e}")
+        logger.error(f"Failed to send passkey registered email to {user.email}: {e}")
 
 
 def send_passkey_deleted_email(user, device_name):
@@ -333,25 +315,18 @@ Consider changing your password if you suspect unauthorized access.
     </html>
     """
 
-    # Print to console for development
-    print(f"\n{'=' * 60}")
-    print(f"📧 PASSKEY DELETED EMAIL TO: {user.email}")
-    print(f"   Device: {device_name}")
-    print(f"   URL: {passkey_url}")
-    print(f"{'=' * 60}\n")
-
-    # Send email
     try:
         send_mail(
             subject=subject,
             message=message,
             html_message=html_message,
-            from_email="noreply@tabletennis.com",
+            from_email=settings.DEFAULT_FROM_EMAIL,
             recipient_list=[user.email],
-            fail_silently=True,
+            fail_silently=False,
         )
+        logger.info(f"Passkey deleted email sent to {user.email}")
     except Exception as e:
-        print(f"❌ Email send error: {e}")
+        logger.error(f"Failed to send passkey deleted email to {user.email}: {e}")
 
 
 def send_verification_email(user_profile):
@@ -403,22 +378,15 @@ If you didn't create an account, you can safely ignore this email.
     </html>
     """
 
-    # Print to console for development
-    print(f"\n{'=' * 60}")
-    print(f"📧 VERIFICATION EMAIL TO: {user.email}")
-    print(f"   Token: {token}")
-    print(f"   URL: {verification_url}")
-    print(f"{'=' * 60}\n")
-
-    # Send email
     try:
         send_mail(
             subject=subject,
             message=message,
             html_message=html_message,
-            from_email="noreply@tabletennis.com",
+            from_email=settings.DEFAULT_FROM_EMAIL,
             recipient_list=[user.email],
-            fail_silently=True,
+            fail_silently=False,
         )
+        logger.info(f"Verification email sent to {user.email}")
     except Exception as e:
-        print(f"❌ Email send error: {e}")
+        logger.error(f"Failed to send verification email to {user.email}: {e}")

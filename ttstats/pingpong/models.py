@@ -1,11 +1,15 @@
 # Create your models here.
 import uuid
+from datetime import timedelta
 
 from django.contrib.auth.models import User
 from django.db import models
 from django.utils import timezone
 
 from .managers import ChampionshipManager, GameManager, MatchManager, PlayerManager, ScheduledMatchManager
+
+# Email verification token expires after 24 hours
+VERIFICATION_TOKEN_EXPIRY = timedelta(hours=24)
 
 
 class Location(models.Model):
@@ -152,6 +156,12 @@ class Match(models.Model):
     )
 
     confirmations = models.ManyToManyField(Player, through='MatchConfirmation', related_name="player_matchconfirmations")
+
+    # Denormalized cache fields for performance
+    is_confirmed = models.BooleanField(default=False, db_index=True)
+    team1_score_cache = models.IntegerField(default=0)
+    team2_score_cache = models.IntegerField(default=0)
+
     notes = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -274,12 +284,42 @@ class Match(models.Model):
 
         return unverified
 
+    def update_cache_fields(self):
+        """Update all denormalized cache fields. Call from signals after changes."""
+        self.team1_score_cache = self.games.filter(winner=self.team1).count()
+        self.team2_score_cache = self.games.filter(winner=self.team2).count()
+        self.is_confirmed = self._calculate_confirmation_status()
+
+    def _calculate_confirmation_status(self):
+        """Calculate actual confirmation status from live data."""
+        team1_verified_ids = set(
+            self.team1.players.filter(
+                user__profile__email_verified=True
+            ).values_list('id', flat=True)
+        )
+        team2_verified_ids = set(
+            self.team2.players.filter(
+                user__profile__email_verified=True
+            ).values_list('id', flat=True)
+        )
+        confirmed_ids = set(
+            self.confirmations.all().values_list('id', flat=True)
+        )
+        return (
+            team1_verified_ids.issubset(confirmed_ids) and
+            team2_verified_ids.issubset(confirmed_ids)
+        )
+
     def save(self, *args, **kwargs):
         # Auto-determine winner based on games
         if self.pk:  # Only if match already exists
             t1_wins = self.games.filter(winner=self.team1).count()  # type: ignore
             t2_wins = self.games.filter(winner=self.team2).count()  # type: ignore
             games_to_win = (self.best_of // 2) + 1
+
+            # Update score cache
+            self.team1_score_cache = t1_wins
+            self.team2_score_cache = t2_wins
 
             if t1_wins >= games_to_win:
                 self.winner = self.team1
@@ -352,12 +392,25 @@ class UserProfile(models.Model):
         return self.email_verification_token
 
     def verify_email(self, token):
-        if self.email_verification_token == token:
-            self.email_verified = True
-            self.email_verification_token = ""
-            self.save()
+        """Verify email with token. Returns True if successful, False if invalid/expired."""
+        if self.email_verification_token != token:
+            return False
+
+        # Check if token has expired (24 hours)
+        if self.email_verification_sent_at:
+            if timezone.now() - self.email_verification_sent_at > VERIFICATION_TOKEN_EXPIRY:
+                return False
+
+        self.email_verified = True
+        self.email_verification_token = ""
+        self.save()
+        return True
+
+    def is_token_expired(self):
+        """Check if the verification token has expired."""
+        if not self.email_verification_sent_at:
             return True
-        return False
+        return timezone.now() - self.email_verification_sent_at > VERIFICATION_TOKEN_EXPIRY
 
     def __str__(self):
         return f"Profile of {self.user.username}"

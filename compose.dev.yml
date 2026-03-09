@@ -10,6 +10,15 @@ services:
     ports:
       - "5432:5432"
 
+  redis:
+    image: redis:7-alpine
+    container_name: ttstats_redis_dev
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data_dev:/data
+    command: redis-server --appendonly yes
+
   web:
     build:
       context: .
@@ -22,6 +31,8 @@ services:
       - "8000:8000"
     depends_on:
       - db
+      - redis
 
 volumes:
   pgdata_dev:
+  redis_data_dev:
