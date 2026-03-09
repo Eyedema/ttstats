@@ -184,7 +184,12 @@
                             {% endif %}
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap">
-                            {% if match.match_type == 'tournament' %}
+                            {% if match.championship %}
+                            <a href="{% url 'pingpong:championship_detail' match.championship.pk %}" class="inline-flex items-center gap-1 rounded-md bg-destructive/10 px-2 py-1 text-xs font-medium text-destructive hover:bg-destructive/20 transition-colors">
+                                <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-3 h-3" alt="">
+                                {{ match.championship.name|truncatechars:20 }}
+                            </a>
+                            {% elif match.match_type == 'tournament' %}
                             <span class="inline-flex items-center gap-1 rounded-md bg-destructive/10 px-2 py-1 text-xs font-medium text-destructive">
                                 <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-3 h-3" alt="">
                                 Tournament
@@ -251,7 +256,12 @@
                         <div class="text-xs text-muted-foreground">{{ match.date_played|date:"H:i" }} • {{ match.date_played|timesince }} ago</div>
                     </div>
                     <div class="flex-shrink-0 ml-2">
-                        {% if match.match_type == 'tournament' %}
+                        {% if match.championship %}
+                        <a href="{% url 'pingpong:championship_detail' match.championship.pk %}" class="inline-flex items-center gap-1 rounded-md bg-destructive/10 px-2 py-0.5 text-xs font-medium text-destructive whitespace-nowrap hover:bg-destructive/20 transition-colors">
+                            <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-3 h-3" alt="">
+                            {{ match.championship.name|truncatechars:15 }}
+                        </a>
+                        {% elif match.match_type == 'tournament' %}
                         <span class="inline-flex items-center gap-1 rounded-md bg-destructive/10 px-2 py-0.5 text-xs font-medium text-destructive whitespace-nowrap">
                             <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-3 h-3" alt="">
                             Tournament

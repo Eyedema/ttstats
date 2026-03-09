@@ -19,30 +19,39 @@
         {% endif %}
     </div>
 
-    <!-- Filters -->
-    <div class="rounded-lg border bg-white p-4">
-        <form method="get" class="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div class="space-y-2">
-                <label class="text-sm font-medium" for="status">Status</label>
-                <select name="status" id="status" onchange="this.form.submit()"
-                        class="flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring">
-                    <option value="all" {% if status_filter == 'all' %}selected{% endif %}>All Statuses</option>
-                    <option value="registration" {% if status_filter == 'registration' %}selected{% endif %}>Registration Open</option>
-                    <option value="scheduled" {% if status_filter == 'scheduled' %}selected{% endif %}>Scheduled</option>
-                    <option value="in_progress" {% if status_filter == 'in_progress' %}selected{% endif %}>In Progress</option>
-                    <option value="completed" {% if status_filter == 'completed' %}selected{% endif %}>Completed</option>
-                </select>
-            </div>
-            <div class="space-y-2">
-                <label class="text-sm font-medium" for="participation">Participation</label>
-                <select name="participation" id="participation" onchange="this.form.submit()"
-                        class="flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring">
-                    <option value="all" {% if participation_filter == 'all' %}selected{% endif %}>All Championships</option>
-                    <option value="my_championships" {% if participation_filter == 'my_championships' %}selected{% endif %}>My Championships</option>
-                    <option value="public" {% if participation_filter == 'public' %}selected{% endif %}>Public Only</option>
-                </select>
-            </div>
-        </form>
+    <!-- Status Tabs -->
+    <div class="rounded-lg border bg-white overflow-hidden">
+        <div class="flex border-b overflow-x-auto">
+            <a href="?status=all{% if participation_filter != 'all' %}&participation={{ participation_filter }}{% endif %}"
+               class="flex-shrink-0 px-4 py-3 text-sm font-medium border-b-2 transition-colors {% if status_filter == 'all' %}border-primary text-primary{% else %}border-transparent text-muted-foreground hover:text-foreground hover:border-muted{% endif %}">
+                All
+            </a>
+            <a href="?status=upcoming{% if participation_filter != 'all' %}&participation={{ participation_filter }}{% endif %}"
+               class="flex-shrink-0 px-4 py-3 text-sm font-medium border-b-2 transition-colors {% if status_filter == 'upcoming' %}border-primary text-primary{% else %}border-transparent text-muted-foreground hover:text-foreground hover:border-muted{% endif %}">
+                Upcoming
+            </a>
+            <a href="?status=in_progress{% if participation_filter != 'all' %}&participation={{ participation_filter }}{% endif %}"
+               class="flex-shrink-0 px-4 py-3 text-sm font-medium border-b-2 transition-colors {% if status_filter == 'in_progress' %}border-primary text-primary{% else %}border-transparent text-muted-foreground hover:text-foreground hover:border-muted{% endif %}">
+                In Progress
+            </a>
+            <a href="?status=past{% if participation_filter != 'all' %}&participation={{ participation_filter }}{% endif %}"
+               class="flex-shrink-0 px-4 py-3 text-sm font-medium border-b-2 transition-colors {% if status_filter == 'past' %}border-primary text-primary{% else %}border-transparent text-muted-foreground hover:text-foreground hover:border-muted{% endif %}">
+                Past
+            </a>
+        </div>
+        <div class="p-4">
+            <form method="get" class="flex items-center gap-4">
+                <input type="hidden" name="status" value="{{ status_filter }}">
+                <div class="space-y-1 flex-1 max-w-xs">
+                    <select name="participation" id="participation" onchange="this.form.submit()"
+                            class="flex h-10 w-full rounded-md border border-input bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring">
+                        <option value="all" {% if participation_filter == 'all' %}selected{% endif %}>All Championships</option>
+                        <option value="my_championships" {% if participation_filter == 'my_championships' %}selected{% endif %}>My Championships</option>
+                        <option value="public" {% if participation_filter == 'public' %}selected{% endif %}>Public Only</option>
+                    </select>
+                </div>
+            </form>
+        </div>
     </div>
 
     <!-- Championships List -->

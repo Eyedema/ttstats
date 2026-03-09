@@ -96,6 +96,11 @@ def update_elo_on_match_confirmation(sender, instance, created, **kwargs):
         # Try to update Elo for the match (has guards inside, safe to call anytime)
         update_player_elo(instance.match)
 
+        # Check if this completes a championship
+        match = instance.match
+        if hasattr(match, 'championship') and match.championship:
+            match.championship.check_completion()
+
 
 @receiver(post_save, sender=WebAuthnCredential)
 def notify_passkey_registered(sender, instance, created, **kwargs):

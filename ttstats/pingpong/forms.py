@@ -529,3 +529,22 @@ class ChampionshipRegistrationForm(forms.Form):
             ).distinct().order_by('name')
 
             self.fields['team'].queryset = eligible_teams
+
+
+class ScheduledMatchEditForm(forms.ModelForm):
+    """Form for editing scheduled match date/time (championship organizer use)."""
+
+    class Meta:
+        model = ScheduledMatch
+        fields = ['scheduled_date', 'scheduled_time', 'location']
+        widgets = {
+            'scheduled_date': forms.DateInput(
+                attrs={'type': 'date', 'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'}
+            ),
+            'scheduled_time': forms.TimeInput(
+                attrs={'type': 'time', 'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'}
+            ),
+            'location': forms.Select(
+                attrs={'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'}
+            ),
+        }

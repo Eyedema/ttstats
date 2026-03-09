@@ -5,7 +5,7 @@ from django.contrib.auth.models import User
 from django.db import models
 from django.utils import timezone
 
-from .managers import GameManager, MatchManager, PlayerManager, ScheduledMatchManager
+from .managers import ChampionshipManager, GameManager, MatchManager, PlayerManager, ScheduledMatchManager
 
 
 class Location(models.Model):
@@ -156,6 +156,7 @@ class Match(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    all_objects = models.Manager()
     objects = MatchManager()
 
     def user_can_edit(self, user):
@@ -176,6 +177,7 @@ class Match(models.Model):
         return self.user_can_edit(user)
 
     class Meta:
+        default_manager_name = 'objects'
         ordering = ["-date_played"]
         verbose_name_plural = "matches"
 
@@ -393,6 +395,13 @@ class ScheduledMatch(models.Model):
         related_name="scheduled_matches_created",
     )
 
+    # Round number for championship scheduling
+    round_number = models.IntegerField(
+        null=True,
+        blank=True,
+        help_text="Round/matchday number within a championship"
+    )
+
     # Track if emails were sent
     notification_sent = models.BooleanField(default=False)
 
@@ -406,9 +415,11 @@ class ScheduledMatch(models.Model):
         help_text="Linked match if this scheduled match was converted to a played match"
     )
 
+    all_objects = models.Manager()
     objects = ScheduledMatchManager()
 
     class Meta:
+        default_manager_name = 'objects'
         ordering = ["scheduled_date", "scheduled_time"]
         verbose_name = "Scheduled Match"
         verbose_name_plural = "Scheduled Matches"
@@ -576,7 +587,11 @@ class Championship(models.Model):
         help_text="Default location for championship matches"
     )
 
+    all_objects = models.Manager()
+    objects = ChampionshipManager()
+
     class Meta:
+        default_manager_name = 'objects'
         ordering = ['-start_date', '-created_at']
 
     def __str__(self):
@@ -628,9 +643,13 @@ class Championship(models.Model):
         return False
 
     def generate_schedule(self):
-        """Generate round-robin schedule for the championship"""
-        from datetime import timedelta
-        from django.utils import timezone
+        """
+        Generate round-robin schedule for the championship using the circle method.
+
+        Creates home and away rounds (andata e ritorno). Each round has n/2 matches
+        where every team plays exactly once. Rounds are spaced 7 days apart.
+        """
+        from datetime import timedelta, time
 
         participants = list(self.participants.all())
         n = len(participants)
@@ -639,40 +658,64 @@ class Championship(models.Model):
             return False
 
         # Delete existing scheduled matches for this championship
-        ScheduledMatch.objects.filter(championship=self).delete()
+        ScheduledMatch.all_objects.filter(championship=self).delete()
 
-        # Generate round-robin pairings
-        matches = []
+        # Circle method for round-robin scheduling
+        # If odd number of participants, add a "bye" (None)
+        teams = list(participants)
+        if n % 2 == 1:
+            teams.append(None)  # bye
 
-        # Home and away (andata e ritorno)
-        for round_num in range(2):  # 0 = andata, 1 = ritorno
-            for i in range(n):
-                for j in range(i + 1, n):
-                    if round_num == 0:
-                        team1, team2 = participants[i], participants[j]
-                    else:
-                        team1, team2 = participants[j], participants[i]
+        num_teams = len(teams)
+        num_rounds = num_teams - 1
 
-                    matches.append((team1, team2))
+        # Generate rounds using circle method:
+        # Fix first team, rotate the rest
+        rounds = []  # List of (round_number, [(team1, team2), ...])
 
-        # Create scheduled matches
-        # Space matches out by days starting from start_date
-        current_date = self.start_date
-        match_time = timezone.now().time().replace(hour=18, minute=0, second=0)
+        for round_idx in range(num_rounds):
+            round_matches = []
+            for i in range(num_teams // 2):
+                t1 = teams[i]
+                t2 = teams[num_teams - 1 - i]
+                if t1 is not None and t2 is not None:
+                    round_matches.append((t1, t2))
+            rounds.append((round_idx + 1, round_matches))
 
-        for idx, (team1, team2) in enumerate(matches):
-            ScheduledMatch.objects.create(
-                championship=self,
-                team1=team1,
-                team2=team2,
-                scheduled_date=current_date,
-                scheduled_time=match_time,
-                location=self.location,
-                created_by=self.created_by
-            )
-            # Space matches - 1 per day for simplicity
-            # Adjust this logic based on your needs
-            current_date += timedelta(days=1)
+            # Rotate: keep teams[0] fixed, rotate the rest clockwise
+            teams = [teams[0]] + [teams[-1]] + teams[1:-1]
+
+        # Create home leg (andata) and away leg (ritorno)
+        all_rounds = []
+        for round_num, matches in rounds:
+            all_rounds.append((round_num, matches))
+        for round_num, matches in rounds:
+            # Swap home/away for return leg
+            away_matches = [(t2, t1) for t1, t2 in matches]
+            all_rounds.append((round_num + num_rounds, away_matches))
+
+        # Create scheduled matches, 1 round per week
+        match_time = time(hour=18, minute=0)
+
+        for round_num, round_matches in all_rounds:
+            round_date = self.start_date + timedelta(weeks=round_num - 1)
+            for team1, team2 in round_matches:
+                ScheduledMatch.all_objects.create(
+                    championship=self,
+                    team1=team1,
+                    team2=team2,
+                    scheduled_date=round_date,
+                    scheduled_time=match_time,
+                    location=self.location,
+                    created_by=self.created_by,
+                    round_number=round_num,
+                )
+
+        # Set end_date based on last round
+        if all_rounds:
+            last_round_num = all_rounds[-1][0]
+            self.end_date = self.start_date + timedelta(weeks=last_round_num - 1)
+            self.save(update_fields=['end_date'])
 
         return True
 
@@ -682,49 +725,57 @@ class Championship(models.Model):
 
         Ranking criteria:
         1. Points (3 for win, 0 for loss)
-        2. Head-to-head record (if tied on points)
-        3. Games difference (games won - games lost)
-        4. Total games won
-        5. Total games lost
+        2. Game difference (games won - games lost)
+        3. Total games won
+        4. Total games lost
         """
-        from django.db.models import Q
-
         standings = []
 
+        # Fetch all championship matches once with prefetch
+        all_matches_qs = Match.all_objects.filter(
+            championship=self,
+        ).select_related('team1', 'team2', 'winner').prefetch_related(
+            'games', 'confirmations',
+            'team1__players', 'team1__players__user__profile',
+            'team2__players', 'team2__players__user__profile',
+        )
+        # Filter to confirmed matches in Python using prefetched data
+        all_matches = [m for m in all_matches_qs if m.match_confirmed]
+
+        # Pre-compute game scores using prefetched data (avoids N+1)
+        match_scores = {}
+        for match in all_matches:
+            t1_score = sum(1 for g in match.games.all() if g.winner_id == match.team1_id)
+            t2_score = sum(1 for g in match.games.all() if g.winner_id == match.team2_id)
+            match_scores[match.pk] = (t1_score, t2_score)
+
         for team in self.participants.all():
-            # Get all confirmed matches for this team in this championship
-            matches = Match.objects.filter(
-                championship=self,
-            ).filter(
-                Q(team1=team) | Q(team2=team)
-            ).select_related('team1', 'team2', 'winner').prefetch_related(
-                'confirmations', 'games'
-            )
-
-            # Filter to confirmed matches only
-            confirmed_matches = [m for m in matches if m.match_confirmed]
-
-            played = len(confirmed_matches)
+            played = 0
             wins = 0
             losses = 0
             games_won = 0
             games_lost = 0
 
-            for match in confirmed_matches:
-                is_team1 = match.team1 == team
-                team_score = match.team1_score if is_team1 else match.team2_score
-                opponent_score = match.team2_score if is_team1 else match.team1_score
+            for match in all_matches:
+                if match.team1_id != team.pk and match.team2_id != team.pk:
+                    continue
+
+                played += 1
+                is_team1 = match.team1_id == team.pk
+                t1_score, t2_score = match_scores[match.pk]
+                team_score = t1_score if is_team1 else t2_score
+                opponent_score = t2_score if is_team1 else t1_score
 
                 games_won += team_score
                 games_lost += opponent_score
 
-                if match.winner == team:
+                if match.winner_id == team.pk:
                     wins += 1
                 else:
                     losses += 1
 
             points = (wins * 3)
-            goal_difference = games_won - games_lost
+            game_difference = games_won - games_lost
 
             standings.append({
                 'team': team,
@@ -733,17 +784,51 @@ class Championship(models.Model):
                 'losses': losses,
                 'games_won': games_won,
                 'games_lost': games_lost,
-                'goal_difference': goal_difference,
+                'game_difference': game_difference,
                 'points': points,
             })
 
-        # Sort by: points (desc), goal difference (desc), goals for (desc), goals against (asc)
+        # Sort by: points (desc), game difference (desc), games won (desc), games lost (asc)
         standings.sort(
-            key=lambda x: (x['points'], x['goal_difference'], x['games_won'], -x['games_lost']),
+            key=lambda x: (x['points'], x['game_difference'], x['games_won'], -x['games_lost']),
             reverse=True
         )
 
         return standings
+
+    def check_completion(self):
+        """Check if all championship matches are completed and confirmed.
+        If so, auto-transition to 'completed' status.
+        """
+        if self.status != 'in_progress':
+            return False
+
+        total_scheduled = ScheduledMatch.all_objects.filter(championship=self).count()
+        if total_scheduled == 0:
+            return False
+
+        # Check all scheduled matches are converted
+        converted = ScheduledMatch.all_objects.filter(
+            championship=self, match__isnull=False
+        ).count()
+        if converted < total_scheduled:
+            return False
+
+        # Check all linked matches are confirmed
+        championship_matches = Match.all_objects.filter(
+            championship=self
+        ).prefetch_related(
+            'confirmations',
+            'team1__players__user__profile',
+            'team2__players__user__profile',
+        )
+        for match in championship_matches:
+            if not match.match_confirmed:
+                return False
+
+        self.status = 'completed'
+        self.save(update_fields=['status'])
+        return True
 
     def user_can_view(self, user):
         """Check if user can view this championship"""
@@ -757,7 +842,7 @@ class Championship(models.Model):
         try:
             player = user.player
             return self.participants.filter(players=player).exists()
-        except:
+        except (AttributeError, Player.DoesNotExist):
             return False
 
     def user_can_edit(self, user):
@@ -769,5 +854,5 @@ class Championship(models.Model):
         try:
             player = user.player
             return self.created_by == player
-        except:
+        except (AttributeError, Player.DoesNotExist):
             return False

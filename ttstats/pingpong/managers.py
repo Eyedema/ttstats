@@ -28,11 +28,13 @@ class MatchManager(models.Manager):
         if user.is_staff or user.is_superuser:
             return qs
 
-        # Regular users see only their matches
+        # Regular users see only their matches + championship matches they participate in
         try:
             user_player = user.player
             return qs.filter(
-                Q(team1__players=user_player) | Q(team2__players=user_player)
+                Q(team1__players=user_player) |
+                Q(team2__players=user_player) |
+                Q(championship__participants__players=user_player)
             ).distinct()
         except AttributeError:
             # User has no linked player
@@ -98,6 +100,45 @@ class GameManager(models.Manager):
             return qs.none()
 
 
+class ChampionshipManager(models.Manager):
+    """
+    Manager for championships.
+    - Staff users: See all championships
+    - Regular users: See public championships + ones they participate in or created
+    - Anonymous users: See no championships
+    """
+
+    def get_queryset(self):
+        """Automatically filter championships based on current user"""
+        from ttstats.middleware import get_current_user
+
+        qs = super().get_queryset()
+        user = get_current_user()
+
+        # No user in context (e.g., management commands)
+        if not user:
+            return qs
+
+        # Anonymous users see nothing
+        if not user.is_authenticated:
+            return qs.none()
+
+        # Staff users see everything
+        if user.is_staff or user.is_superuser:
+            return qs
+
+        # Regular users see public + their championships
+        try:
+            user_player = user.player
+            return qs.filter(
+                Q(is_public=True) |
+                Q(participants__players=user_player) |
+                Q(created_by=user_player)
+            ).distinct()
+        except AttributeError:
+            return qs.filter(is_public=True)
+
+
 class ScheduledMatchManager(models.Manager):
     """
     Manager for scheduled matches.
@@ -125,10 +166,14 @@ class ScheduledMatchManager(models.Manager):
         if user.is_staff or user.is_superuser:
             return qs
 
-        # Regular users see only their scheduled matches
+        # Regular users see only their scheduled matches + championship matches they participate in
         try:
             user_player = user.player
-            return qs.filter(Q(team1__players=user_player) | Q(team2__players=user_player))
+            return qs.filter(
+                Q(team1__players=user_player) |
+                Q(team2__players=user_player) |
+                Q(championship__participants__players=user_player)
+            ).distinct()
         except AttributeError:
             # User has no linked player
             return qs.none()

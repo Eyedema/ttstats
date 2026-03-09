@@ -21,7 +21,7 @@ from django.views.generic import (
 )
 
 from .forms import GameForm, MatchEditForm, MatchForm, PlayerRegistrationForm, ScheduledMatchForm, MatchConvertForm, \
-    ChampionshipCreateForm, ChampionshipEditForm, ChampionshipRegistrationForm
+    ChampionshipCreateForm, ChampionshipEditForm, ScheduledMatchEditForm
 from .models import Game, Location, Match, Player, UserProfile, MatchConfirmation, ScheduledMatch, Team, Championship
 from .emails import send_scheduled_match_email, send_passkey_deleted_email
 
@@ -52,7 +52,7 @@ class MatchListView(LoginRequiredMixin, ListView):
     def get_queryset(self):
         return (
             Match.objects.all()
-            .select_related("team1", "team2", "location", "winner")
+            .select_related("team1", "team2", "location", "winner", "championship")
             .prefetch_related(
                 "team1__players__user__profile",
                 "team2__players__user__profile",
@@ -149,6 +149,9 @@ class MatchDetailView(LoginRequiredMixin, DetailView):
     context_object_name = "match"
     model = Match
     paginate_by = 10
+
+    def get_queryset(self):
+        return super().get_queryset().select_related("championship")
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -1622,6 +1625,18 @@ class ScheduledMatchConvertView(LoginRequiredMixin, CreateView):
         self.scheduled_match.match = self.object
         self.scheduled_match.save()
 
+        # Propagate championship FK if this is a championship match
+        if self.scheduled_match.championship:
+            self.object.championship = self.scheduled_match.championship
+            self.object.match_type = 'tournament'
+            self.object.save(update_fields=['championship', 'match_type'])
+
+            # Auto-transition championship from scheduled -> in_progress
+            championship = self.scheduled_match.championship
+            if championship.status == 'scheduled':
+                championship.status = 'in_progress'
+                championship.save(update_fields=['status'])
+
         messages.success(
             self.request,
             "Match recorded successfully! Now add game scores to complete the match."
@@ -1909,8 +1924,12 @@ class ChampionshipListView(LoginRequiredMixin, ListView):
             'participants', 'participants__players'
         )
 
-        # Filter by status
-        if status_filter != 'all':
+        # Filter by status (supports tab-based filtering)
+        if status_filter == 'upcoming':
+            queryset = queryset.filter(status__in=['registration', 'scheduled'])
+        elif status_filter == 'past':
+            queryset = queryset.filter(status__in=['completed', 'cancelled'])
+        elif status_filter != 'all':
             queryset = queryset.filter(status=status_filter)
 
         # Filter by participation
@@ -1919,19 +1938,11 @@ class ChampionshipListView(LoginRequiredMixin, ListView):
             try:
                 player = user.player
                 queryset = queryset.filter(participants__players=player)
-            except:
+            except (AttributeError, Player.DoesNotExist):
                 queryset = queryset.none()
         elif participation_filter == 'public':
             queryset = queryset.filter(is_public=True)
-        else:
-            # Show public championships + championships user is participating in
-            try:
-                player = user.player
-                queryset = queryset.filter(
-                    Q(is_public=True) | Q(participants__players=player)
-                )
-            except:
-                queryset = queryset.filter(is_public=True)
+        # else: default - manager already handles visibility filtering
 
         return queryset.distinct().order_by('-start_date', '-created_at')
 
@@ -1950,43 +1961,61 @@ class ChampionshipDetailView(LoginRequiredMixin, DetailView):
     model = Championship
 
     def get_queryset(self):
-        # Only show championships the user can view
-        user = self.request.user
-        if user.is_staff or user.is_superuser:
-            return Championship.objects.all()
-
-        try:
-            player = user.player
-            return Championship.objects.filter(
-                Q(is_public=True) | Q(participants__players=player)
-            ).distinct()
-        except:
-            return Championship.objects.filter(is_public=True)
+        # Manager already handles visibility filtering
+        return Championship.objects.select_related(
+            'created_by', 'location'
+        ).prefetch_related(
+            'participants', 'participants__players'
+        )
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        championship = self.get_object()
+        championship = self.object
 
         # Get standings
         context['standings'] = championship.get_standings()
+        context['can_edit'] = championship.user_can_edit(self.request.user)
 
-        # Get scheduled matches
-        context['scheduled_matches'] = championship.scheduled_matches.filter(
+        # Get scheduled matches - use all_objects to bypass manager filtering
+        # (championship participants should see all championship matches)
+        scheduled_matches = ScheduledMatch.all_objects.filter(
             championship=championship
         ).select_related(
-            'team1', 'team2', 'location'
+            'team1', 'team2', 'location', 'match'
         ).prefetch_related(
             'team1__players', 'team2__players'
-        ).order_by('scheduled_date', 'scheduled_time')
+        ).order_by('round_number', 'scheduled_date', 'scheduled_time')
+        context['scheduled_matches'] = scheduled_matches
 
-        # Get completed matches
-        context['completed_matches'] = championship.matches.filter(
+        # Group scheduled matches by round number for display
+        grouped = {}
+        for sm in scheduled_matches:
+            round_num = sm.round_number or 0
+            if round_num not in grouped:
+                grouped[round_num] = []
+            grouped[round_num].append(sm)
+        context['grouped_scheduled_matches'] = sorted(grouped.items())
+
+        # Progress tracking
+        total_matches = scheduled_matches.count()
+        converted_matches = scheduled_matches.filter(match__isnull=False).count()
+        context['total_scheduled'] = total_matches
+        context['converted_count'] = converted_matches
+        context['progress_pct'] = int(converted_matches / total_matches * 100) if total_matches > 0 else 0
+
+        # Get completed matches - use all_objects to bypass manager filtering
+        completed_matches = Match.all_objects.filter(
             championship=championship
         ).select_related(
             'team1', 'team2', 'winner', 'location'
         ).prefetch_related(
             'team1__players', 'team2__players', 'games', 'confirmations'
         ).order_by('-date_played')
+        context['completed_matches'] = completed_matches
+        context['completed_count'] = completed_matches.count()
+
+        # Pass participants count to avoid multiple COUNT queries in template
+        context['participants_count'] = championship.participants.count()
 
         # Check if user can register
         try:
@@ -1994,17 +2023,11 @@ class ChampionshipDetailView(LoginRequiredMixin, DetailView):
             # Get user's teams that match championship type
             required_size = 1 if championship.championship_type == 'singles' else 2
 
-            # Get eligible teams:
-            # 1. Annotate all teams with player count
-            # 2. Filter by required size
-            # 3. Filter by user membership
-            # 4. Exclude already registered teams
             user_teams = Team.objects.annotate(
                 player_count=Count('players', distinct=True)
             ).filter(
-                player_count=required_size
-            ).filter(
-                players=player
+                player_count=required_size,
+                players=player,
             ).exclude(
                 pk__in=championship.participants.values_list('pk', flat=True)
             ).distinct().order_by('name')
@@ -2015,7 +2038,7 @@ class ChampionshipDetailView(LoginRequiredMixin, DetailView):
                     user_teams.exists()
             )
             context['user_teams'] = user_teams
-        except:
+        except (AttributeError, Player.DoesNotExist):
             context['can_register'] = False
             context['user_teams'] = []
 
@@ -2040,7 +2063,7 @@ class ChampionshipCreateView(LoginRequiredMixin, CreateView):
         # Set creator
         try:
             form.instance.created_by = self.request.user.player
-        except:
+        except (AttributeError, Player.DoesNotExist):
             messages.error(self.request, "You need a player profile to create championships")
             return redirect('pingpong:championship_list')
 
@@ -2096,7 +2119,7 @@ class ChampionshipEditView(LoginRequiredMixin, UpdateView):
         try:
             player = user.player
             return Championship.objects.filter(created_by=player)
-        except:
+        except (AttributeError, Player.DoesNotExist):
             return Championship.objects.none()
 
     def form_valid(self, form):
@@ -2109,7 +2132,6 @@ class ChampionshipEditView(LoginRequiredMixin, UpdateView):
 
 class ChampionshipRegisterView(LoginRequiredMixin, View):
     """View to register a team for a championship"""
-    form_class = ChampionshipRegistrationForm
 
     def post(self, request, pk):
         championship = get_object_or_404(Championship, pk=pk)
@@ -2127,7 +2149,7 @@ class ChampionshipRegisterView(LoginRequiredMixin, View):
             if player not in team.players.all():
                 messages.error(request, "You can only register your own teams")
                 return redirect('pingpong:championship_detail', pk=pk)
-        except:
+        except (AttributeError, Player.DoesNotExist):
             messages.error(request, "You need a player profile to register")
             return redirect('pingpong:championship_detail', pk=pk)
 
@@ -2199,7 +2221,7 @@ class ChampionshipUnregisterView(LoginRequiredMixin, View):
             if player not in team.players.all():
                 messages.error(request, "You can only unregister your own teams")
                 return redirect('pingpong:championship_detail', pk=pk)
-        except:
+        except (AttributeError, Player.DoesNotExist):
             messages.error(request, "You need a player profile")
             return redirect('pingpong:championship_detail', pk=pk)
 
@@ -2213,3 +2235,48 @@ class ChampionshipUnregisterView(LoginRequiredMixin, View):
         messages.success(request, f"Successfully unregistered {team} from {championship.name}")
 
         return redirect('pingpong:championship_detail', pk=pk)
+
+
+class ScheduledMatchEditView(LoginRequiredMixin, UpdateView):
+    """View to edit scheduled match date/time (for championship organizers)."""
+
+    model = ScheduledMatch
+    form_class = ScheduledMatchEditForm
+    template_name = "pingpong/scheduled_match_edit.html"
+
+    def get_queryset(self):
+        # Use all_objects to bypass manager filtering
+        return ScheduledMatch.all_objects.all()
+
+    def dispatch(self, request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            return super().dispatch(request, *args, **kwargs)
+
+        self.object = self.get_object()
+
+        # Only allow editing championship scheduled matches by organizer/staff
+        if self.object.championship:
+            if not self.object.championship.user_can_edit(request.user):
+                messages.error(request, "Only the championship organizer can edit scheduled matches.")
+                return redirect('pingpong:championship_detail', pk=self.object.championship.pk)
+        else:
+            # For non-championship scheduled matches, check the match's own permissions
+            if not self.object.user_can_edit(request.user):
+                messages.error(request, "You don't have permission to edit this scheduled match.")
+                return redirect('pingpong:scheduled_match_detail', pk=self.object.pk)
+
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['scheduled_match'] = self.object
+        return context
+
+    def get_success_url(self):
+        if self.object.championship:
+            return reverse_lazy('pingpong:championship_detail', kwargs={'pk': self.object.championship.pk})
+        return reverse_lazy('pingpong:scheduled_match_detail', kwargs={'pk': self.object.pk})
+
+    def form_valid(self, form):
+        messages.success(self.request, "Scheduled match updated successfully.")
+        return super().form_valid(form)

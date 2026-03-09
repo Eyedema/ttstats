@@ -5,7 +5,7 @@ from django.contrib.auth.models import User, AnonymousUser
 from django.test import Client
 from factory.django import DjangoModelFactory
 
-from pingpong.models import Game, Location, Match, MatchConfirmation, Player, ScheduledMatch, Team
+from pingpong.models import Championship, Game, Location, Match, MatchConfirmation, Player, ScheduledMatch, Team
 
 
 # ---------------------------------------------------------------------------
@@ -222,6 +222,46 @@ class ScheduledMatchFactory(DjangoModelFactory):
         kwargs['team2'] = team2
 
         return super()._create(model_class, *args, **kwargs)
+
+
+class ChampionshipFactory(DjangoModelFactory):
+    """Factory for Championship.
+
+    Usage:
+        # Basic singles championship
+        champ = ChampionshipFactory()
+
+        # With participants
+        champ = ChampionshipFactory(with_participants=[team1, team2, team3])
+
+        # Private championship
+        champ = ChampionshipFactory(is_public=False)
+    """
+    class Meta:
+        model = Championship
+
+    name = factory.Sequence(lambda n: f"Championship {n}")
+    championship_type = "singles"
+    is_public = True
+    max_participants = 8
+    start_date = factory.LazyFunction(lambda: date.today() + timedelta(days=14))
+    registration_deadline = factory.LazyFunction(lambda: date.today() + timedelta(days=7))
+    status = "registration"
+
+    @classmethod
+    def _create(cls, model_class, *args, **kwargs):
+        participants = kwargs.pop('with_participants', None)
+        created_by = kwargs.pop('created_by', None)
+
+        if created_by:
+            kwargs['created_by'] = created_by
+
+        championship = super()._create(model_class, *args, **kwargs)
+
+        if participants:
+            championship.participants.set(participants)
+
+        return championship
 
 
 # ---------------------------------------------------------------------------

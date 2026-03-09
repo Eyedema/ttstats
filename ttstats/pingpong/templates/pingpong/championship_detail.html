@@ -67,14 +67,14 @@
                 
                 <!-- Quick Actions -->
                 <div class="flex flex-row md:flex-col gap-2 w-full md:w-auto">
-                    {% if championship.user_can_edit %}
+                    {% if can_edit %}
                     <a href="{% url 'pingpong:championship_edit' championship.pk %}"
                        class="flex-1 md:flex-none inline-flex items-center justify-center gap-2 rounded-md border-2 border-white/30 bg-white/10 px-4 py-2.5 text-sm font-medium hover:bg-white/20 transition-colors min-h-[44px]">
                         <img src="{% static 'pingpong/icons/pencil.svg' %}" class="w-4 h-4 invert" alt="">
                         Edit
                     </a>
                     {% endif %}
-                    {% if championship.status == 'registration' and championship.user_can_edit and championship.current_participants_count >= 2 %}
+                    {% if championship.status == 'registration' and can_edit and participants_count >= 2 %}
                     <form method="post" action="{% url 'pingpong:championship_start' championship.pk %}" class="flex-1 md:flex-none">
                         {% csrf_token %}
                         <button type="submit" class="w-full inline-flex items-center justify-center gap-2 rounded-md border-2 border-white/30 bg-white/10 px-4 py-2.5 text-sm font-medium hover:bg-white/20 transition-colors min-h-[44px]">
@@ -104,7 +104,7 @@
             <div class="flex items-center justify-between">
                 <div>
                     <p class="text-xs md:text-sm font-medium text-muted-foreground">Participants</p>
-                    <p class="text-lg md:text-xl font-bold mt-1">{{ championship.current_participants_count }}/{{ championship.max_participants }}</p>
+                    <p class="text-lg md:text-xl font-bold mt-1">{{ participants_count }}/{{ championship.max_participants }}</p>
                 </div>
                 <img src="{% static 'pingpong/icons/users.svg' %}" class="w-6 h-6 md:w-8 md:h-8 text-primary flex-shrink-0" alt="">
             </div>
@@ -114,7 +114,7 @@
             <div class="flex items-center justify-between">
                 <div>
                     <p class="text-xs md:text-sm font-medium text-muted-foreground">Scheduled</p>
-                    <p class="text-lg md:text-xl font-bold mt-1">{{ scheduled_matches.count }}</p>
+                    <p class="text-lg md:text-xl font-bold mt-1">{{ total_scheduled }}</p>
                     <p class="text-xs text-muted-foreground mt-1">Matches</p>
                 </div>
                 <img src="{% static 'pingpong/icons/clock.svg' %}" class="w-6 h-6 md:w-8 md:h-8 text-warning flex-shrink-0" alt="">
@@ -125,7 +125,7 @@
             <div class="flex items-center justify-between">
                 <div>
                     <p class="text-xs md:text-sm font-medium text-muted-foreground">Completed</p>
-                    <p class="text-lg md:text-xl font-bold text-success mt-1">{{ completed_matches.count }}</p>
+                    <p class="text-lg md:text-xl font-bold text-success mt-1">{{ completed_count }}</p>
                     <p class="text-xs text-muted-foreground mt-1">Matches</p>
                 </div>
                 <img src="{% static 'pingpong/icons/check.svg' %}" class="w-6 h-6 md:w-8 md:h-8 text-success flex-shrink-0" alt="">
@@ -160,7 +160,7 @@
         </form>
         {% elif championship.is_full %}
         <div class="flex items-center gap-2 text-warning">
-            <img src="{% static 'pingpong/icons/alert-circle.svg' %}" class="w-5 h-5" alt="">
+            <img src="{% static 'pingpong/icons/circle-alert.svg' %}" class="w-5 h-5" alt="">
             <p class="text-sm font-medium">Championship is full</p>
         </div>
         {% else %}
@@ -231,8 +231,8 @@
                         <td class="px-6 py-4 whitespace-nowrap text-center text-destructive font-semibold">{{ entry.losses }}</td>
                         <td class="px-6 py-4 whitespace-nowrap text-center">{{ entry.games_won }}</td>
                         <td class="px-6 py-4 whitespace-nowrap text-center">{{ entry.games_lost }}</td>
-                        <td class="px-6 py-4 whitespace-nowrap text-center {% if entry.goal_difference > 0 %}text-success{% elif entry.goal_difference < 0 %}text-destructive{% endif %}">
-                            {% if entry.goal_difference > 0 %}+{% endif %}{{ entry.goal_difference }}
+                        <td class="px-6 py-4 whitespace-nowrap text-center {% if entry.game_difference > 0 %}text-success{% elif entry.game_difference < 0 %}text-destructive{% endif %}">
+                            {% if entry.game_difference > 0 %}+{% endif %}{{ entry.game_difference }}
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-center">
                             <span class="inline-flex items-center rounded-md bg-primary/10 px-2.5 py-1 text-sm font-bold text-primary">
@@ -291,8 +291,8 @@
                     </div>
                     <div>
                         <div class="text-xs text-muted-foreground">GD</div>
-                        <div class="font-semibold {% if entry.goal_difference > 0 %}text-success{% elif entry.goal_difference < 0 %}text-destructive{% endif %}">
-                            {% if entry.goal_difference > 0 %}+{% endif %}{{ entry.goal_difference }}
+                        <div class="font-semibold {% if entry.game_difference > 0 %}text-success{% elif entry.game_difference < 0 %}text-destructive{% endif %}">
+                            {% if entry.game_difference > 0 %}+{% endif %}{{ entry.game_difference }}
                         </div>
                     </div>
                 </div>
@@ -305,7 +305,7 @@
     <!-- Participants List -->
     <div class="rounded-lg border bg-white overflow-hidden">
         <div class="border-b p-4 md:p-6">
-            <h2 class="text-lg md:text-xl font-semibold">Participants ({{ championship.current_participants_count }})</h2>
+            <h2 class="text-lg md:text-xl font-semibold">Participants ({{ participants_count }})</h2>
         </div>
         <div class="p-4 grid grid-cols-1 md:grid-cols-2 gap-3">
             {% for team in championship.participants.all %}
@@ -339,39 +339,76 @@
         </div>
     </div>
 
-    <!-- Scheduled Matches -->
+    <!-- Schedule & Progress -->
     {% if scheduled_matches %}
     <div class="rounded-lg border bg-white overflow-hidden">
         <div class="border-b p-4 md:p-6">
-            <h2 class="text-lg md:text-xl font-semibold">Scheduled Matches</h2>
-            <p class="text-xs md:text-sm text-muted-foreground mt-1">Upcoming matches</p>
-        </div>
-        <div class="divide-y">
-            {% for match in scheduled_matches %}
-            <div class="p-4 hover:bg-muted/50">
-                <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-                    <div class="flex-1">
-                        <div class="text-xs text-muted-foreground mb-1">
-                            {{ match.scheduled_date|date:"l, F d, Y" }} at {{ match.scheduled_time|time:"H:i" }}
-                        </div>
-                        <div class="font-semibold">
-                            {{ match.team1 }} <span class="text-muted-foreground">vs</span> {{ match.team2 }}
-                        </div>
-                        {% if match.location %}
-                        <div class="text-xs text-muted-foreground mt-1">
-                            📍 {{ match.location.name }}
-                        </div>
-                        {% endif %}
-                    </div>
-                    <a href="{% url 'pingpong:scheduled_match_detail' match.pk %}" 
-                       class="inline-flex items-center justify-center gap-1 px-3 py-2 text-sm font-medium hover:bg-secondary rounded-md transition-colors border min-h-[44px]">
-                        View Details
-                        <img src="{% static 'pingpong/icons/arrow-right.svg' %}" class="w-4 h-4" alt="">
-                    </a>
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div>
+                    <h2 class="text-lg md:text-xl font-semibold">Schedule</h2>
+                    <p class="text-xs md:text-sm text-muted-foreground mt-1">{{ converted_count }} of {{ total_scheduled }} matches completed</p>
                 </div>
             </div>
-            {% endfor %}
+            {% if total_scheduled > 0 %}
+            <div class="mt-3">
+                <div class="w-full bg-muted rounded-full h-2.5">
+                    <div class="bg-primary h-2.5 rounded-full transition-all" style="width: {{ progress_pct }}%"></div>
+                </div>
+            </div>
+            {% endif %}
         </div>
+
+        {% for round_num, round_matches in grouped_scheduled_matches %}
+        <div>
+            <div class="px-4 py-2 bg-muted/30 border-b">
+                <h3 class="text-sm font-semibold text-muted-foreground">
+                    {% if round_num > 0 %}Round {{ round_num }}{% else %}Unscheduled{% endif %}
+                    &middot; {{ round_matches.0.scheduled_date|date:"M d, Y" }}
+                </h3>
+            </div>
+            <div class="divide-y">
+                {% for match in round_matches %}
+                <div class="p-4 hover:bg-muted/50">
+                    <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                        <div class="flex-1">
+                            <div class="text-xs text-muted-foreground mb-1">
+                                {{ match.scheduled_time|time:"H:i" }}
+                                {% if match.location %}&middot; {{ match.location.name }}{% endif %}
+                            </div>
+                            <div class="font-semibold">
+                                {{ match.team1 }} <span class="text-muted-foreground">vs</span> {{ match.team2 }}
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            {% if match.is_converted %}
+                                <span class="inline-flex items-center rounded-md bg-success/10 px-2 py-1 text-xs font-medium text-success">
+                                    Played
+                                </span>
+                                <a href="{% url 'pingpong:match_detail' match.match.pk %}"
+                                   class="inline-flex items-center gap-1 px-3 py-1.5 text-sm font-medium hover:bg-secondary rounded-md transition-colors border">
+                                    View Result
+                                </a>
+                            {% else %}
+                                <a href="{% url 'pingpong:scheduled_match_convert' match.pk %}"
+                                   class="inline-flex items-center gap-1 px-3 py-1.5 text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90 rounded-md transition-colors">
+                                    <img src="{% static 'pingpong/icons/plus.svg' %}" class="w-3 h-3 invert" alt="">
+                                    Record Result
+                                </a>
+                                {% if can_edit %}
+                                <a href="{% url 'pingpong:scheduled_match_edit' match.pk %}"
+                                   class="inline-flex items-center gap-1 px-3 py-1.5 text-sm font-medium hover:bg-secondary rounded-md transition-colors border">
+                                    <img src="{% static 'pingpong/icons/pencil.svg' %}" class="w-3 h-3" alt="">
+                                    Edit
+                                </a>
+                                {% endif %}
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endfor %}
     </div>
     {% endif %}
 

@@ -36,6 +36,7 @@ urlpatterns = [
     path("matches/schedule/", views.ScheduledMatchCreateView.as_view(), name="match_schedule"),
     path("scheduled-matches/<int:pk>/", views.ScheduledMatchDetailView.as_view(), name="scheduled_match_detail"),
     path("scheduled-matches/<int:scheduled_match_pk>/convert/", views.ScheduledMatchConvertView.as_view(), name="scheduled_match_convert"),
+    path("scheduled-matches/<int:pk>/edit/", views.ScheduledMatchEditView.as_view(), name="scheduled_match_edit"),
 
     # Passkey management
     path("passkeys/", views.PasskeyManagementView.as_view(), name="passkey_management"),
