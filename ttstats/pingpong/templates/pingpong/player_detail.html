@@ -200,6 +200,16 @@
     </div>
     {% endif %}
 
+    <!-- Elo Rating Chart -->
+    {% if elo_chart_data %}
+    <div class="rounded-lg border bg-white p-4 md:p-6">
+        <h3 class="font-semibold text-base md:text-lg mb-4">Elo Rating History</h3>
+        <div class="relative" style="height: 300px;">
+            <canvas id="eloChart"></canvas>
+        </div>
+    </div>
+    {% endif %}
+
     <!-- Win Rate Progress -->
     {% if total_matches > 0 %}
     <div class="rounded-lg border bg-white p-4 md:p-6">
@@ -547,4 +557,63 @@
         {% endif %}
     </div>
 </div>
+
+{% if elo_chart_data %}
+{{ elo_chart_labels|json_script:"elo-chart-labels" }}
+{{ elo_chart_data|json_script:"elo-chart-data" }}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+(function() {
+    const labels = JSON.parse(document.getElementById('elo-chart-labels').textContent);
+    const data = JSON.parse(document.getElementById('elo-chart-data').textContent);
+    const ctx = document.getElementById('eloChart').getContext('2d');
+
+    new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: 'Elo Rating',
+                data: data,
+                borderColor: 'rgb(59, 130, 246)',
+                backgroundColor: 'rgba(59, 130, 246, 0.08)',
+                fill: true,
+                tension: 0.3,
+                pointBackgroundColor: 'rgb(59, 130, 246)',
+                pointBorderColor: 'rgb(255, 255, 255)',
+                pointBorderWidth: 2,
+                pointRadius: window.innerWidth < 768 ? 3 : 4,
+                pointHoverRadius: window.innerWidth < 768 ? 5 : 6,
+                borderWidth: 2,
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        label: function(ctx) { return 'Elo: ' + ctx.parsed.y; }
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    ticks: {
+                        maxTicksAllowed: window.innerWidth < 768 ? 5 : 10,
+                        maxRotation: 45,
+                    },
+                    grid: { display: false },
+                },
+                y: {
+                    ticks: { precision: 0 },
+                    grid: { color: 'rgba(156, 163, 175, 0.2)' },
+                }
+            }
+        }
+    });
+})();
+</script>
+{% endif %}
 {% endblock %}

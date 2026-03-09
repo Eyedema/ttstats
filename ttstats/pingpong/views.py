@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 from .forms import GameForm, MatchEditForm, MatchForm, PlayerRegistrationForm, ScheduledMatchForm, MatchConvertForm, \
     ChampionshipCreateForm, ChampionshipEditForm, ScheduledMatchEditForm
-from .models import Game, Location, Match, Player, UserProfile, MatchConfirmation, ScheduledMatch, Team, Championship
+from .models import Game, Location, Match, Player, UserProfile, MatchConfirmation, ScheduledMatch, Team, Championship, EloHistory
 from .emails import send_scheduled_match_email, send_passkey_deleted_email
 
 try:
@@ -259,10 +259,33 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
             # Check if player won (works for both 1v1 and 2v2)
             match.player_won = match.winner and player in match.winner.players.all()
 
+        # Elo chart data (included in player_stats cache)
+        if 'elo_chart_labels' in cached_stats:
+            elo_labels = cached_stats['elo_chart_labels']
+            elo_data = cached_stats['elo_chart_data']
+        else:
+            elo_history = list(
+                EloHistory.objects.filter(player=player)
+                .order_by('created_at')
+                .values_list('created_at', 'new_rating')
+            )
+            if elo_history:
+                elo_labels = ['Start'] + [entry[0].strftime('%Y-%m-%d') for entry in elo_history]
+                elo_data = [1500] + [entry[1] for entry in elo_history]
+            else:
+                elo_labels = []
+                elo_data = []
+            # Update cache with elo chart data
+            cached_stats['elo_chart_labels'] = elo_labels
+            cached_stats['elo_chart_data'] = elo_data
+            cache.set(stats_cache_key, cached_stats, 600)
+
         context.update({
             'matches': confirmed_matches_page.object_list,
             'page_obj': confirmed_matches_page,
             'is_paginated': paginator.num_pages > 1,
+            'elo_chart_labels': elo_labels,
+            'elo_chart_data': elo_data,
             **cached_stats,
         })
 
@@ -2114,6 +2137,42 @@ class ChampionshipDetailView(LoginRequiredMixin, DetailView):
 
         # Pass participants count to avoid multiple COUNT queries in template
         context['participants_count'] = championship.participants.count()
+
+        # Build results matrix for round-robin display
+        # Use winner__isnull=False instead of is_confirmed=True because
+        # championship matches may have winners but not yet be confirmed
+        confirmed_champ_matches = Match.all_objects.filter(
+            championship=championship, winner__isnull=False
+        ).select_related('team1', 'team2', 'winner').prefetch_related('games')
+
+        matrix = {}
+        for match in confirmed_champ_matches:
+            t1_score = sum(1 for g in match.games.all() if g.winner_id == match.team1_id)
+            t2_score = sum(1 for g in match.games.all() if g.winner_id == match.team2_id)
+            matrix[(match.team1_id, match.team2_id)] = {
+                'score': f'{t1_score}-{t2_score}',
+                'won': match.winner_id == match.team1_id,
+                'match_pk': match.pk,
+            }
+
+        standings = context.get('standings', [])
+        matrix_teams = [s['team'] for s in standings]
+        matrix_rows = []
+        for team in matrix_teams:
+            row = []
+            for opponent in matrix_teams:
+                if team.pk == opponent.pk:
+                    row.append({'self': True})
+                else:
+                    result = matrix.get((team.pk, opponent.pk))
+                    row.append(result if result else {'pending': True})
+            matrix_rows.append({
+                'team': team,
+                'display_name': team.name or str(team),
+                'cells': row,
+            })
+        context['matrix_rows'] = matrix_rows
+        context['matrix_teams'] = matrix_teams
 
         # Check if user can register
         try:

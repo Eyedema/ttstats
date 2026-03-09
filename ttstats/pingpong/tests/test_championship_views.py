@@ -130,6 +130,62 @@ class TestChampionshipDetailView:
 
 
 # ---------------------------------------------------------------------------
+# Championship Results Matrix
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestChampionshipResultsMatrix:
+    def test_matrix_in_context(self):
+        """Championship detail includes matrix_rows when matches are confirmed."""
+        players, teams = _make_participants(3)
+        champ = ChampionshipFactory(with_participants=teams)
+        m = MatchFactory(team1=teams[0], team2=teams[1], championship=champ)
+        GameFactory(match=m, game_number=1, team1_score=11, team2_score=5)
+        GameFactory(match=m, game_number=2, team1_score=11, team2_score=7)
+        GameFactory(match=m, game_number=3, team1_score=11, team2_score=9)
+        m.refresh_from_db()
+        confirm_match(m)
+
+        client = _auth_client(players[0].user)
+        resp = client.get(reverse("pingpong:championship_detail", args=[champ.pk]))
+        assert 'matrix_rows' in resp.context
+        assert len(resp.context['matrix_rows']) == 3
+
+    def test_matrix_empty_no_confirmed_matches(self):
+        """Matrix rows exist but all cells are pending when no matches confirmed."""
+        players, teams = _make_participants(2)
+        champ = ChampionshipFactory(with_participants=teams)
+        client = _auth_client(players[0].user)
+        resp = client.get(reverse("pingpong:championship_detail", args=[champ.pk]))
+        matrix_rows = resp.context['matrix_rows']
+        for row in matrix_rows:
+            for cell in row['cells']:
+                assert cell.get('self') or cell.get('pending')
+
+    def test_matrix_score_correct(self):
+        """Matrix shows correct game score from row team's perspective."""
+        players, teams = _make_participants(2)
+        champ = ChampionshipFactory(with_participants=teams)
+        m = MatchFactory(team1=teams[0], team2=teams[1], championship=champ)
+        GameFactory(match=m, game_number=1, team1_score=11, team2_score=5)
+        GameFactory(match=m, game_number=2, team1_score=11, team2_score=7)
+        GameFactory(match=m, game_number=3, team1_score=11, team2_score=9)
+        m.refresh_from_db()
+        confirm_match(m)
+
+        client = _auth_client(players[0].user)
+        resp = client.get(reverse("pingpong:championship_detail", args=[champ.pk]))
+        matrix_rows = resp.context['matrix_rows']
+        # Find team0's row, check for the score cell
+        for row in matrix_rows:
+            if row['team'] == teams[0]:
+                for cell in row['cells']:
+                    if cell.get('score'):
+                        assert cell['score'] == '3-0'
+                        assert cell['won'] is True
+
+
+# ---------------------------------------------------------------------------
 # Championship Create View
 # ---------------------------------------------------------------------------
 
