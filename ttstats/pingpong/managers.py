@@ -1,5 +1,5 @@
 from django.db import models
-from django.db.models import Q
+from django.db.models import Exists, OuterRef, Q
 
 
 class MatchManager(models.Manager):
@@ -30,11 +30,16 @@ class MatchManager(models.Manager):
 
         # Regular users see only their matches + championship matches they participate in
         try:
+            from .models import Championship
             user_player = user.player
+            championship_qs = Championship.all_objects.filter(
+                pk=OuterRef('championship_id'),
+                participants__players=user_player,
+            )
             return qs.filter(
                 Q(team1__players=user_player) |
                 Q(team2__players=user_player) |
-                Q(championship__participants__players=user_player)
+                Exists(championship_qs)
             ).distinct()
         except AttributeError:
             # User has no linked player
@@ -168,11 +173,16 @@ class ScheduledMatchManager(models.Manager):
 
         # Regular users see only their scheduled matches + championship matches they participate in
         try:
+            from .models import Championship
             user_player = user.player
+            championship_qs = Championship.all_objects.filter(
+                pk=OuterRef('championship_id'),
+                participants__players=user_player,
+            )
             return qs.filter(
                 Q(team1__players=user_player) |
                 Q(team2__players=user_player) |
-                Q(championship__participants__players=user_player)
+                Exists(championship_qs)
             ).distinct()
         except AttributeError:
             # User has no linked player

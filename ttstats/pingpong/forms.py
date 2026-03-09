@@ -4,27 +4,32 @@ from django.contrib.auth.models import User
 
 from .models import Game, Match, Player, ScheduledMatch, Team, Championship
 
+INPUT_CSS = 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
+INPUT_CSS_FOCUS = f'{INPUT_CSS} focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2'
+TEXTAREA_CSS = 'flex min-h-[80px] w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
+TEXTAREA_CSS_FOCUS = 'flex min-h-[100px] w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2'
+
 
 class MatchForm(forms.ModelForm):
     player1 = forms.ModelChoiceField(
     queryset=Player.objects.all(),
     required=True,
-    widget=forms.Select(attrs={'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'})
+    widget=forms.Select(attrs={'class': INPUT_CSS})
     )
     player2 = forms.ModelChoiceField(
         queryset=Player.objects.all(),
         required=True,
-        widget=forms.Select(attrs={'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'})
+        widget=forms.Select(attrs={'class': INPUT_CSS})
     )
     player3 = forms.ModelChoiceField(
         queryset=Player.objects.all(),
         required=False,  # Optional for singles
-        widget=forms.Select(attrs={'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'})
+        widget=forms.Select(attrs={'class': INPUT_CSS})
     )
     player4 = forms.ModelChoiceField(
         queryset=Player.objects.all(),
         required=False,  # Optional for singles
-        widget=forms.Select(attrs={'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'})
+        widget=forms.Select(attrs={'class': INPUT_CSS})
     )
     class Meta:
         model = Match
@@ -34,26 +39,26 @@ class MatchForm(forms.ModelForm):
                 (False, 'Single'),
                 (True, 'Double')],
                 attrs={
-                    'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'}
+                    'class': INPUT_CSS}
             ),
             'date_played': forms.DateTimeInput(attrs={
                 'type': 'datetime-local',
-                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
+                'class': INPUT_CSS
             }),
             'location': forms.Select(attrs={
-                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
+                'class': INPUT_CSS
             }),
             'match_type': forms.Select(attrs={
-                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
+                'class': INPUT_CSS
             }),
             'best_of': forms.NumberInput(attrs={
-                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm',
+                'class': INPUT_CSS,
                 'min': 1,
                 'max': 11,
                 'step': 2
             }),
             'notes': forms.Textarea(attrs={
-                'class': 'flex min-h-[80px] w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm',
+                'class': TEXTAREA_CSS,
                 'rows': 3
             }),
         }
@@ -159,12 +164,12 @@ class ScheduledMatchForm(forms.ModelForm):
     player1 = forms.ModelChoiceField(
     queryset=Player.objects.all(),
     required=True,
-    widget=forms.Select(attrs={'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'})
+    widget=forms.Select(attrs={'class': INPUT_CSS})
     )
     player2 = forms.ModelChoiceField(
         queryset=Player.objects.all(),
         required=True,
-        widget=forms.Select(attrs={'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'})
+        widget=forms.Select(attrs={'class': INPUT_CSS})
     )
 
     class Meta:
@@ -173,17 +178,17 @@ class ScheduledMatchForm(forms.ModelForm):
         widgets = {
             'scheduled_date': forms.DateInput(attrs={
                 'type': 'date',
-                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
+                'class': INPUT_CSS
             }),
             'scheduled_time': forms.TimeInput(attrs={
                 'type': 'time',
-                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
+                'class': INPUT_CSS
             }),
             'location': forms.Select(attrs={
-                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
+                'class': INPUT_CSS
             }),
             'notes': forms.Textarea(attrs={
-                'class': 'flex min-h-[80px] w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm',
+                'class': TEXTAREA_CSS,
                 'rows': 3,
                 'placeholder': 'Any additional notes about the scheduled match...'
             }),
@@ -215,22 +220,22 @@ class MatchConvertForm(forms.ModelForm):
     player1 = forms.ModelChoiceField(
         queryset=Player.objects.all(),
         required=True,
-        widget=forms.Select(attrs={'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'})
+        widget=forms.Select(attrs={'class': INPUT_CSS})
     )
     player2 = forms.ModelChoiceField(
         queryset=Player.objects.all(),
         required=True,
-        widget=forms.Select(attrs={'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'})
+        widget=forms.Select(attrs={'class': INPUT_CSS})
     )
     player3 = forms.ModelChoiceField(
         queryset=Player.objects.all(),
         required=False,
-        widget=forms.Select(attrs={'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'})
+        widget=forms.Select(attrs={'class': INPUT_CSS})
     )
     player4 = forms.ModelChoiceField(
         queryset=Player.objects.all(),
         required=False,
-        widget=forms.Select(attrs={'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'})
+        widget=forms.Select(attrs={'class': INPUT_CSS})
     )
 
     class Meta:
@@ -239,26 +244,26 @@ class MatchConvertForm(forms.ModelForm):
         widgets = {
             'is_double': forms.Select(
                 choices=[(False, 'Single'), (True, 'Double')],
-                attrs={'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'}
+                attrs={'class': INPUT_CSS}
             ),
             'date_played': forms.DateTimeInput(attrs={
                 'type': 'datetime-local',
-                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
+                'class': INPUT_CSS
             }),
             'location': forms.Select(attrs={
-                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
+                'class': INPUT_CSS
             }),
             'match_type': forms.Select(attrs={
-                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
+                'class': INPUT_CSS
             }),
             'best_of': forms.NumberInput(attrs={
-                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm',
+                'class': INPUT_CSS,
                 'min': 1,
                 'max': 11,
                 'step': 2
             }),
             'notes': forms.Textarea(attrs={
-                'class': 'flex min-h-[80px] w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm',
+                'class': TEXTAREA_CSS,
                 'rows': 3
             }),
         }
@@ -363,49 +368,49 @@ class ChampionshipCreateForm(forms.ModelForm):
         ]
         widgets = {
             'name': forms.TextInput(attrs={
-                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
+                'class': INPUT_CSS_FOCUS,
                 'placeholder': 'e.g., Summer Championship 2026'
             }),
             'description': forms.Textarea(attrs={
-                'class': 'flex min-h-[100px] w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
+                'class': TEXTAREA_CSS_FOCUS,
                 'rows': 4,
                 'placeholder': 'Championship rules, format, prizes, etc.'
             }),
             'championship_type': forms.Select(attrs={
-                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2'
+                'class': INPUT_CSS_FOCUS
             }),
             'is_public': forms.CheckboxInput(attrs={
                 'class': 'h-4 w-4 rounded border-input'
             }),
             'max_participants': forms.NumberInput(attrs={
-                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
+                'class': INPUT_CSS_FOCUS,
                 'min': 2,
                 'max': 100
             }),
             'start_date': forms.DateInput(attrs={
                 'type': 'date',
-                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2'
+                'class': INPUT_CSS_FOCUS
             }),
             'registration_deadline': forms.DateInput(attrs={
                 'type': 'date',
-                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2'
+                'class': INPUT_CSS_FOCUS
             }),
             'location': forms.Select(attrs={
-                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2'
+                'class': INPUT_CSS_FOCUS
             }),
         }
 
     def __init__(self, *args, **kwargs):
-        championship_type = kwargs.pop('championship_type', 'singles')
+        championship_type = kwargs.pop('championship_type', Championship.ChampionshipType.SINGLES)
         super().__init__(*args, **kwargs)
 
         if self.is_bound and 'championship_type' in self.data:
-            championship_type = self.data.get('championship_type', 'singles')
+            championship_type = self.data.get('championship_type', Championship.ChampionshipType.SINGLES)
 
         from django.db.models import Count
 
         # Determine the required team size based on tournament type
-        required_size = 1 if championship_type == 'singles' else 2
+        required_size = 1 if championship_type == Championship.ChampionshipType.SINGLES else 2
 
         # Get eligible teams:
         # 1. Annotate all teams with player count
@@ -475,17 +480,17 @@ class ChampionshipEditForm(forms.ModelForm):
         fields = ['name', 'description', 'location', 'status']
         widgets = {
             'name': forms.TextInput(attrs={
-                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2'
+                'class': INPUT_CSS_FOCUS
             }),
             'description': forms.Textarea(attrs={
-                'class': 'flex min-h-[100px] w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
+                'class': TEXTAREA_CSS_FOCUS,
                 'rows': 4
             }),
             'location': forms.Select(attrs={
-                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2'
+                'class': INPUT_CSS_FOCUS
             }),
             'status': forms.Select(attrs={
-                'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2'
+                'class': INPUT_CSS_FOCUS
             }),
         }
 
@@ -497,7 +502,7 @@ class ChampionshipRegistrationForm(forms.Form):
         queryset=Team.objects.none(),
         required=True,
         widget=forms.Select(attrs={
-            'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2'
+            'class': INPUT_CSS_FOCUS
         }),
         help_text="Select your team to register"
     )
@@ -511,7 +516,7 @@ class ChampionshipRegistrationForm(forms.Form):
             from django.db.models import Count
 
             # Determine the required team size based on tournament type
-            required_size = 1 if championship.championship_type == 'singles' else 2
+            required_size = 1 if championship.championship_type == Championship.ChampionshipType.SINGLES else 2
 
             # Get eligible teams:
             # 1. Annotate all teams with player count
@@ -539,12 +544,12 @@ class ScheduledMatchEditForm(forms.ModelForm):
         fields = ['scheduled_date', 'scheduled_time', 'location']
         widgets = {
             'scheduled_date': forms.DateInput(
-                attrs={'type': 'date', 'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'}
+                attrs={'type': 'date', 'class': INPUT_CSS}
             ),
             'scheduled_time': forms.TimeInput(
-                attrs={'type': 'time', 'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'}
+                attrs={'type': 'time', 'class': INPUT_CSS}
             ),
             'location': forms.Select(
-                attrs={'class': 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'}
+                attrs={'class': INPUT_CSS}
             ),
         }

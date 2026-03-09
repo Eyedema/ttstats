@@ -508,18 +508,16 @@ class EloHistory(models.Model):
 class Championship(models.Model):
     """Championship model"""
 
-    CHAMPIONSHIP_STATUS = [
-        ('registration', 'Registration Open'),
-        ('scheduled', 'Scheduled'),
-        ('in_progress', 'In Progress'),
-        ('completed', 'Completed'),
-        ('cancelled', 'Cancelled'),
-    ]
+    class Status(models.TextChoices):
+        REGISTRATION = 'registration', 'Registration Open'
+        SCHEDULED = 'scheduled', 'Scheduled'
+        IN_PROGRESS = 'in_progress', 'In Progress'
+        COMPLETED = 'completed', 'Completed'
+        CANCELLED = 'cancelled', 'Cancelled'
 
-    CHAMPIONSHIP_TYPE = [
-        ('singles', 'Singles (1v1)'),
-        ('doubles', 'Doubles (2v2)'),
-    ]
+    class ChampionshipType(models.TextChoices):
+        SINGLES = 'singles', 'Singles (1v1)'
+        DOUBLES = 'doubles', 'Doubles (2v2)'
 
     name = models.CharField(max_length=200, help_text="Championship name")
     description = models.TextField(blank=True, help_text="Championship description and rules")
@@ -527,8 +525,8 @@ class Championship(models.Model):
     # Championship settings
     championship_type = models.CharField(
         max_length=20,
-        choices=CHAMPIONSHIP_TYPE,
-        default='singles',
+        choices=ChampionshipType.choices,
+        default=ChampionshipType.SINGLES,
         help_text="Singles or Doubles championship"
     )
     is_public = models.BooleanField(
@@ -552,8 +550,8 @@ class Championship(models.Model):
     # Status
     status = models.CharField(
         max_length=20,
-        choices=CHAMPIONSHIP_STATUS,
-        default='registration'
+        choices=Status.choices,
+        default=Status.REGISTRATION
     )
 
     # Participants (Teams - can be single player or doubles team)
@@ -602,7 +600,7 @@ class Championship(models.Model):
         """Check if registration is still open"""
         if not self.is_public:
             return False
-        if self.status != 'registration':
+        if self.status != self.Status.REGISTRATION:
             return False
         if self.registration_deadline:
             from django.utils import timezone
@@ -629,9 +627,9 @@ class Championship(models.Model):
             return False
         # Check team size matches championship type
         team_size = team.players.count()
-        if self.championship_type == 'singles' and team_size != 1:
+        if self.championship_type == self.ChampionshipType.SINGLES and team_size != 1:
             return False
-        if self.championship_type == 'doubles' and team_size != 2:
+        if self.championship_type == self.ChampionshipType.DOUBLES and team_size != 2:
             return False
         return True
 
@@ -697,10 +695,11 @@ class Championship(models.Model):
         # Create scheduled matches, 1 round per week
         match_time = time(hour=18, minute=0)
 
+        matches_to_create = []
         for round_num, round_matches in all_rounds:
             round_date = self.start_date + timedelta(weeks=round_num - 1)
             for team1, team2 in round_matches:
-                ScheduledMatch.all_objects.create(
+                matches_to_create.append(ScheduledMatch(
                     championship=self,
                     team1=team1,
                     team2=team2,
@@ -709,7 +708,8 @@ class Championship(models.Model):
                     location=self.location,
                     created_by=self.created_by,
                     round_number=round_num,
-                )
+                ))
+        ScheduledMatch.all_objects.bulk_create(matches_to_create)
 
         # Set end_date based on last round
         if all_rounds:
@@ -749,7 +749,9 @@ class Championship(models.Model):
             t2_score = sum(1 for g in match.games.all() if g.winner_id == match.team2_id)
             match_scores[match.pk] = (t1_score, t2_score)
 
-        for team in self.participants.all():
+        participants = self.participants.prefetch_related('players').all()
+
+        for team in participants:
             played = 0
             wins = 0
             losses = 0
@@ -800,7 +802,7 @@ class Championship(models.Model):
         """Check if all championship matches are completed and confirmed.
         If so, auto-transition to 'completed' status.
         """
-        if self.status != 'in_progress':
+        if self.status != self.Status.IN_PROGRESS:
             return False
 
         total_scheduled = ScheduledMatch.all_objects.filter(championship=self).count()
@@ -826,7 +828,7 @@ class Championship(models.Model):
             if not match.match_confirmed:
                 return False
 
-        self.status = 'completed'
+        self.status = self.Status.COMPLETED
         self.save(update_fields=['status'])
         return True
 

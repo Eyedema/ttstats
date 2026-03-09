@@ -935,8 +935,13 @@ class ChampionshipAdmin(admin.ModelAdmin):
         ("Metadata", {"fields": ("created_at", "updated_at"), "classes": ("collapse",)}),
     )
 
+    def get_queryset(self, request):
+        from django.db.models import Count
+        qs = super().get_queryset(request)
+        return qs.annotate(_participant_count=Count('participants', distinct=True))
+
     def participant_count(self, obj):
-        return obj.participants.count()
+        return obj._participant_count
 
     participant_count.short_description = "Participants"
 

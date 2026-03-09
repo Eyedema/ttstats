@@ -71,8 +71,8 @@ class TestChampionshipListView:
     def test_list_filter_by_status(self):
         player = _player_with_verified_user()
         client = _auth_client(player.user)
-        ChampionshipFactory(name="Active Cup", status="in_progress")
-        ChampionshipFactory(name="Done Cup", status="completed")
+        ChampionshipFactory(name="Active Cup", status=Championship.Status.IN_PROGRESS)
+        ChampionshipFactory(name="Done Cup", status=Championship.Status.COMPLETED)
         resp = client.get(reverse("pingpong:championship_list") + "?status=in_progress")
         content = resp.content.decode()
         assert "Active Cup" in content
@@ -161,7 +161,7 @@ class TestChampionshipCreateView:
         assert Championship.objects.filter(name="New Cup").exists()
         champ = Championship.objects.get(name="New Cup")
         assert champ.created_by == player
-        assert champ.status == "registration"
+        assert champ.status == Championship.Status.REGISTRATION
 
 
 # ---------------------------------------------------------------------------
@@ -222,7 +222,7 @@ class TestChampionshipRegistration:
     def test_unregister_blocked_after_registration_phase(self):
         player = _player_with_verified_user()
         team = _singles_team(player)
-        champ = ChampionshipFactory(status="scheduled", with_participants=[team])
+        champ = ChampionshipFactory(status=Championship.Status.SCHEDULED, with_participants=[team])
         client = _auth_client(player.user)
         resp = client.post(
             reverse("pingpong:championship_unregister", args=[champ.pk]),
@@ -250,7 +250,7 @@ class TestChampionshipStartView:
         resp = client.post(reverse("pingpong:championship_start", args=[champ.pk]))
         assert resp.status_code == 302
         champ.refresh_from_db()
-        assert champ.status == "scheduled"
+        assert champ.status == Championship.Status.SCHEDULED
         assert ScheduledMatch.all_objects.filter(championship=champ).count() == 6
 
     def test_start_requires_creator(self):
@@ -262,7 +262,7 @@ class TestChampionshipStartView:
         resp = client.post(reverse("pingpong:championship_start", args=[champ.pk]))
         assert resp.status_code == 302
         champ.refresh_from_db()
-        assert champ.status == "registration"  # Should NOT have changed
+        assert champ.status == Championship.Status.REGISTRATION  # Should NOT have changed
 
     def test_start_requires_minimum_participants(self):
         player = _player_with_verified_user()
@@ -272,7 +272,7 @@ class TestChampionshipStartView:
         resp = client.post(reverse("pingpong:championship_start", args=[champ.pk]))
         assert resp.status_code == 302
         champ.refresh_from_db()
-        assert champ.status == "registration"  # Should NOT have changed
+        assert champ.status == Championship.Status.REGISTRATION  # Should NOT have changed
 
 
 # ---------------------------------------------------------------------------
@@ -330,7 +330,7 @@ class TestChampionshipMatchLifecycle:
         champ = ChampionshipFactory(
             created_by=creator,
             with_participants=teams,
-            status="scheduled",
+            status=Championship.Status.SCHEDULED,
         )
         champ.generate_schedule()
         sm = ScheduledMatch.all_objects.filter(championship=champ).first()
@@ -364,7 +364,7 @@ class TestChampionshipMatchLifecycle:
         champ = ChampionshipFactory(
             created_by=creator,
             with_participants=teams,
-            status="scheduled",
+            status=Championship.Status.SCHEDULED,
         )
         champ.generate_schedule()
         sm = ScheduledMatch.all_objects.filter(championship=champ).first()
@@ -383,4 +383,4 @@ class TestChampionshipMatchLifecycle:
         )
 
         champ.refresh_from_db()
-        assert champ.status == "in_progress"
+        assert champ.status == Championship.Status.IN_PROGRESS

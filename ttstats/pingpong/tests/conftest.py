@@ -241,12 +241,12 @@ class ChampionshipFactory(DjangoModelFactory):
         model = Championship
 
     name = factory.Sequence(lambda n: f"Championship {n}")
-    championship_type = "singles"
+    championship_type = Championship.ChampionshipType.SINGLES
     is_public = True
     max_participants = 8
     start_date = factory.LazyFunction(lambda: date.today() + timedelta(days=14))
     registration_deadline = factory.LazyFunction(lambda: date.today() + timedelta(days=7))
-    status = "registration"
+    status = Championship.Status.REGISTRATION
 
     @classmethod
     def _create(cls, model_class, *args, **kwargs):

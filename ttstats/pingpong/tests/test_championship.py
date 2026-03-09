@@ -54,7 +54,7 @@ class TestChampionshipModel:
         assert champ.is_registration_open is False
 
     def test_is_registration_open_wrong_status(self):
-        champ = ChampionshipFactory(status="in_progress")
+        champ = ChampionshipFactory(status=Championship.Status.IN_PROGRESS)
         assert champ.is_registration_open is False
 
     def test_current_participants_count(self):
@@ -102,14 +102,14 @@ class TestChampionshipRegistration:
         p1 = PlayerFactory(with_user=True)
         p2 = PlayerFactory(with_user=True)
         doubles_team = TeamFactory(players=[p1, p2])
-        champ = ChampionshipFactory(championship_type="singles")
+        champ = ChampionshipFactory(championship_type=Championship.ChampionshipType.SINGLES)
         assert champ.can_register(doubles_team) is False
 
     def test_can_register_doubles_correct_size(self):
         p1 = PlayerFactory(with_user=True)
         p2 = PlayerFactory(with_user=True)
         doubles_team = TeamFactory(players=[p1, p2])
-        champ = ChampionshipFactory(championship_type="doubles")
+        champ = ChampionshipFactory(championship_type=Championship.ChampionshipType.DOUBLES)
         assert champ.can_register(doubles_team) is True
 
     def test_register_team_success(self):
@@ -355,18 +355,18 @@ class TestChampionshipPermissions:
 class TestCheckCompletion:
     def test_check_completion_returns_false_when_not_in_progress(self):
         _, teams = _make_participants(2)
-        champ = ChampionshipFactory(status="scheduled", with_participants=teams)
+        champ = ChampionshipFactory(status=Championship.Status.SCHEDULED, with_participants=teams)
         assert champ.check_completion() is False
 
     def test_check_completion_returns_false_when_matches_not_converted(self):
         _, teams = _make_participants(2)
-        champ = ChampionshipFactory(status="in_progress", with_participants=teams)
+        champ = ChampionshipFactory(status=Championship.Status.IN_PROGRESS, with_participants=teams)
         champ.generate_schedule()
         assert champ.check_completion() is False
 
     def test_check_completion_succeeds_when_all_confirmed(self):
         players, teams = _make_participants(2)
-        champ = ChampionshipFactory(status="in_progress", with_participants=teams)
+        champ = ChampionshipFactory(status=Championship.Status.IN_PROGRESS, with_participants=teams)
         champ.generate_schedule()
 
         # Convert and complete all scheduled matches
@@ -385,4 +385,4 @@ class TestCheckCompletion:
 
         assert champ.check_completion() is True
         champ.refresh_from_db()
-        assert champ.status == "completed"
+        assert champ.status == Championship.Status.COMPLETED

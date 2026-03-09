@@ -1633,8 +1633,8 @@ class ScheduledMatchConvertView(LoginRequiredMixin, CreateView):
 
             # Auto-transition championship from scheduled -> in_progress
             championship = self.scheduled_match.championship
-            if championship.status == 'scheduled':
-                championship.status = 'in_progress'
+            if championship.status == Championship.Status.SCHEDULED:
+                championship.status = Championship.Status.IN_PROGRESS
                 championship.save(update_fields=['status'])
 
         messages.success(
@@ -1926,9 +1926,9 @@ class ChampionshipListView(LoginRequiredMixin, ListView):
 
         # Filter by status (supports tab-based filtering)
         if status_filter == 'upcoming':
-            queryset = queryset.filter(status__in=['registration', 'scheduled'])
+            queryset = queryset.filter(status__in=[Championship.Status.REGISTRATION, Championship.Status.SCHEDULED])
         elif status_filter == 'past':
-            queryset = queryset.filter(status__in=['completed', 'cancelled'])
+            queryset = queryset.filter(status__in=[Championship.Status.COMPLETED, Championship.Status.CANCELLED])
         elif status_filter != 'all':
             queryset = queryset.filter(status=status_filter)
 
@@ -2021,7 +2021,7 @@ class ChampionshipDetailView(LoginRequiredMixin, DetailView):
         try:
             player = self.request.user.player
             # Get user's teams that match championship type
-            required_size = 1 if championship.championship_type == 'singles' else 2
+            required_size = 1 if championship.championship_type == Championship.ChampionshipType.SINGLES else 2
 
             user_teams = Team.objects.annotate(
                 player_count=Count('players', distinct=True)
@@ -2055,7 +2055,7 @@ class ChampionshipCreateView(LoginRequiredMixin, CreateView):
     def get_form_kwargs(self):
         kwargs = super().get_form_kwargs()
         # Pass championship_type if provided in GET params
-        championship_type = self.request.GET.get('type', 'singles')
+        championship_type = self.request.GET.get('type', Championship.ChampionshipType.SINGLES)
         kwargs['championship_type'] = championship_type
         return kwargs
 
@@ -2077,7 +2077,7 @@ class ChampionshipCreateView(LoginRequiredMixin, CreateView):
             if private_participants:
                 championship.participants.set(private_participants)
                 # Change status to scheduled
-                championship.status = 'scheduled'
+                championship.status = Championship.Status.SCHEDULED
                 championship.save()
 
                 # Generate schedule
@@ -2180,7 +2180,7 @@ class ChampionshipStartView(LoginRequiredMixin, View):
             return redirect('pingpong:championship_detail', pk=pk)
 
         # Check if championship can be started
-        if championship.status != 'registration':
+        if championship.status != Championship.Status.REGISTRATION:
             messages.error(request, "Championship is not in registration phase")
             return redirect('pingpong:championship_detail', pk=pk)
 
@@ -2190,7 +2190,7 @@ class ChampionshipStartView(LoginRequiredMixin, View):
 
         # Generate schedule
         if championship.generate_schedule():
-            championship.status = 'scheduled'
+            championship.status = Championship.Status.SCHEDULED
             championship.save()
             messages.success(
                 request,
@@ -2226,7 +2226,7 @@ class ChampionshipUnregisterView(LoginRequiredMixin, View):
             return redirect('pingpong:championship_detail', pk=pk)
 
         # Check if championship allows unregistration
-        if championship.status != 'registration':
+        if championship.status != Championship.Status.REGISTRATION:
             messages.error(request, "Cannot unregister after championship has started")
             return redirect('pingpong:championship_detail', pk=pk)
 
