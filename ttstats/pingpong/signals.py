@@ -55,6 +55,7 @@ def handle_match_completion(sender, instance, created, **kwargs):
         )
         # Reload instance to get updated confirmation fields
         instance.refresh_from_db()
+        update_player_elo(instance)
         return
 
     # 2. Send confirmation emails (only to verified users who need to confirm)

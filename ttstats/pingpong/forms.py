@@ -74,7 +74,7 @@ class MatchForm(forms.ModelForm):
 
         # Two players for singles
         if not cleaned_data.get('is_double') and len(players) > 2:
-            raise forms.ValidationError("Only two players are required for a doubles match!")
+            raise forms.ValidationError("Only two players are required for a singles match!")
         # Four players for doubles
         if cleaned_data.get('is_double') and len(players) != 4:
             raise forms.ValidationError("Four players are required for a doubles match!")
