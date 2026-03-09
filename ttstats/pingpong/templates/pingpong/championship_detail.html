@@ -302,6 +302,59 @@
     </div>
     {% endif %}
 
+    <!-- Results Matrix -->
+    {% if matrix_rows %}
+    <div class="rounded-lg border bg-white overflow-hidden">
+        <div class="border-b p-4 md:p-6 bg-muted/50">
+            <h2 class="text-lg md:text-xl font-semibold">Results Matrix</h2>
+            <p class="text-xs md:text-sm text-muted-foreground mt-1">Head-to-head results between participants</p>
+        </div>
+        <div class="p-4 md:p-6 overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead>
+                    <tr>
+                        <th class="p-2 text-left font-medium text-muted-foreground"></th>
+                        {% for row in matrix_rows %}
+                        <th class="p-2 text-center font-medium text-muted-foreground min-w-[60px]">
+                            <span class="text-xs">{{ row.display_name|truncatechars:12 }}</span>
+                        </th>
+                        {% endfor %}
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in matrix_rows %}
+                    <tr class="border-t border-border">
+                        <td class="p-2 font-medium whitespace-nowrap">{{ row.display_name|truncatechars:16 }}</td>
+                        {% for cell in row.cells %}
+                        <td class="p-2 text-center">
+                            {% if cell.self %}
+                            <span class="inline-block w-full bg-muted rounded px-2 py-1 text-muted-foreground">—</span>
+                            {% elif cell.pending %}
+                            <span class="text-muted-foreground text-xs">—</span>
+                            {% elif cell.won %}
+                            <a href="{% url 'pingpong:match_detail' cell.match_pk %}"
+                               class="inline-block rounded px-2 py-1 bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400 font-medium hover:underline">
+                                {{ cell.score }}
+                            </a>
+                            {% else %}
+                            <a href="{% url 'pingpong:match_detail' cell.match_pk %}"
+                               class="inline-block rounded px-2 py-1 bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400 font-medium hover:underline">
+                                {{ cell.score }}
+                            </a>
+                            {% endif %}
+                        </td>
+                        {% endfor %}
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <div class="border-t px-4 py-3 md:px-6">
+            <p class="text-xs text-muted-foreground">Rows show results from that team's perspective. Green = win, Red = loss.</p>
+        </div>
+    </div>
+    {% endif %}
+
     <!-- Participants List -->
     <div class="rounded-lg border bg-white overflow-hidden">
         <div class="border-b p-4 md:p-6">

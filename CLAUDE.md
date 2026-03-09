@@ -50,9 +50,9 @@ docker compose -f compose.prod.yml up --build -d
 ├── ttstats/                          # Django project root
 │   ├── manage.py                     # Django CLI
 │   ├── pingpong/                     # Main application
-│   │   ├── models.py                 # Database models (9 models)
-│   │   ├── views.py                  # View classes (26 views, ~1796 lines)
-│   │   ├── forms.py                  # Form definitions (7 forms)
+│   │   ├── models.py                 # Database models (10 models)
+│   │   ├── views.py                  # View classes (33 views)
+│   │   ├── forms.py                  # Form definitions (11 forms)
 │   │   ├── elo.py                    # Elo rating calculation system
 │   │   ├── urls.py                   # URL routing
 │   │   ├── signals.py                # Django signals
@@ -62,7 +62,7 @@ docker compose -f compose.prod.yml up --build -d
 │   │   ├── admin.py                  # Django admin config
 │   │   ├── context_processors.py     # Template context
 │   │   ├── management/commands/      # Management commands (recalculate_elo, cache_control, warm_cache)
-│   │   ├── migrations/               # Database migrations (18 total)
+│   │   ├── migrations/               # Database migrations (22 total)
 │   │   ├── templates/pingpong/       # Django templates
 │   │   ├── templates/registration/   # Auth templates
 │   │   ├── static/pingpong/icons/    # SVG icons (800+)
@@ -85,7 +85,9 @@ docker compose -f compose.prod.yml up --build -d
 │   │       ├── test_elo.py                 # Elo rating calculation tests
 │   │       ├── test_match_list_performance.py  # Performance optimization tests
 │   │       ├── test_scheduled_match_conversion.py  # Scheduled match conversion tests
-│   │       └── test_cache.py                  # Redis cache invalidation & view caching tests
+│   │       ├── test_cache.py                  # Redis cache invalidation & view caching tests
+│   │       ├── test_championship.py           # Championship model tests
+│   │       └── test_championship_views.py     # Championship view tests
 
 │   └── ttstats/                      # Django configuration
 │       ├── settings/
@@ -116,7 +118,7 @@ docker compose -f compose.prod.yml up --build -d
 ### Stack & Configuration
 
 - **Framework:** pytest (configured in `pytest.ini` at project root)
-- **Factories:** factory-boy (`conftest.py` has `UserFactory`, `PlayerFactory`, `LocationFactory`, `TeamFactory`, `MatchFactory`, `GameFactory`, `ScheduledMatchFactory`)
+- **Factories:** factory-boy (`conftest.py` has `UserFactory`, `PlayerFactory`, `LocationFactory`, `TeamFactory`, `MatchFactory`, `GameFactory`, `ScheduledMatchFactory`, `ChampionshipFactory`)
 - **Settings:** `DJANGO_SETTINGS_MODULE = ttstats.settings.dev`, `pythonpath = ttstats`
 - **NEVER** use Django's `TestCase` or `manage.py test`. Always use pytest classes and functions.
 
@@ -137,6 +139,8 @@ Each source module has a corresponding test file:
 | `elo.py` | `test_elo.py` | Elo calculation formulas, K-factors, doubles averaging |
 | `cache_utils.py` | `test_cache.py` | Cache invalidation, cached views, denormalized fields, management commands |
 | `management/commands/` | `test_commands.py` | Management command execution, output validation |
+| `models.py` (Championship) | `test_championship.py` | Championship model methods, standings, schedule generation |
+| `views.py` (Championship) | `test_championship_views.py` | Championship CRUD, registration, start, results matrix |
 
 When adding new source code, **always create or update the corresponding test file**.
 
@@ -181,6 +185,7 @@ MatchFactory(team1_players=[p1,p2], team2_players=[p3,p4], is_double=True)  # Do
 MatchFactory(confirmed=True)                     # Auto-confirms match after creation
 GameFactory(match=m, game_number=1, team1_score=11, team2_score=5)
 ScheduledMatchFactory(player1=p1, player2=p2, scheduled_date=date, scheduled_time=time)
+ChampionshipFactory(name="...", with_participants=[t1, t2], created_by=player)  # Round-robin championship
 ```
 
 Key fixtures:
@@ -249,7 +254,7 @@ These integration tests simulate real user sessions. They catch regressions wher
 
 ---
 
-## Database Models (9 Total)
+## Database Models (10 Total)
 
 ### Location
 ```python
@@ -281,7 +286,8 @@ These integration tests simulate real user sessions. They catch regressions wher
 ### Match
 ```python
 # Fields: is_double, team1, team2, date_played, location, match_type, best_of,
-#         winner, confirmations (ManyToMany through MatchConfirmation),
+#         winner, championship (optional FK to Championship),
+#         confirmations (ManyToMany through MatchConfirmation),
 #         is_confirmed (denormalized, db_index=True),
 #         team1_score_cache, team2_score_cache (denormalized),
 #         notes, created_at, updated_at
@@ -334,13 +340,30 @@ These integration tests simulate real user sessions. They catch regressions wher
 ### ScheduledMatch
 ```python
 # Fields: team1, team2, scheduled_date, scheduled_time, location, notes,
-#         created_at, created_by, notification_sent, match (OneToOne link)
+#         created_at, created_by, notification_sent, match (OneToOne link),
+#         championship (optional FK), round_number (optional int)
 # Properties: scheduled_datetime, player1, player2 (backward-compatible),
 #             is_converted, is_fully_confirmed
 # Methods: user_can_view(user), user_can_edit(user) (delegates to user_can_view)
 # Manager: ScheduledMatchManager (row-level security based on user)
 # Ordering: by scheduled_date, scheduled_time
 # Purpose: Future scheduled match with conversion to Match tracking
+```
+
+### Championship
+```python
+# Fields: name, description, championship_type (singles/doubles), status,
+#         start_date, end_date, registration_deadline, location, is_public,
+#         max_participants, participants (ManyToMany Team), created_by (Player),
+#         created_at, updated_at
+# Status choices: registration, scheduled, in_progress, completed, cancelled
+# Properties: is_registration_open, is_full
+# Methods: get_standings(), generate_round_robin_schedule(), check_completion(),
+#          user_can_view(user), user_can_edit(user)
+# Manager: ChampionshipManager (public visible to all, private to participants only)
+# Purpose: Round-robin league championships with automatic schedule generation
+# Note: generate_round_robin_schedule() uses circle method for home+away rounds
+#       and creates ScheduledMatch entries with round_number
 ```
 
 ## URL Routes
@@ -382,6 +405,18 @@ These integration tests simulate real user sessions. They catch regressions wher
 | GET/POST | `/pingpong/matches/schedule/` | ScheduledMatchCreateView | Schedule future match |
 | GET | `/pingpong/scheduled-matches/<id>/` | ScheduledMatchDetailView | View scheduled match |
 | GET/POST | `/pingpong/scheduled-matches/<id>/convert/` | ScheduledMatchConvertView | Convert to played match |
+| GET/POST | `/pingpong/scheduled-matches/<id>/edit/` | ScheduledMatchEditView | Edit scheduled match |
+
+### Championships (all LoginRequired)
+| Method | URL | View | Description |
+|--------|-----|------|-------------|
+| GET | `/pingpong/championships/` | ChampionshipListView | List championships |
+| GET/POST | `/pingpong/championships/create/` | ChampionshipCreateView | Create championship |
+| GET | `/pingpong/championships/<id>/` | ChampionshipDetailView | Championship details, standings, results matrix |
+| GET/POST | `/pingpong/championships/<id>/edit/` | ChampionshipEditView | Edit championship |
+| POST | `/pingpong/championships/<id>/register/` | ChampionshipRegisterView | Register team |
+| POST | `/pingpong/championships/<id>/unregister/` | ChampionshipUnregisterView | Unregister team |
+| POST | `/pingpong/championships/<id>/start/` | ChampionshipStartView | Start championship (generates schedule) |
 
 ### Teams (all LoginRequired)
 | Method | URL | View | Description |
@@ -390,7 +425,7 @@ These integration tests simulate real user sessions. They catch regressions wher
 | GET | `/pingpong/teams/<id>/` | TeamDetailView | Team stats and match history |
 | GET/POST | `/pingpong/teams/<id>/edit/` | TeamUpdateView | Edit team name |
 
-## Forms Reference (`pingpong/forms.py` - 7 Total)
+## Forms Reference (`pingpong/forms.py` - 11 Total)
 
 | Form | Model | Fields | Validation |
 |------|-------|--------|------------|
@@ -400,7 +435,11 @@ These integration tests simulate real user sessions. They catch regressions wher
 | `GameForm` | Game | game_number, team1_score, team2_score, duration_minutes | No ties; win by 2 at deuce (>=10-10) |
 | `PlayerRegistrationForm` | User | username, email, password1, password2, full_name, nickname, playing_style | Creates User + Player on save(commit=True) |
 | `ScheduledMatchForm` | ScheduledMatch | player1, player2, scheduled_date, scheduled_time, location, notes | player1 != player2; date >= today |
+| `ScheduledMatchEditForm` | ScheduledMatch | scheduled_date, scheduled_time, location, notes | Edit existing scheduled match |
 | `MatchConvertForm` | Match | is_double, player1, player2, player3, player4, date_played, location, match_type, best_of, notes | Pre-fills from scheduled match; locks players for non-staff |
+| `ChampionshipCreateForm` | Championship | name, description, championship_type, start_date, end_date, registration_deadline, location, is_public, max_participants, private_participants | Creates championship; private_participants for invite-only |
+| `ChampionshipEditForm` | Championship | name, description, location, status | Edit championship details |
+| `ChampionshipRegistrationForm` | - | team | Register a team for public championship |
 
 ## Signals (`pingpong/signals.py`)
 
@@ -415,6 +454,8 @@ These integration tests simulate real user sessions. They catch regressions wher
 | `invalidate_on_player_save` | Player post_save | Invalidates player-related caches |
 | `invalidate_on_player_delete` | Player post_delete | Invalidates player-related caches |
 | `notify_passkey_registered` | WebAuthnCredential post_save (created=True) | Sends email notification when new passkey is registered |
+
+**Championship integration:** `update_elo_on_match_confirmation` also calls `match.championship.check_completion()` to auto-transition championship to `completed` status when all matches are confirmed.
 
 ## Business Logic
 
@@ -455,7 +496,7 @@ These integration tests simulate real user sessions. They catch regressions wher
 **Display:**
 - Leaderboard sorted by Elo
 - Match detail shows Elo changes per player
-- Player detail shows current rating, peak, and history
+- Player detail shows current rating, peak, and Chart.js line chart of rating history over time
 
 **Management command:**
 ```bash
@@ -484,7 +525,32 @@ python manage.py recalculate_elo --dry-run  # Preview changes without saving
 - `MatchManager.get_queryset()`: no user = unfiltered, anonymous = empty, staff = all, regular = own matches only
 - `GameManager`: mirrors match visibility
 - `ScheduledMatchManager`: same pattern as MatchManager
+- `ChampionshipManager`: public = visible to all, private = visible only to participants and creator
 - `PlayerManager`: all users see all players; `editable_by(user)` filters for edit permissions
+- **Bypass:** Use `Model.all_objects` (e.g., `Match.all_objects`) to skip row-level filtering when needed (e.g., championship views showing all championship matches)
+
+### Championship System (Round-Robin Leagues)
+1. **Creation:** Creator sets name, type (singles/doubles), dates, public/private, max participants
+2. **Registration:** Public championships allow team self-registration; private championships have participants set at creation
+3. **Start:** Creator clicks "Start Championship" (requires >= 2 participants). This:
+   - Generates round-robin schedule using circle method (home + away = 2 rounds per pair)
+   - Creates `ScheduledMatch` entries with `round_number` and `championship` FK
+   - Transitions status from `registration` → `scheduled`
+4. **Play:** Users convert scheduled matches to played matches via `ScheduledMatchConvertView`
+   - Conversion auto-sets `match.championship` FK and `match_type = 'tournament'`
+   - Auto-transitions championship from `scheduled` → `in_progress` on first conversion
+5. **Standings:** `get_standings()` calculates: points (3 per win), games won/lost, game difference
+   - Sorted by points desc, then game difference desc, then games won desc
+6. **Results Matrix:** Championship detail page shows a head-to-head grid of all results
+   - Uses `winner__isnull=False` filter (not `is_confirmed`) because championship matches may not be confirmed
+7. **Completion:** `check_completion()` auto-transitions to `completed` when all scheduled matches are converted and confirmed
+8. **Elo Chart:** Player detail page shows Elo rating history over time using Chart.js line chart
+
+**Gotchas:**
+- Championship matches may have winners but `is_confirmed=False` — always filter by `winner__isnull=False` for championship data
+- Use `Match.all_objects` and `ScheduledMatch.all_objects` in championship views to bypass row-level security
+- Template JSON data uses `json_script` tag (not `escapejs`) to avoid double-serialization issues
+- Chart.js colors should use explicit `rgb()` values (e.g., `rgb(59, 130, 246)`) not CSS custom properties
 
 ### Email Verification Flow
 1. User registers -> User created (signal creates UserProfile + token)
@@ -590,6 +656,10 @@ python manage.py recalculate_elo --dry-run  # Preview changes without saving
 | `team_list.html` | List all teams |
 | `team_detail.html` | Team stats and match history |
 | `team_form.html` | Edit team name |
+| `championship_list.html` | List championships |
+| `championship_detail.html` | Standings, results matrix, schedule, completed matches |
+| `championship_form.html` | Create/edit championship |
+| `scheduled_match_edit_form.html` | Edit scheduled match |
 
 ## Environment Configuration
 
@@ -634,8 +704,6 @@ Both compose files include: **web** (Django), **db** (PostgreSQL), **redis** (Re
 5. Upload HTML coverage artifact
 
 ### On Master Push (if tests pass):
-
-### On Master Push:
 1. SSH to VPS
 2. Pull latest code
 3. Rebuild and restart containers
@@ -705,7 +773,7 @@ python manage.py migrate                     # Apply migrations
 python manage.py showmigrations              # List migrations
 ```
 
-Current migrations (18 total):
+Current migrations (22 total):
 1. `0001_initial` - Initial schema
 2. `0002-0005` - Location and best_of field adjustments
 3. `0006` - Match confirmation fields (old boolean approach)
@@ -719,8 +787,11 @@ Current migrations (18 total):
 11. `0014` - **Major:** Added Elo fields (elo_rating, elo_peak, matches_for_elo, EloHistory)
 12. `0015` - MatchConfirmation metadata cleanup
 13. `0016_scheduledmatch_match_link` - Added conversion tracking to ScheduledMatch
-14. `0017_match_denormalized_cache_fields` - **Major:** Added is_confirmed, team1_score_cache, team2_score_cache to Match
-15. `0018_populate_match_cache_fields` - Data migration to populate denormalized fields for existing records
+14. `0017_championship` - **Major:** Added Championship model, championship FK to Match
+15. `0017_match_denormalized_cache_fields` - Added is_confirmed, team1_score_cache, team2_score_cache to Match
+16. `0018_add_round_number_to_scheduledmatch` - Added round_number to ScheduledMatch
+17. `0018_populate_match_cache_fields` - Data migration to populate denormalized fields
+18. `0019_merge` - Merge migration resolving parallel 0017/0018 branches
 
 ## Management Commands
 
@@ -775,136 +846,18 @@ python manage.py warm_cache    # Warms dashboard_total_players, dashboard_total_
 
 ## Passkey Authentication
 
-TTStats supports passkey (WebAuthn/FIDO2) authentication for existing users as an optional login method.
+Optional WebAuthn/FIDO2 passwordless login using django-otp + django-otp-webauthn.
 
-### Features
-- **Passwordless login:** Use biometrics (Face ID, Touch ID, Windows Hello) or security keys (YubiKey, etc.)
-- **Optional:** Traditional password authentication remains available
-- **Multiple passkeys:** Users can register multiple devices
-- **Security notifications:** Email alerts when passkeys are added/removed
-- **Admin visibility:** Staff can see passkey counts and manage credentials
+**Key URLs:** `/pingpong/passkeys/` (manage), `/pingpong/webauthn/register/` and `/pingpong/webauthn/authenticate/` (library views).
 
-### Stack
-- **django-otp:** MFA framework (v1.5.4+)
-- **django-otp-webauthn:** WebAuthn implementation (v0.3.0+)
-- **py_webauthn:** FIDO2 library (installed automatically)
+**Key files:** `views.py` (PasskeyManagementView), `signals.py` (notify_passkey_registered), `emails.py` (send_passkey_registered/deleted_email), `templates/pingpong/passkey_management.html`, `templates/registration/login.html`.
 
-### User Flow
-1. User logs in with password
-2. Navigates to "Manage Passkeys" (`/pingpong/passkeys/`)
-3. Clicks "Register Passkey" button
-4. Browser prompts for biometric/security key confirmation
-5. Passkey registered and linked to user account
-6. User can now log in with passkey (passwordless) on future visits
-
-### Files Added/Modified
-| File | Purpose |
-|------|---------|
-| `requirements.txt` | Added django-otp and django-otp-webauthn |
-| `settings/base.py` | Added INSTALLED_APPS, MIDDLEWARE, AUTHENTICATION_BACKENDS, WebAuthn config |
-| `settings/prod.py` | Production WebAuthn origins |
-| `pingpong/urls.py` | Passkey management URL + WebAuthn endpoints |
-| `pingpong/views.py` | PasskeyManagementView (GET: show credentials, POST: delete) |
-| `pingpong/admin.py` | CustomUserAdmin with passkey count display + PasskeyInline |
-| `pingpong/signals.py` | notify_passkey_registered signal |
-| `pingpong/emails.py` | send_passkey_registered_email, send_passkey_deleted_email |
-| `templates/registration/login.html` | Passkey login button + WebAuthn scripts |
-| `templates/pingpong/base.html` | Passkey link in navigation |
-| `templates/pingpong/passkey_management.html` | NEW: Passkey management page |
-| `tests/test_passkey_views.py` | NEW: Unit tests for passkey views |
-| `tests/test_passkey_integration.py` | NEW: Integration tests |
-| `tests/test_passkey_emails.py` | NEW: Email notification tests |
-| `tests/test_passkey_admin.py` | NEW: Admin interface tests |
-
-
-### URL Routes
-| Method | URL | View | Description |
-|--------|-----|------|-------------|
-| GET/POST | `/pingpong/passkeys/` | PasskeyManagementView | Manage user's passkeys |
-| POST | `/pingpong/webauthn/register/` | Library view | Register new passkey |
-| POST | `/pingpong/webauthn/authenticate/` | Library view | Authenticate with passkey |
-
-### Security Features
-1. **Origin validation:** Only allowed domains can register passkeys (prevents phishing)
-2. **Replay attack prevention:** Sign counter increments with each use
-3. **User verification:** Passkeys require biometric/PIN confirmation
-4. **Email notifications:** Users alerted when passkeys are added/removed
-5. **Public key cryptography:** Private keys never leave user's device
-
-### Testing Passkeys
-```bash
-# Unit tests (view logic, CRUD operations)
-python -m pytest ttstats/pingpong/tests/test_passkey_views.py -v
-
-# Integration tests (page rendering, auth flow)
-python -m pytest ttstats/pingpong/tests/test_passkey_integration.py -v
-
-# Email notification tests
-python -m pytest ttstats/pingpong/tests/test_passkey_emails.py -v
-
-# Admin interface tests
-python -m pytest ttstats/pingpong/tests/test_passkey_admin.py -v
-
-# Run all passkey tests
-python -m pytest ttstats/pingpong/tests/test_passkey*.py -v
-```
-
-**Note:** Full WebAuthn ceremony testing (actual biometric prompts) requires browser automation (Selenium). The provided tests cover view logic, email notifications, and page rendering.
-
-
-### Browser Compatibility
-- Chrome 67+ ✓
-- Firefox 60+ ✓
-- Safari 13+ ✓
-- Edge 18+ ✓
-
-### Configuration
-**Development:**
-- `OTP_WEBAUTHN_RP_ID = "localhost"`
-- `OTP_WEBAUTHN_ALLOWED_ORIGINS = ["http://localhost:8000"]`
-- **IMPORTANT:** Always access dev server via `localhost:8000`, NOT `127.0.0.1:8000`
-- WebAuthn rejects IP addresses (except localhost) for security reasons
-
-**Production:**
-- `OTP_WEBAUTHN_RP_ID = os.environ.get("SITE_DOMAIN")`
-- `OTP_WEBAUTHN_ALLOWED_ORIGINS = [f"https://{os.environ.get('SITE_DOMAIN')}"]`
-- HTTPS is required (WebAuthn doesn't work on plain HTTP in production)
+**Tests:** `test_passkey_views.py`, `test_passkey_integration.py`, `test_passkey_emails.py`, `test_passkey_admin.py`.
 
 ### Known Gotchas
-1. **Use localhost, not 127.0.0.1:** WebAuthn requires a valid domain name. IP addresses are not allowed (except localhost). Always access the dev server via `http://localhost:8000`, NOT `http://127.0.0.1:8000`
-2. **HTTPS required in production:** WebAuthn only works on HTTPS (except localhost)
-3. **Origin must match:** `OTP_WEBAUTHN_RP_ID` must match your domain exactly
-4. **Button IDs are required:** The library's JavaScript expects specific element IDs:
-   - Registration: `passkey-register-button`, `passkey-register-status-message`, `passkey-registration-placeholder`
-   - Authentication: `passkey-verification-button`, `passkey-verification-status-message`, `passkey-verification-placeholder`
-5. **Template structure:** Must include `<template id="...-available-template">` and `<template id="...-unavailable-template">` elements
-6. **Try/except import:** `PasskeyManagementView` handles missing `django_otp_webauthn` gracefully
-7. **Email notifications:** Triggered via Django signals on credential creation/deletion
-8. **Admin inline:** Staff can view passkey metadata but cannot add passkeys through admin (security requirement)
-
-### Email Notifications
-| Event | Email Subject | Trigger |
-|-------|---------------|---------|
-| Passkey registered | "New Passkey Registered - TTStats" | WebAuthnCredential post_save (created=True) |
-| Passkey deleted | "Passkey Removed - TTStats" | PasskeyManagementView POST (before delete) |
-
-Both emails include:
-- Device name
-- Link to passkey management page
-- Security warning if not authorized
-- Suggestion to contact support
-
-### Admin Interface
-Staff can view passkey information in User admin:
-- **List view:** Shows passkey count per user
-- **Edit view:** Inline showing passkey name, created date, sign count
-- **Can delete:** Staff can remove passkeys if needed (e.g., lost device)
-- **Cannot add:** Passkeys must be registered through the UI, not admin
-
-### Future Enhancements
-1. **Recovery codes:** Generate backup codes if user loses device
-2. **TOTP support:** Add authenticator app 2FA
-3. **Passkey-only accounts:** Allow users to disable password entirely
-4. **Device management:** Show last used date, device type detection
-5. **Browser extension support:** Test with 1Password, Bitwarden passkey managers
-6. **Usage analytics:** Track which auth method users prefer
+1. **Use localhost, not 127.0.0.1** for dev — WebAuthn rejects IP addresses
+2. **HTTPS required in production**
+3. **Button IDs required:** `passkey-register-button`, `passkey-register-status-message`, `passkey-registration-placeholder`, `passkey-verification-button`, `passkey-verification-status-message`, `passkey-verification-placeholder`
+4. **Template structure:** Must include `<template id="...-available-template">` and `<template id="...-unavailable-template">` elements
+5. **Try/except import:** `PasskeyManagementView` handles missing `django_otp_webauthn` gracefully
+6. **Admin inline:** Staff can view/delete passkeys but cannot add them (security requirement)
