@@ -142,6 +142,33 @@ class TestPlayerDetailView:
         assert resp.context["current_streak"] == 2
         assert resp.context["streak_type"] == "win"
 
+    def test_elo_chart_data_in_context(self):
+        """Player detail includes elo chart data when history exists."""
+        u, p = _verified_user_with_player()
+        other = PlayerFactory(with_user=True)
+        m = MatchFactory(player1=p, player2=other)
+        GameFactory(match=m, game_number=1, team1_score=11, team2_score=5)
+        GameFactory(match=m, game_number=2, team1_score=11, team2_score=9)
+        GameFactory(match=m, game_number=3, team1_score=11, team2_score=7)
+        m.refresh_from_db()
+        confirm_match(m)
+
+        c = _login_client(u)
+        resp = c.get(reverse("pingpong:player_detail", args=[p.pk]))
+        assert resp.status_code == 200
+        assert 'elo_chart_labels' in resp.context
+        assert 'elo_chart_data' in resp.context
+        data = resp.context['elo_chart_data']
+        assert len(data) >= 2  # Start + at least 1 match
+        assert data[0] == 1500  # First point is starting rating
+
+    def test_elo_chart_empty_for_new_player(self):
+        """Player with no matches has empty elo chart data."""
+        u, p = _verified_user_with_player()
+        c = _login_client(u)
+        resp = c.get(reverse("pingpong:player_detail", args=[p.pk]))
+        assert resp.context['elo_chart_data'] == []
+
 
 # ===========================================================================
 # PlayerCreateView
