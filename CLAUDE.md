@@ -6,7 +6,7 @@
 - **Stack:** Django 6.0, PostgreSQL 16, Redis 7, Tailwind CSS, Docker
 - **Python Version:** 3.12
 - **Main App:** `ttstats/pingpong/`
-- **Test Framework:** pytest + pytest-django + factory-boy 
+- **Test Framework:** pytest + pytest-django + factory-boy
 - **Virtual environment folder to use for python:** `.venv/`
 
 ## Common Commands
@@ -17,17 +17,17 @@ docker compose -f compose.dev.yml up --build       # Start dev environment
 docker compose -f compose.dev.yml exec web python manage.py migrate  # Run migrations
 docker compose -f compose.dev.yml exec web python manage.py createsuperuser
 
-
 # Testing (always use pytest, never Django's manage.py test)
+# Can also run tests inside Docker: docker compose -f compose.dev.yml exec web python -m pytest
 cd ttstats && python -m pytest --tb=short -q          # Run all tests
 cd ttstats && python -m pytest --co -q                # List all tests
 cd ttstats && python -m pytest ttstats/pingpong/tests/test_models.py  # Single file
 cd ttstats && python -m pytest -k "TestMatch"         # Run by name pattern
 cd ttstats && python -m pytest --tb=long -x           # Stop on first failure, full traceback
 
-# Coverage
-cd ttstats && coverage run -m pytest && coverage report         # Run with coverage
-cd ttstats && coverage html                                     # Generate HTML report
+# Coverage (or use the helper: cd ttstats && ../scripts/run_tests.sh)
+cd ttstats && coverage run -m pytest && coverage report
+cd ttstats && coverage html
 
 # Management Commands
 cd ttstats && python manage.py recalculate_elo                  # Recalculate all Elo ratings
@@ -41,75 +41,7 @@ cd ttstats && python manage.py warm_cache                       # Pre-populate c
 docker compose -f compose.prod.yml up --build -d
 ```
 
-## Project Structure
-
-```
-/Users/ubaldopuocci/ttstats/
- ├── pytest.ini                        # Pytest configuration (DO NOT use manage.py test) 
-├── requirements.txt                  # Python dependencies
-├── ttstats/                          # Django project root
-│   ├── manage.py                     # Django CLI
-│   ├── pingpong/                     # Main application
-│   │   ├── models.py                 # Database models (10 models)
-│   │   ├── views.py                  # View classes (33 views)
-│   │   ├── forms.py                  # Form definitions (11 forms)
-│   │   ├── elo.py                    # Elo rating calculation system
-│   │   ├── urls.py                   # URL routing
-│   │   ├── signals.py                # Django signals
-│   │   ├── cache_utils.py            # Cache invalidation utilities
-│   │   ├── managers.py               # Custom QuerySet managers
-│   │   ├── emails.py                 # Email utilities
-│   │   ├── admin.py                  # Django admin config
-│   │   ├── context_processors.py     # Template context
-│   │   ├── management/commands/      # Management commands (recalculate_elo, cache_control, warm_cache)
-│   │   ├── migrations/               # Database migrations (22 total)
-│   │   ├── templates/pingpong/       # Django templates
-│   │   ├── templates/registration/   # Auth templates
-│   │   ├── static/pingpong/icons/    # SVG icons (800+)
-
-│   │   └── tests/                    # Test suite (pytest + factory-boy)
-│   │       ├── conftest.py           # Factories + shared fixtures
-│   │       ├── test_models.py        # Model tests
-│   │       ├── test_forms.py         # Form validation tests
-│   │       ├── test_views.py         # View tests (status codes, auth, context, redirects)
-│   │       ├── test_signals.py       # Signal handler tests
-│   │       ├── test_managers.py      # Custom manager tests (row-level security)
-│   │       ├── test_emails.py        # Email utility tests
-│   │       ├── test_middleware.py    # Middleware tests
-│   │       ├── test_context_processors.py  # Context processor tests
-│   │       ├── test_passkey_views.py       # Passkey view logic tests
-│   │       ├── test_passkey_integration.py # Passkey integration tests
-│   │       ├── test_passkey_emails.py      # Passkey email notification tests
-│   │       ├── test_passkey_admin.py       # Passkey admin interface tests
-│   │       ├── test_commands.py            # Management command tests
-│   │       ├── test_elo.py                 # Elo rating calculation tests
-│   │       ├── test_match_list_performance.py  # Performance optimization tests
-│   │       ├── test_scheduled_match_conversion.py  # Scheduled match conversion tests
-│   │       ├── test_cache.py                  # Redis cache invalidation & view caching tests
-│   │       ├── test_championship.py           # Championship model tests
-│   │       └── test_championship_views.py     # Championship view tests
-
-│   └── ttstats/                      # Django configuration
-│       ├── settings/
-│       │   ├── base.py               # Base settings
-│       │   ├── dev.py                # Development settings
-│       │   └── prod.py               # Production settings
-│       ├── urls.py                   # Root URL config
-│       ├── middleware.py             # CurrentUserMiddleware, CacheDebugMiddleware
-│       └── wsgi.py / asgi.py         # Application servers
-├── docker/django/                    # Docker configuration
-│   ├── Dockerfile                    # Multi-stage build
-│   └── entrypoint.sh                 # Container entrypoint
-├── compose.dev.yml                   # Development compose
-├── compose.prod.yml                  # Production compose
-├── .env.dev                          # Dev environment vars
-├── .env.prod.example                 # Prod env template
-├── .github/workflows/main.yml        # CI/CD pipeline
- └── .coveragerc                       # Coverage config 
-```
-
 ---
-
 
 ## Testing Strategy & Rules
 
@@ -122,27 +54,7 @@ docker compose -f compose.prod.yml up --build -d
 - **Settings:** `DJANGO_SETTINGS_MODULE = ttstats.settings.dev`, `pythonpath = ttstats`
 - **NEVER** use Django's `TestCase` or `manage.py test`. Always use pytest classes and functions.
 
-### Test File Organization
-
-Each source module has a corresponding test file:
-
-| Source file | Test file | What to test |
-|-------------|-----------|-------------|
-| `models.py` | `test_models.py` | Field defaults, `__str__`, properties, methods, ordering, constraints, cascades |
-| `forms.py` | `test_forms.py` | Valid/invalid data, custom clean methods, field-level validation |
-| `views.py` | `test_views.py` | Status codes, auth redirects, template used, context data, form handling, messages |
-| `signals.py` | `test_signals.py` | Signal side effects, conditional logic, no double-triggers |
-| `managers.py` | `test_managers.py` | Row-level security filtering per user role |
-| `emails.py` | `test_emails.py` | Email content, recipients, early returns, settings fallbacks |
-| `middleware.py` | `test_middleware.py` | Thread-local set/cleanup, exception safety |
-| `context_processors.py` | `test_context_processors.py` | Context dict values per auth state |
-| `elo.py` | `test_elo.py` | Elo calculation formulas, K-factors, doubles averaging |
-| `cache_utils.py` | `test_cache.py` | Cache invalidation, cached views, denormalized fields, management commands |
-| `management/commands/` | `test_commands.py` | Management command execution, output validation |
-| `models.py` (Championship) | `test_championship.py` | Championship model methods, standings, schedule generation |
-| `views.py` (Championship) | `test_championship_views.py` | Championship CRUD, registration, start, results matrix |
-
-When adding new source code, **always create or update the corresponding test file**.
+When adding new source code, **always create or update the corresponding test file** (convention: `test_<module>.py`).
 
 ### Test Style & Conventions
 
@@ -194,7 +106,7 @@ Key fixtures:
 
 ### Known Gotchas
 
-1. **Team-based architecture.** Matches now use Team model (not direct player references). Singles = 1-player teams, doubles = 2-player teams. Use `player1`/`player2` kwargs in MatchFactory for backward compatibility, or `team1_players`/`team2_players` for explicit control.
+1. **Team-based architecture.** Matches use Team model (not direct player references). Singles = 1-player teams, doubles = 2-player teams. Use `player1`/`player2` kwargs in MatchFactory for backward compatibility, or `team1_players`/`team2_players` for explicit control.
 2. **MatchManager filters by current user.** In view tests, `Match.objects.get(pk=...)` only returns matches the logged-in user can see. A regular user can't see matches they're not in — `get_object_or_404(Match, pk=pk)` returns 404, not 403.
 3. **Signals fire on User creation.** Every `UserFactory()` call creates a `UserProfile` with a verification token via signal. You don't need to create profiles manually.
 4. **Game.save() triggers Match.save().** Creating enough games automatically sets the match winner. Tests that check "no winner yet" must not create too many games.
@@ -203,14 +115,12 @@ Key fixtures:
 7. **Manager tests need thread-local manipulation.** Import `_thread_locals` from `ttstats.middleware` and set/clear `_thread_locals.user` directly. Use an `autouse` fixture to clean up.
 8. **base.html requires user.player.pk.** Any view test where the user has no Player profile will crash during template rendering with `NoReverseMatch`. Always create a player for the test user.
 9. **Email backend in tests.** Dev settings use `console.EmailBackend`. pytest-django's `mailoutbox` fixture or `django.core.mail.outbox` works for asserting sent emails.
-10. **LocMemCache persists between tests.** Django's LocMemCache (used when no Redis is available) persists across pytest tests in the same process. An autouse `_clear_cache` fixture in `conftest.py` calls `cache.clear()` before and after each test to prevent cross-test contamination.
+10. **LocMemCache persists between tests.** Django's LocMemCache persists across pytest tests in the same process. An autouse `_clear_cache` fixture in `conftest.py` calls `cache.clear()` before and after each test.
 
 ### TDD Workflow for New Features
 
-Follow this order when implementing new features:
-
-1. **Write failing tests first.** Create or update the test file for the module you're changing. Write tests that describe the expected behavior. Run `python -m pytest path/to/test_file.py` and confirm they fail.
-2. **Implement the minimum code to pass.** Write the model/form/view/signal code. Run the tests again and iterate until green.
+1. **Write failing tests first.** Run `python -m pytest path/to/test_file.py` and confirm they fail.
+2. **Implement the minimum code to pass.** Run the tests again and iterate until green.
 3. **Refactor if needed.** Clean up while tests stay green.
 4. **Add edge-case tests.** Cover error paths, boundary conditions, permission checks.
 5. **Run the full suite.** `python -m pytest --tb=short -q` before considering the work done.
@@ -219,7 +129,7 @@ Follow this order when implementing new features:
 
 - **Models:** Test methods, properties, and constraints in isolation. Don't test via views.
 - **Forms:** Instantiate the form with `data={}` directly. Don't go through HTTP requests.
-- **Views:** Use the Django test `Client` to exercise HTTP request/response. Assert on status codes, context data, redirects, and messages.
+- **Views:** Use the Django test `Client`. Assert on status codes, context data, redirects, and messages.
 - **Managers:** Manipulate thread-local user directly. Don't use the test client.
 - **Signals:** Create/save model instances and assert side effects (emails sent, profiles created).
 - **Emails:** Call the email function directly, check `mail.outbox`.
@@ -228,636 +138,64 @@ Follow this order when implementing new features:
 
 ### Integration Tests: Protect Core Happy Paths
 
-Beyond unit tests, maintain integration tests that exercise complete user flows end-to-end through multiple view calls in sequence. These ensure that the pieces work together correctly and that core functionality never silently breaks.
+Maintain integration tests that exercise complete user flows end-to-end through multiple view calls in sequence. **When adding a new feature**, also add an integration test covering its primary happy path.
 
-**Required integration test flows** (add these to `test_views.py` or a dedicated `test_integration.py`):
+**Required integration test flows** (in `test_views.py` or `test_integration.py`):
 
-1. **Registration -> Verification -> Login flow:**
-   POST signup -> GET verify-email with token -> POST login -> assert dashboard loads with correct user context.
-
-2. **Match lifecycle (singles with Elo):**
-   POST create match -> POST add game 1 -> POST add game 2 -> POST add game 3 (triggers winner) -> assert match complete, winner set, confirmation emails sent -> POST confirm as player1 -> POST confirm as player2 -> assert match_confirmed is True -> assert Elo ratings updated -> GET leaderboard -> assert stats reflect the match.
-
-3. **Doubles match lifecycle:**
-   POST create match (is_double=True, 4 players) -> POST add games -> assert winner set -> POST confirm as all 4 players -> assert match fully confirmed -> assert Elo updated for all 4 players.
-
-4. **Scheduled match conversion flow:**
-   POST schedule match -> assert emails sent -> GET calendar -> assert match appears -> GET scheduled match detail -> POST convert to match -> POST add games -> POST confirm -> assert linked match is confirmed -> GET calendar -> assert shows as converted and confirmed.
-
-5. **Head-to-head with data:**
-   Create two players, play multiple confirmed matches between them -> GET head-to-head with both player IDs -> assert all stats (game wins, margins, streaks) are calculated correctly.
-
-These integration tests simulate real user sessions. They catch regressions where individual units pass but the wiring between them breaks (wrong redirect URL, missing context variable, signal not firing in the right order, etc.).
-
-**When adding a new feature**, also add an integration test covering its primary happy path alongside the unit tests.
-
+1. **Registration -> Verification -> Login:** POST signup -> GET verify-email with token -> POST login -> assert dashboard loads.
+2. **Match lifecycle (singles with Elo):** Create match -> add games (triggers winner) -> assert emails sent -> confirm as both players -> assert Elo updated -> verify leaderboard.
+3. **Doubles match lifecycle:** Create match (4 players) -> add games -> confirm as all 4 players -> assert Elo updated for all.
+4. **Scheduled match conversion:** Schedule match -> assert emails -> convert to match -> add games -> confirm -> verify calendar status.
+5. **Head-to-head with data:** Create two players, play multiple confirmed matches -> GET head-to-head -> assert stats correct.
 
 ---
 
-## Database Models (10 Total)
+## Business Logic Gotchas
 
-### Location
-```python
-# Fields: name, address, notes, created_at
-# Ordering: by name
-# Purpose: Physical location where matches are played
-```
-
-### Player
-```python
-# Fields: user (optional OneToOne), name, nickname, playing_style, notes, created_at,
-#         elo_rating, elo_peak, matches_for_elo
-# playing_style choices: normal, hard_rubber, unknown
-# Properties: win_rate
-# Methods: user_can_edit(user)
-# Manager: PlayerManager (all visible, editable_by() for filtering)
-# Purpose: Individual player profile with Elo tracking
-```
-
-### Team
-```python
-# Fields: players (ManyToMany), name
-# Methods: __str__() (auto-generates "Player1 and Player2" format)
-# save() auto-generates name from player list if blank
-# Purpose: Support singles (1 player) and doubles (2 players)
-# Note: Automatically created/reused when matches are created
-```
-
-### Match
-```python
-# Fields: is_double, team1, team2, date_played, location, match_type, best_of,
-#         winner, championship (optional FK to Championship),
-#         confirmations (ManyToMany through MatchConfirmation),
-#         is_confirmed (denormalized, db_index=True),
-#         team1_score_cache, team2_score_cache (denormalized),
-#         notes, created_at, updated_at
-# match_type choices: casual, practice, tournament
-# best_of choices: 3, 5, 7
-# Properties: team1_score, team2_score, team1_confirmed, team2_confirmed, match_confirmed,
-#             player1, player2 (backward-compatible)
-# Methods: user_can_edit(user), user_can_view(user), should_auto_confirm(),
-#          get_unverified_players(), update_cache_fields(), _calculate_confirmation_status()
-# save() auto-determines winner from games AND updates score cache fields
-# Manager: MatchManager (row-level security based on user)
-# Purpose: Completed or in-progress match (singles or doubles)
-# Note: is_confirmed is maintained by signals, enabling DB-level filtering instead of Python
-```
-
-### MatchConfirmation
-```python
-# Fields: match, player, confirmed_at
-# Constraint: unique_together (match, player)
-# Purpose: Junction table for match confirmations (supports doubles with 4 players)
-# Note: Singles require 2 confirmations, doubles require 4
-```
-
-### Game
-```python
-# Fields: match, game_number, team1_score, team2_score, winner, duration_minutes
-# Constraint: unique (match, game_number)
-# save() auto-determines winner from scores, then calls match.save() to update match winner
-# Manager: GameManager (filters by match visibility)
-# Purpose: Individual game within a match
-```
-
-### EloHistory
-```python
-# Fields: match, player, old_rating, new_rating, rating_change, k_factor, created_at
-# Constraint: unique_together (match, player)
-# Purpose: Track Elo rating changes per match for transparency
-# Display: Shown in match detail view
-```
-
-### UserProfile
-```python
-# Fields: user (OneToOne), email_verified, email_verification_token,
-#         email_verification_sent_at, created_at
-# Auto-created via signal when User is created (with verification token)
-# Methods: create_verification_token(), verify_email(token)
-# Purpose: Extended user profile for email verification
-```
-
-### ScheduledMatch
-```python
-# Fields: team1, team2, scheduled_date, scheduled_time, location, notes,
-#         created_at, created_by, notification_sent, match (OneToOne link),
-#         championship (optional FK), round_number (optional int)
-# Properties: scheduled_datetime, player1, player2 (backward-compatible),
-#             is_converted, is_fully_confirmed
-# Methods: user_can_view(user), user_can_edit(user) (delegates to user_can_view)
-# Manager: ScheduledMatchManager (row-level security based on user)
-# Ordering: by scheduled_date, scheduled_time
-# Purpose: Future scheduled match with conversion to Match tracking
-```
-
-### Championship
-```python
-# Fields: name, description, championship_type (singles/doubles), status,
-#         start_date, end_date, registration_deadline, location, is_public,
-#         max_participants, participants (ManyToMany Team), created_by (Player),
-#         created_at, updated_at
-# Status choices: registration, scheduled, in_progress, completed, cancelled
-# Properties: is_registration_open, is_full
-# Methods: get_standings(), generate_round_robin_schedule(), check_completion(),
-#          user_can_view(user), user_can_edit(user)
-# Manager: ChampionshipManager (public visible to all, private to participants only)
-# Purpose: Round-robin league championships with automatic schedule generation
-# Note: generate_round_robin_schedule() uses circle method for home+away rounds
-#       and creates ScheduledMatch entries with round_number
-```
-
-## URL Routes
-
-### Authentication
-| Method | URL | View | Description |
-|--------|-----|------|-------------|
-| POST | `/accounts/login/` | CustomLoginView | User login (blocks unverified) |
-| GET/POST | `/pingpong/signup/` | PlayerRegistrationView | User registration |
-| GET | `/pingpong/verify-email/<token>/` | EmailVerifyView | Email verification |
-| POST | `/pingpong/resend-verification/` | EmailResendVerificationView | Resend token |
-| POST | `/accounts/logout/` | Django built-in | Logout |
-
-### Core Pages (all LoginRequired)
-| Method | URL | View | Description |
-|--------|-----|------|-------------|
-| GET | `/pingpong/` | DashboardView | Main dashboard |
-| GET | `/pingpong/leaderboard/` | LeaderboardView | Player rankings (by Elo) |
-| GET | `/pingpong/head-to-head/` | HeadToHeadStatsView | Player comparison |
-| GET | `/pingpong/calendar/` | CalendarView | Calendar with scheduled/past matches |
-
-### Players (all LoginRequired)
-| Method | URL | View | Description |
-|--------|-----|------|-------------|
-| GET | `/pingpong/players/` | PlayerListView | List all players (paginated, 10/page) |
-| GET/POST | `/pingpong/players/add/` | PlayerCreateView | Create player form |
-| GET | `/pingpong/players/<id>/` | PlayerDetailView | Player details + stats |
-| GET/POST | `/pingpong/players/<id>/edit/` | PlayerUpdateView | Edit player |
-
-### Matches (all LoginRequired)
-| Method | URL | View | Description |
-|--------|-----|------|-------------|
-| GET | `/pingpong/matches/` | MatchListView | List matches (optimized) |
-| GET/POST | `/pingpong/matches/add/` | MatchCreateView | Create match (singles/doubles) |
-| GET | `/pingpong/matches/<id>/` | MatchDetailView | Match details + Elo changes |
-| GET/POST | `/pingpong/matches/<id>/edit/` | MatchUpdateView | Edit match (limited if complete) |
-| POST | `/pingpong/match/<id>/confirm/` | match_confirm | Confirm participation |
-| POST | `/pingpong/matches/<match_id>/add-game/` | GameCreateView | Add game to match |
-| GET/POST | `/pingpong/matches/schedule/` | ScheduledMatchCreateView | Schedule future match |
-| GET | `/pingpong/scheduled-matches/<id>/` | ScheduledMatchDetailView | View scheduled match |
-| GET/POST | `/pingpong/scheduled-matches/<id>/convert/` | ScheduledMatchConvertView | Convert to played match |
-| GET/POST | `/pingpong/scheduled-matches/<id>/edit/` | ScheduledMatchEditView | Edit scheduled match |
-
-### Championships (all LoginRequired)
-| Method | URL | View | Description |
-|--------|-----|------|-------------|
-| GET | `/pingpong/championships/` | ChampionshipListView | List championships |
-| GET/POST | `/pingpong/championships/create/` | ChampionshipCreateView | Create championship |
-| GET | `/pingpong/championships/<id>/` | ChampionshipDetailView | Championship details, standings, results matrix |
-| GET/POST | `/pingpong/championships/<id>/edit/` | ChampionshipEditView | Edit championship |
-| POST | `/pingpong/championships/<id>/register/` | ChampionshipRegisterView | Register team |
-| POST | `/pingpong/championships/<id>/unregister/` | ChampionshipUnregisterView | Unregister team |
-| POST | `/pingpong/championships/<id>/start/` | ChampionshipStartView | Start championship (generates schedule) |
-
-### Teams (all LoginRequired)
-| Method | URL | View | Description |
-|--------|-----|------|-------------|
-| GET | `/pingpong/teams/` | TeamsListView | List all teams |
-| GET | `/pingpong/teams/<id>/` | TeamDetailView | Team stats and match history |
-| GET/POST | `/pingpong/teams/<id>/edit/` | TeamUpdateView | Edit team name |
-
-## Forms Reference (`pingpong/forms.py` - 11 Total)
-
-| Form | Model | Fields | Validation |
-|------|-------|--------|------------|
-| `MatchForm` | Match | is_double, player1, player2, player3, player4, date_played, location, match_type, best_of, notes | All players different; correct count for singles/doubles |
-| `MatchEditForm` | Match | location, notes | (completed matches only) |
-| `TeamEditForm` | Team | name | (edit team name only) |
-| `GameForm` | Game | game_number, team1_score, team2_score, duration_minutes | No ties; win by 2 at deuce (>=10-10) |
-| `PlayerRegistrationForm` | User | username, email, password1, password2, full_name, nickname, playing_style | Creates User + Player on save(commit=True) |
-| `ScheduledMatchForm` | ScheduledMatch | player1, player2, scheduled_date, scheduled_time, location, notes | player1 != player2; date >= today |
-| `ScheduledMatchEditForm` | ScheduledMatch | scheduled_date, scheduled_time, location, notes | Edit existing scheduled match |
-| `MatchConvertForm` | Match | is_double, player1, player2, player3, player4, date_played, location, match_type, best_of, notes | Pre-fills from scheduled match; locks players for non-staff |
-| `ChampionshipCreateForm` | Championship | name, description, championship_type, start_date, end_date, registration_deadline, location, is_public, max_participants, private_participants | Creates championship; private_participants for invite-only |
-| `ChampionshipEditForm` | Championship | name, description, location, status | Edit championship details |
-| `ChampionshipRegistrationForm` | - | team | Register a team for public championship |
-
-## Signals (`pingpong/signals.py`)
-
-| Signal | Trigger | Action |
-|--------|---------|--------|
-| `create_user_profile` | User post_save (created=True) | Creates UserProfile + verification token |
-| `track_match_winner_change` | Match pre_save | Sets `_winner_just_set` flag if winner goes from None to set |
-| `handle_match_completion` | Match post_save | If `_winner_just_set`: auto-confirm (unverified) OR send emails (verified), update `is_confirmed` field, update Elo, invalidate caches |
-| `update_elo_on_confirmation` | Match post_save | If match becomes fully confirmed, calculate and update Elo ratings |
-| `update_elo_on_match_confirmation` | MatchConfirmation post_save (created=True) | Updates `is_confirmed` field, triggers Elo update, invalidates caches |
-| `invalidate_caches_on_game_save` | Game post_save | Invalidates match-related caches when scores change |
-| `invalidate_on_player_save` | Player post_save | Invalidates player-related caches |
-| `invalidate_on_player_delete` | Player post_delete | Invalidates player-related caches |
-| `notify_passkey_registered` | WebAuthnCredential post_save (created=True) | Sends email notification when new passkey is registered |
-
-**Championship integration:** `update_elo_on_match_confirmation` also calls `match.championship.check_completion()` to auto-transition championship to `completed` status when all matches are confirmed.
-
-## Business Logic
-
-### Team-Based Architecture
-- **Singles matches:** Automatically create/reuse 1-player teams
-- **Doubles matches:** Automatically create/reuse 2-player teams
-- **Team reuse logic:** If exact player composition exists, reuse that team (avoids duplicates)
-- **Backward compatibility:** Match.player1/player2 properties return first player from each team
-- **UI:** Forms show is_double toggle + player1/player2 (+ player3/player4 for doubles)
-
-### Match Confirmation System
-1. Match created with no confirmations (MatchConfirmation junction table)
-2. When winner is set for the first time (via Game.save() -> Match.save()):
-   - If any player is unverified (no user or email_verified=False): auto-confirm all via DB inserts
-   - If all players are verified: send confirmation emails to each
-3. **Singles:** Requires 2 confirmations (both players)
-4. **Doubles:** Requires 4 confirmations (all 4 players)
-5. Match shows confirmation badges in UI (team1_confirmed, team2_confirmed properties)
-6. **Elo trigger:** Elo ratings only update when match is fully confirmed
-
-### Elo Rating System (`pingpong/elo.py`)
-**Formula:** Traditional Elo with table tennis-specific adjustments
-
-**Features:**
-- **Singles:** Individual Elo vs Elo
-- **Doubles:** Team average Elo used for probability calculation
-- **K-factor base:** 32 for regular matches
-- **Tournament multiplier:** 1.5x (K=48 for tournaments)
-- **Best-of multipliers:** BO3=0.9x, BO5=1.0x, BO7=1.1x
-- **New player boost:** 1.5x K-factor for first 20 matches
-
-**Tracking:**
-- `Player.elo_rating` (current rating, starts at 1500)
-- `Player.elo_peak` (all-time highest rating)
-- `Player.matches_for_elo` (counter for new player boost)
-- `EloHistory` records every rating change (match, player, old, new, change, k_factor)
-
-**Display:**
-- Leaderboard sorted by Elo
-- Match detail shows Elo changes per player
-- Player detail shows current rating, peak, and Chart.js line chart of rating history over time
-
-**Management command:**
-```bash
-python manage.py recalculate_elo       # Recalculate all Elo ratings from scratch
-python manage.py recalculate_elo --dry-run  # Preview changes without saving
-```
-
-### Winner Determination
-- **Game:** Automatically determined by comparing team1_score vs team2_score in Game.save()
-- **Match:** Automatically determined in Match.save() when a team has >= (best_of // 2 + 1) game wins
-
-### Scheduled Match Conversion
-1. User creates scheduled match (future date/time)
-2. Both teams receive email notification
-3. Match appears in calendar view with "Not converted" status
-4. User navigates to scheduled match detail page
-5. Clicks "Convert to Match" button
-6. Form pre-fills with scheduled match data (players, location, notes)
-7. User adds date_played, match_type, best_of
-8. On save: creates Match, links via ScheduledMatch.match field
-9. Calendar now shows "Converted" status
-10. is_fully_confirmed property checks if linked match is confirmed
+These are non-obvious behaviors that aren't clear from reading individual source files.
 
 ### Row-Level Security
 - `CurrentUserMiddleware` stores user in thread-local (`_thread_locals.user`)
-- `MatchManager.get_queryset()`: no user = unfiltered, anonymous = empty, staff = all, regular = own matches only
-- `GameManager`: mirrors match visibility
-- `ScheduledMatchManager`: same pattern as MatchManager
-- `ChampionshipManager`: public = visible to all, private = visible only to participants and creator
-- `PlayerManager`: all users see all players; `editable_by(user)` filters for edit permissions
-- **Bypass:** Use `Model.all_objects` (e.g., `Match.all_objects`) to skip row-level filtering when needed (e.g., championship views showing all championship matches)
+- Managers filter querysets: no user = unfiltered, anonymous = empty, staff = all, regular = own matches only
+- **Bypass:** Use `Model.all_objects` (e.g., `Match.all_objects`) to skip row-level filtering (needed in championship views)
 
-### Championship System (Round-Robin Leagues)
-1. **Creation:** Creator sets name, type (singles/doubles), dates, public/private, max participants
-2. **Registration:** Public championships allow team self-registration; private championships have participants set at creation
-3. **Start:** Creator clicks "Start Championship" (requires >= 2 participants). This:
-   - Generates round-robin schedule using circle method (home + away = 2 rounds per pair)
-   - Creates `ScheduledMatch` entries with `round_number` and `championship` FK
-   - Transitions status from `registration` → `scheduled`
-4. **Play:** Users convert scheduled matches to played matches via `ScheduledMatchConvertView`
-   - Conversion auto-sets `match.championship` FK and `match_type = 'tournament'`
-   - Auto-transitions championship from `scheduled` → `in_progress` on first conversion
-5. **Standings:** `get_standings()` calculates: points (3 per win), games won/lost, game difference
-   - Sorted by points desc, then game difference desc, then games won desc
-6. **Results Matrix:** Championship detail page shows a head-to-head grid of all results
-   - Uses `winner__isnull=False` filter (not `is_confirmed`) because championship matches may not be confirmed
-7. **Completion:** `check_completion()` auto-transitions to `completed` when all scheduled matches are converted and confirmed
-8. **Elo Chart:** Player detail page shows Elo rating history over time using Chart.js line chart
+### Match Confirmation & Elo
+- When winner is set for the first time: if any player is unverified, auto-confirm all; if all verified, send confirmation emails
+- `match_confirmed` property: True when all verified players confirmed. Empty verified set = True (unverified players don't need confirmation)
+- Elo ratings only update when match is fully confirmed
+- `is_confirmed` denormalized field must be updated in ALL signal paths (auto-confirm AND email paths). When all players are unverified, `should_auto_confirm()` returns False because `match_confirmed` is already True.
+- Use `Match.objects.filter(pk=instance.pk).update(is_confirmed=...)` in signals to avoid re-triggering pre/post_save signals
+- Views should use `Match.objects.filter(is_confirmed=True)` (DB-level), not Python-level filtering
 
-**Gotchas:**
-- Championship matches may have winners but `is_confirmed=False` — always filter by `winner__isnull=False` for championship data
+### Championship System
+- Championship matches may have winners but `is_confirmed=False` — always filter by `winner__isnull=False` for championship data, not `is_confirmed=True`
 - Use `Match.all_objects` and `ScheduledMatch.all_objects` in championship views to bypass row-level security
-- Template JSON data uses `json_script` tag (not `escapejs`) to avoid double-serialization issues
-- Chart.js colors should use explicit `rgb()` values (e.g., `rgb(59, 130, 246)`) not CSS custom properties
+- `ScheduledMatchConvertView.form_valid()` auto-sets `match.championship` FK when converting championship scheduled matches
+- `check_completion()` auto-transitions to `completed` when all scheduled matches are converted and confirmed
+- Round-robin schedule uses circle method: generates home + away rounds (andata e ritorno)
 
-### Email Verification Flow
-1. User registers -> User created (signal creates UserProfile + token)
-2. Registration view sends verification email with token link
-3. User clicks `/pingpong/verify-email/<token>/` -> verified, auto-logged in, redirected to dashboard
-4. Unverified users blocked at login (CustomLoginView.form_valid)
+### Template / Frontend
+- `base.html` unconditionally renders `{% url 'pingpong:player_detail' user.player.pk %}` — every authenticated user **must** have a linked Player profile
+- Use `json_script` template tag for passing data to JavaScript, NOT `escapejs` (causes double-serialization)
+- Chart.js colors: use explicit `rgb()` values (e.g., `rgb(59, 130, 246)`), not CSS custom properties (render as black)
 
-### Performance Optimizations (MatchListView)
-**Problem:** N+1 queries rendering match lists (team scores, player lists, confirmations)
+### Passkey Authentication
+- Optional WebAuthn/FIDO2 via django-otp + django-otp-webauthn
+- **Use localhost, not 127.0.0.1** for dev — WebAuthn rejects IP addresses
+- HTTPS required in production
+- Required button IDs: `passkey-register-button`, `passkey-register-status-message`, `passkey-registration-placeholder`, `passkey-verification-button`, `passkey-verification-status-message`, `passkey-verification-placeholder`
+- Template must include `<template id="...-available-template">` and `<template id="...-unavailable-template">` elements
+- `PasskeyManagementView` handles missing `django_otp_webauthn` with try/except import
+- Admin inline: staff can view/delete passkeys but cannot add them (security requirement)
 
-**Solution:** Extensive prefetching + Python caching
-- `prefetch_related('team1__players', 'team2__players', 'games', 'confirmations')`
-- Cache properties: `cached_team1_score`, `cached_team2_score`, `cached_team1_players`, `cached_team2_players`, `cached_match_confirmed`
-- Reduces database queries by 90%+ on match list pages
+### Redis Cache
+- Falls back to LocMemCache when `REDIS_URL` is not set
+- Leaderboard uses generation counter pattern: `cache.incr('leaderboard_generation')` versions keys instead of deleting all filter variants
+- `CacheDebugMiddleware` (dev only) adds `X-Request-Time`, `X-Cache-Hits`, `X-Cache-Misses` headers
 
-**Testing:** `test_match_list_performance.py` validates query count stays under limits
+## Environment & Deployment
 
-### Redis Cache System
-
-**Stack:** Redis 7 Alpine + django-redis. Falls back to LocMemCache when `REDIS_URL` is not set.
-
-**Configuration (`settings/base.py`):**
-- Uses `REDIS_URL` env var to determine backend
-- Connection pool: max 50 connections, retry on timeout, 5s socket timeouts
-- Key prefix: `ttstats`, default TTL: 300s (5min)
-
-**Denormalized Database Fields (Match model):**
-- `is_confirmed` (BooleanField, indexed) - enables `Match.objects.filter(is_confirmed=True)` instead of Python-level filtering
-- `team1_score_cache`, `team2_score_cache` (IntegerField) - game win counts maintained by `Match.save()`
-- Maintained by signals (`handle_match_completion`, `update_elo_on_match_confirmation`) and `Match.save()`
-
-**Cache Keys & TTLs:**
-
-| Key Pattern | TTL | Invalidated By | Used In |
-|-------------|-----|----------------|---------|
-| `pending_matches_{player_pk}` | 5min | Match/confirmation changes | `pingpong_context` context processor |
-| `dashboard_total_players` | 15min | Player create/delete | DashboardView |
-| `dashboard_total_matches` | 10min | Match changes | DashboardView |
-| `dashboard_recent_matches` | 5min | Match changes | DashboardView |
-| `leaderboard_{generation}_{params}` | 10min | Generation counter bump | LeaderboardView |
-| `player_stats_{player_pk}` | 10min | Match/confirmation changes | PlayerDetailView |
-| `h2h_{min_pk}_{max_pk}` | 30min | Match/confirmation changes | HeadToHeadStatsView |
-
-**Leaderboard Generation Counter:**
-- Instead of deleting all filter-variant cache keys, uses `cache.incr('leaderboard_generation')` to version keys
-- Old entries expire naturally via TTL
-- Key format: `leaderboard_{generation}_{match_type}_{min_matches}_{playing_style}`
-
-**Cache Invalidation (`cache_utils.py`):**
-- `invalidate_match_caches(match)` - clears player stats, pending matches, h2h, dashboard keys for all players in the match
-- `invalidate_player_caches(player)` - clears player stats, pending matches, dashboard player count
-- `invalidate_leaderboard()` - increments generation counter
-- `invalidate_all_caches()` - calls `cache.clear()`
-- All invalidation functions are called from signals
-
-**Debug Middleware (`CacheDebugMiddleware`):**
-- Enabled in dev.py only (`MIDDLEWARE += [...]`)
-- Adds response headers: `X-Request-Time`, `X-Cache-Hits`, `X-Cache-Misses`
-- Only active when `settings.DEBUG` is True
-- Requires django-redis (silently skips for LocMemCache)
-
-**Files:**
-
-| File | Purpose |
-|------|---------|
-| `pingpong/cache_utils.py` | Cache invalidation functions |
-| `pingpong/signals.py` | Signal handlers that call invalidation |
-| `pingpong/management/commands/cache_control.py` | --clear, --stats, --test management command |
-| `pingpong/management/commands/warm_cache.py` | Pre-populate common dashboard caches |
-| `ttstats/middleware.py` | CacheDebugMiddleware (debug headers) |
-| `pingpong/tests/test_cache.py` | 32 tests covering invalidation, views, denormalized fields |
-| `pingpong/migrations/0017_match_denormalized_cache_fields.py` | Schema migration (3 new fields) |
-| `pingpong/migrations/0018_populate_match_cache_fields.py` | Data migration (populate existing records) |
-
-**Known Gotchas:**
-1. `is_confirmed` must be updated in ALL signal paths (auto-confirm AND email paths), not just the auto-confirm path. When all players are unverified, `match_confirmed` is already True, so `should_auto_confirm()` returns False.
-2. Use `Match.objects.filter(pk=instance.pk).update(is_confirmed=...)` in signals to avoid re-triggering pre/post_save signals.
-3. LocMemCache persists between pytest tests. The autouse `_clear_cache` fixture in conftest.py handles this.
-4. Views that filter confirmed matches should use `Match.objects.filter(is_confirmed=True)` (DB-level) instead of `[m for m in matches if m.match_confirmed]` (Python-level).
-
-## Templates
-
-### Base Template Constraint
-`base.html` line 169 unconditionally renders `{% url 'pingpong:player_detail' user.player.pk %}`. This means **every authenticated user must have a linked Player profile** or the page will crash with `NoReverseMatch`.  This affects both production and test code. 
-
-### Key Templates
-| Template | Purpose |
-|----------|---------|
-| `base.html` | Base layout with Tailwind (shadcn/ui colors), nav, alerts |
-| `dashboard.html` | Stats overview |
-| `match_list.html` | Match table/cards (optimized rendering) |
-| `match_detail.html` | Full match view with games + Elo changes |
-| `match_form.html` | Create/edit match (singles/doubles toggle) |
-| `player_list.html` | Player listing |
-| `player_detail.html` | Player profile & stats (Elo, peak, history) |
-| `game_form.html` | Score entry |
-| `head_to_head.html` | Player comparison with charts (singles only) |
-| `leaderboard.html` | Rankings table (sorted by Elo) |
-| `calendar.html` | Calendar view with scheduled/past matches |
-| `scheduled_match_form.html` | Schedule a future match |
-| `scheduled_match_detail.html` | View scheduled match details |
-| `scheduled_match_convert.html` | Convert scheduled match to played match |
-| `team_list.html` | List all teams |
-| `team_detail.html` | Team stats and match history |
-| `team_form.html` | Edit team name |
-| `championship_list.html` | List championships |
-| `championship_detail.html` | Standings, results matrix, schedule, completed matches |
-| `championship_form.html` | Create/edit championship |
-| `scheduled_match_edit_form.html` | Edit scheduled match |
-
-## Environment Configuration
-
-### Development (`.env.dev`)
-- `DEBUG=True`, SQLite, Console email backend
-- `DJANGO_SETTINGS_MODULE=ttstats.settings.dev`
-- `REDIS_URL=redis://redis:6379/1` (Docker) or unset for LocMemCache fallback
-
-### Production (`.env.prod`)
-- `DEBUG=False`, PostgreSQL, Mailgun email, HTTPS, WhiteNoise
-- `DJANGO_SETTINGS_MODULE=ttstats.settings.prod`
-- `REDIS_URL=redis://:password@redis:6379/1`, `REDIS_PASSWORD=...`
-
-## Docker
-
-```bash
-# Development
-docker compose -f compose.dev.yml up --build       # http://localhost:8000
-
-# Production
-docker compose -f compose.prod.yml up --build -d   # Gunicorn (3 workers)
-```
-
-### Services
-Both compose files include: **web** (Django), **db** (PostgreSQL), **redis** (Redis 7 Alpine).
-- Dev Redis: no auth, port 6379 exposed
-- Prod Redis: password auth (`REDIS_PASSWORD` env var), no port exposed, `appendonly yes`
-
-### Entrypoint (`docker/django/entrypoint.sh`)
-1. Wait for database
-2. Run migrations
-3. Collect static files (prod)
-4. Start server
-
-## CI/CD Pipeline (`.github/workflows/main.yml`)
-
-### On Push/PR:
-1. Setup Python 3.12
-2. Install dependencies (cached)
-3. Run tests with coverage
-4. Post coverage report to PR comments
-5. Upload HTML coverage artifact
-
-### On Master Push (if tests pass):
-1. SSH to VPS
-2. Pull latest code
-3. Rebuild and restart containers
-
-## Dependencies (`requirements.txt`)
-
-**Core Framework:**
-```
-Django==6.0
-asgiref==3.11.0
-sqlparse==0.5.5
-```
-
-**Database & Production:**
-```
-psycopg2-binary  # PostgreSQL driver
-gunicorn         # WSGI server (production)
-whitenoise==6.11.0
-redis==5.0.1     # Redis client
-django-redis==5.4.0  # Django cache backend for Redis
-```
-
-**Authentication:**
-```
-django-otp==1.5.4
-django-otp-webauthn==0.3.0
-```
-
-**Testing:**
-```
-pytest==8.3.4
-pytest-django==4.9.0
-pytest-cov
-coverage==7.13.1
-factory-boy==3.3.1
-faker==33.3.1
-```
-
-## Key Files Quick Reference
-
-| Need to... | File |
-|------------|------|
-| Add a model | `pingpong/models.py` |
-| Add a view | `pingpong/views.py` |
-| Add a URL | `pingpong/urls.py` |
-| Add a form | `pingpong/forms.py` |
-| Add a template | `pingpong/templates/pingpong/` |
-| Add a signal | `pingpong/signals.py` |
-| Modify cache invalidation | `pingpong/cache_utils.py` |
-| Add email logic | `pingpong/emails.py` |
-| Modify security | `pingpong/managers.py` |
-| Add context vars | `pingpong/context_processors.py` |
-| Add admin config | `pingpong/admin.py` |
-| Modify Elo calculations | `pingpong/elo.py` |
-| Add management command | `pingpong/management/commands/` |
-| Add/update tests | `pingpong/tests/` (see Testing Strategy section) |
-| Add factories/fixtures | `pingpong/tests/conftest.py` |
-| Modify settings | `ttstats/settings/` |
-| Modify middleware | `ttstats/middleware.py` |
-
-## Migration Commands
-
-```bash
-cd ttstats
-python manage.py makemigrations pingpong    # Create migration
-python manage.py migrate                     # Apply migrations
-python manage.py showmigrations              # List migrations
-```
-
-Current migrations (22 total):
-1. `0001_initial` - Initial schema
-2. `0002-0005` - Location and best_of field adjustments
-3. `0006` - Match confirmation fields (old boolean approach)
-4. `0007` - UserProfile model
-5. `0008_teams` - **Major:** Introduced Team model
-6. `0009_match_winner_confirmations` - **Major:** Refactored confirmations to MatchConfirmation junction table
-7. `0010_cleanup_games` - **Major:** Renamed player scores to team scores in Game
-8. `0011` - MatchConfirmation constraints
-9. `0012` - ScheduledMatch model
-10. `0013_scheduledmatch_to_teams` - **Major:** Migrated ScheduledMatch to Teams
-11. `0014` - **Major:** Added Elo fields (elo_rating, elo_peak, matches_for_elo, EloHistory)
-12. `0015` - MatchConfirmation metadata cleanup
-13. `0016_scheduledmatch_match_link` - Added conversion tracking to ScheduledMatch
-14. `0017_championship` - **Major:** Added Championship model, championship FK to Match
-15. `0017_match_denormalized_cache_fields` - Added is_confirmed, team1_score_cache, team2_score_cache to Match
-16. `0018_add_round_number_to_scheduledmatch` - Added round_number to ScheduledMatch
-17. `0018_populate_match_cache_fields` - Data migration to populate denormalized fields
-18. `0019_merge` - Merge migration resolving parallel 0017/0018 branches
-
-## Management Commands
-
-### recalculate_elo
-**Purpose:** Recalculate all Elo ratings from scratch based on confirmed match history.
-
-**Usage:**
-```bash
-cd ttstats
-python manage.py recalculate_elo              # Recalculate and save
-python manage.py recalculate_elo --dry-run    # Preview changes without saving
-```
-
-**Process:**
-1. Resets all players to 1500 Elo, 0 matches_for_elo
-2. Deletes all EloHistory records
-3. Processes all confirmed matches in chronological order
-4. Applies same calculation logic as real-time updates
-5. Shows summary of rating changes
-
-**When to use:**
-- After fixing Elo calculation bugs
-- After data migrations that affect match history
-- To verify Elo consistency
-- Testing new K-factor or formula changes
-
-**File:** `pingpong/management/commands/recalculate_elo.py`
-
-### cache_control
-**Purpose:** Manage the Redis cache (clear, test connectivity, view stats).
-
-**Usage:**
-```bash
-cd ttstats
-python manage.py cache_control --test      # Test cache read/write
-python manage.py cache_control --clear     # Clear all cached data
-python manage.py cache_control --stats     # Show Redis memory/hit stats
-```
-
-**File:** `pingpong/management/commands/cache_control.py`
-
-### warm_cache
-**Purpose:** Pre-populate frequently accessed caches after deployment.
-
-**Usage:**
-```bash
-cd ttstats
-python manage.py warm_cache    # Warms dashboard_total_players, dashboard_total_matches, dashboard_recent_matches
-```
-
-**File:** `pingpong/management/commands/warm_cache.py`
-
-## Passkey Authentication
-
-Optional WebAuthn/FIDO2 passwordless login using django-otp + django-otp-webauthn.
-
-**Key URLs:** `/pingpong/passkeys/` (manage), `/pingpong/webauthn/register/` and `/pingpong/webauthn/authenticate/` (library views).
-
-**Key files:** `views.py` (PasskeyManagementView), `signals.py` (notify_passkey_registered), `emails.py` (send_passkey_registered/deleted_email), `templates/pingpong/passkey_management.html`, `templates/registration/login.html`.
-
-**Tests:** `test_passkey_views.py`, `test_passkey_integration.py`, `test_passkey_emails.py`, `test_passkey_admin.py`.
-
-### Known Gotchas
-1. **Use localhost, not 127.0.0.1** for dev — WebAuthn rejects IP addresses
-2. **HTTPS required in production**
-3. **Button IDs required:** `passkey-register-button`, `passkey-register-status-message`, `passkey-registration-placeholder`, `passkey-verification-button`, `passkey-verification-status-message`, `passkey-verification-placeholder`
-4. **Template structure:** Must include `<template id="...-available-template">` and `<template id="...-unavailable-template">` elements
-5. **Try/except import:** `PasskeyManagementView` handles missing `django_otp_webauthn` gracefully
-6. **Admin inline:** Staff can view/delete passkeys but cannot add them (security requirement)
+- **Dev:** `DEBUG=True`, SQLite, Console email, `DJANGO_SETTINGS_MODULE=ttstats.settings.dev`
+- **Prod:** `DEBUG=False`, PostgreSQL, Mailgun, HTTPS, WhiteNoise, `DJANGO_SETTINGS_MODULE=ttstats.settings.prod`
+- **Docker services:** web (Django), db (PostgreSQL), redis (Redis 7 Alpine)
+- **CI/CD** (`.github/workflows/main.yml`): On push/PR runs tests with coverage; on master push deploys via SSH to VPS
