@@ -146,6 +146,21 @@
         </div>
     </div>
 
+    <!-- Win Probability -->
+    {% if team1_win_pct is not None and not is_converted %}
+    <div class="rounded-lg border bg-white p-4 md:p-6">
+        <h3 class="text-sm font-medium text-muted-foreground mb-3">Win Probability</h3>
+        <div class="flex justify-between text-sm font-medium mb-1.5">
+            <span>{{ scheduled_match.team1 }} {{ team1_win_pct }}%</span>
+            <span>{{ team2_win_pct }}% {{ scheduled_match.team2 }}</span>
+        </div>
+        <div class="flex h-2.5 rounded-full overflow-hidden">
+            <div class="bg-primary transition-all" style="width: {{ team1_win_pct }}%"></div>
+            <div class="bg-destructive transition-all" style="width: {{ team2_win_pct }}%"></div>
+        </div>
+    </div>
+    {% endif %}
+
     <!-- Info Card -->
     {% if not is_converted %}
     <div class="rounded-lg border border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-950/30">

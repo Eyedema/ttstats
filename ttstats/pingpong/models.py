@@ -355,9 +355,11 @@ class Game(models.Model):
 
     duration_minutes = models.IntegerField(null=True, blank=True)
 
+    all_objects = models.Manager()
     objects = GameManager()
 
     class Meta:
+        default_manager_name = 'objects'
         ordering = ["game_number"]
         unique_together = ["match", "game_number"]
 
@@ -556,6 +558,52 @@ class EloHistory(models.Model):
     def __str__(self):
         sign = '+' if self.rating_change >= 0 else ''
         return f"{self.player} {sign}{self.rating_change} ({self.match})"
+
+
+class Achievement(models.Model):
+    """Definition of an achievement/badge that players can earn."""
+
+    class Tier(models.TextChoices):
+        NONE = 'none', 'None'
+        BRONZE = 'bronze', 'Bronze'
+        SILVER = 'silver', 'Silver'
+        GOLD = 'gold', 'Gold'
+
+    slug = models.SlugField(max_length=80, unique=True)
+    name = models.CharField(max_length=100)
+    description = models.CharField(max_length=255)
+    tier = models.CharField(max_length=10, choices=Tier.choices, default=Tier.NONE)
+    group = models.SlugField(max_length=60)
+    icon = models.CharField(max_length=60, default='award')
+    threshold = models.IntegerField(default=1)
+    sort_order = models.IntegerField(default=0)
+
+    class Meta:
+        ordering = ['group', 'sort_order']
+
+    def __str__(self):
+        if self.tier != self.Tier.NONE:
+            return f"{self.name} ({self.get_tier_display()})"
+        return self.name
+
+
+class PlayerAchievement(models.Model):
+    """Records when a player earned an achievement."""
+
+    player = models.ForeignKey(Player, on_delete=models.CASCADE, related_name='player_achievements')
+    achievement = models.ForeignKey(Achievement, on_delete=models.CASCADE, related_name='player_achievements')
+    match = models.ForeignKey(
+        'Match', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='achievements_awarded',
+    )
+    awarded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('player', 'achievement')
+        ordering = ['-awarded_at']
+
+    def __str__(self):
+        return f"{self.player} - {self.achievement}"
 
 
 class Championship(models.Model):

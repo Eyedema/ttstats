@@ -5,9 +5,9 @@ Unit tests for Elo rating calculation logic.
 import pytest
 from django.contrib.auth.models import User
 
-from ..elo import calculate_k_factor, calculate_expected_score, update_player_elo
+from ..elo import calculate_k_factor, calculate_expected_score, get_win_probability, update_player_elo
 from ..models import Player, Match, Game, EloHistory
-from .conftest import PlayerFactory, MatchFactory, GameFactory, UserFactory, confirm_match
+from .conftest import PlayerFactory, MatchFactory, GameFactory, TeamFactory, UserFactory, confirm_match, confirm_match_silent
 
 
 @pytest.mark.django_db
@@ -319,3 +319,71 @@ class TestEloUpdate:
         assert p1.elo_rating == elo_after_first
         # Only 2 history records (not 4)
         assert EloHistory.objects.filter(match=match).count() == 2
+
+
+@pytest.mark.django_db
+class TestGetWinProbability:
+    def test_equal_ratings_50_50(self):
+        p1 = PlayerFactory(elo_rating=1500)
+        p2 = PlayerFactory(elo_rating=1500)
+        t1 = TeamFactory(players=[p1])
+        t2 = TeamFactory(players=[p2])
+        pct1, pct2 = get_win_probability(t1, t2)
+        assert pct1 == 50
+        assert pct2 == 50
+
+    def test_higher_rated_favored(self):
+        p1 = PlayerFactory(elo_rating=1600)
+        p2 = PlayerFactory(elo_rating=1400)
+        t1 = TeamFactory(players=[p1])
+        t2 = TeamFactory(players=[p2])
+        pct1, pct2 = get_win_probability(t1, t2)
+        assert pct1 > 50
+        assert pct2 < 50
+        assert pct1 + pct2 == 100
+
+    def test_doubles_uses_team_average(self):
+        p1 = PlayerFactory(elo_rating=1600)
+        p2 = PlayerFactory(elo_rating=1400)  # avg = 1500
+        p3 = PlayerFactory(elo_rating=1500)
+        p4 = PlayerFactory(elo_rating=1500)  # avg = 1500
+        t1 = TeamFactory(players=[p1, p2])
+        t2 = TeamFactory(players=[p3, p4])
+        pct1, pct2 = get_win_probability(t1, t2)
+        assert pct1 == 50
+        assert pct2 == 50
+
+    def test_uses_pre_match_elo_when_history_exists(self):
+        p1 = PlayerFactory(elo_rating=1600)
+        p2 = PlayerFactory(elo_rating=1400)
+        t1 = TeamFactory(players=[p1])
+        t2 = TeamFactory(players=[p2])
+        m = MatchFactory(team1=t1, team2=t2)
+        GameFactory(match=m, game_number=1, team1_score=11, team2_score=5)
+        GameFactory(match=m, game_number=2, team1_score=11, team2_score=5)
+        GameFactory(match=m, game_number=3, team1_score=11, team2_score=5)
+        m.refresh_from_db()
+        confirm_match_silent(m)
+
+        # Clear auto-created history, create with known pre-match ratings
+        EloHistory.objects.filter(match=m).delete()
+        EloHistory.objects.create(
+            match=m, player=p1, old_rating=1500, new_rating=1600,
+            rating_change=100, k_factor=32,
+        )
+        EloHistory.objects.create(
+            match=m, player=p2, old_rating=1500, new_rating=1400,
+            rating_change=-100, k_factor=32,
+        )
+
+        # With match → uses old_rating (both 1500) → 50/50
+        pct1, pct2 = get_win_probability(t1, t2, match=m)
+        assert pct1 == 50
+        assert pct2 == 50
+
+    def test_empty_teams_return_50_50(self):
+        t1 = TeamFactory()
+        t2 = TeamFactory()
+        pct1, pct2 = get_win_probability(t1, t2)
+        assert pct1 == 50
+        assert pct2 == 50

@@ -61,6 +61,26 @@
             </div>
         </div>
         {% endif %}
+
+        <!-- Win Probability Prediction -->
+        {% if player1_win_pct is not None %}
+        <div class="rounded-lg border bg-white p-4 md:p-6">
+            <h3 class="text-sm font-medium text-muted-foreground mb-3">Predicted Outcome (Current Elo)</h3>
+            <div class="flex justify-between text-sm font-medium mb-1.5">
+                <span>{{ player1 }} {{ player1_win_pct }}%</span>
+                <span>{{ player2_win_pct }}% {{ player2 }}</span>
+            </div>
+            <div class="flex h-2.5 rounded-full overflow-hidden">
+                <div class="bg-primary transition-all" style="width: {{ player1_win_pct }}%"></div>
+                <div class="bg-destructive transition-all" style="width: {{ player2_win_pct }}%"></div>
+            </div>
+            <div class="flex justify-between text-xs text-muted-foreground mt-2">
+                <span>Elo {{ player1.elo_rating }}</span>
+                <span>Elo {{ player2.elo_rating }}</span>
+            </div>
+        </div>
+        {% endif %}
+
         {% if has_data %}
         <!-- Head to Head Header -->
         <div class="rounded-lg border bg-gradient-to-r from-primary to-primary/90 text-primary-foreground p-4 md:p-6">

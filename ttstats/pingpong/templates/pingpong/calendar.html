@@ -126,6 +126,18 @@
                     </div>
                     <span class="text-xs font-medium text-primary bg-primary/10 px-2 py-1 rounded">Scheduled</span>
                 </div>
+                {% if match.team1_win_pct is not None %}
+                <div class="mt-2">
+                    <div class="flex justify-between text-xs text-muted-foreground mb-1">
+                        <span>{{ match.team1_win_pct }}%</span>
+                        <span>{{ match.team2_win_pct }}%</span>
+                    </div>
+                    <div class="flex h-1.5 rounded-full overflow-hidden">
+                        <div class="bg-primary" style="width: {{ match.team1_win_pct }}%"></div>
+                        <div class="bg-destructive" style="width: {{ match.team2_win_pct }}%"></div>
+                    </div>
+                </div>
+                {% endif %}
             </div>
             {% endfor %}
         </div>

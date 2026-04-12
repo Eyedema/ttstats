@@ -252,6 +252,65 @@
     </div>
     {% endif %}
 
+    <!-- Achievements -->
+    {% if achievement_progress %}
+    <div class="rounded-lg border bg-white">
+        <div class="p-4 md:p-6 border-b">
+            <h3 class="text-lg md:text-xl font-semibold flex items-center gap-2">
+                <img src="{% static 'pingpong/icons/award.svg' %}" class="w-5 h-5" alt="">
+                Achievements
+            </h3>
+        </div>
+        <div class="p-4 md:p-6">
+            <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 md:gap-4">
+                {% for item in achievement_progress %}
+                <div class="rounded-lg border p-3 text-center transition-all
+                    {% if item.earned %}bg-white hover:shadow-md{% else %}bg-muted/30 opacity-60{% endif %}">
+                    <div class="w-12 h-12 mx-auto rounded-full flex items-center justify-center mb-2
+                        {% if item.earned %}
+                            {% if item.achievement.tier == 'gold' or item.achievement.tier == 'none' %}bg-yellow-100 ring-2 ring-yellow-400
+                            {% elif item.achievement.tier == 'silver' %}bg-gray-100 ring-2 ring-gray-400
+                            {% elif item.achievement.tier == 'bronze' %}bg-orange-100 ring-2 ring-orange-400
+                            {% endif %}
+                        {% elif item.earned_tier %}
+                            {% if item.earned_tier == 'gold' %}bg-yellow-50 ring-2 ring-yellow-300
+                            {% elif item.earned_tier == 'silver' %}bg-gray-50 ring-2 ring-gray-300
+                            {% elif item.earned_tier == 'bronze' %}bg-orange-50 ring-2 ring-orange-300
+                            {% endif %}
+                        {% else %}bg-muted
+                        {% endif %}">
+                        {% with "pingpong/icons/"|add:item.achievement.icon|add:".svg" as icon_path %}
+                        <img src="{% static icon_path %}" class="w-6 h-6 {% if not item.earned and not item.earned_tier %}opacity-40{% endif %}" alt="">
+                        {% endwith %}
+                    </div>
+                    <p class="text-sm font-medium">{{ item.achievement.name }}</p>
+                    {% if item.achievement.tier != 'none' %}
+                    <p class="text-xs text-muted-foreground capitalize">{{ item.achievement.get_tier_display }}</p>
+                    {% endif %}
+                    <p class="text-xs text-muted-foreground mt-1">{{ item.achievement.description }}</p>
+                    {% if item.threshold > 1 %}
+                    <div class="mt-2">
+                        <div class="w-full bg-secondary rounded-full h-1.5">
+                            {% if item.progress >= item.threshold %}
+                            <div class="bg-success h-1.5 rounded-full transition-all" style="width: 100%"></div>
+                            {% else %}
+                            <div class="bg-primary h-1.5 rounded-full transition-all"
+                                 style="width: {% widthratio item.progress item.threshold 100 %}%"></div>
+                            {% endif %}
+                        </div>
+                        <p class="text-[10px] text-muted-foreground mt-1">{{ item.progress }}/{{ item.threshold }}</p>
+                    </div>
+                    {% endif %}
+                    {% if item.earned %}
+                    <p class="text-[10px] text-success mt-1">Earned {{ item.awarded_at|date:"M d, Y" }}</p>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
     <!-- Match History -->
     <div class="rounded-lg border bg-white">
         <div class="p-4 md:p-6 border-b">

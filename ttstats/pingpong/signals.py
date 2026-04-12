@@ -3,6 +3,7 @@ from django.db.models.signals import post_save, pre_save, post_delete
 from django.dispatch import receiver
 from django_otp_webauthn.models import WebAuthnCredential
 
+from .achievements import check_achievements_for_player
 from .cache_utils import invalidate_match_caches, invalidate_player_caches
 from .emails import send_match_confirmation_email, send_passkey_registered_email
 from .models import Game, Match, MatchConfirmation, Player, UserProfile
@@ -75,6 +76,12 @@ def handle_match_completion(sender, instance, created, **kwargs):
     # 4. Update Elo ratings (only runs if confirmed)
     update_player_elo(instance)
 
+    # 5. Check achievements (after Elo is updated)
+    if instance.is_confirmed and instance.winner:
+        all_players = list(instance.team1.players.all()) + list(instance.team2.players.all())
+        for p in all_players:
+            check_achievements_for_player(p, instance)
+
     # Invalidate caches
     invalidate_match_caches(instance)
 
@@ -110,6 +117,12 @@ def update_elo_on_match_confirmation(sender, instance, created, **kwargs):
 
         # Try to update Elo for the match (has guards inside, safe to call anytime)
         update_player_elo(match)
+
+        # Check achievements (after Elo is updated)
+        if match.is_confirmed and match.winner:
+            all_players = list(match.team1.players.all()) + list(match.team2.players.all())
+            for p in all_players:
+                check_achievements_for_player(p, match)
 
         # Invalidate caches
         invalidate_match_caches(match)
