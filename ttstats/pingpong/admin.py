@@ -11,6 +11,7 @@ from django_otp_webauthn.models import WebAuthnCredential
 
 from .emails import send_verification_email
 from .models import (
+    Achievement,
     Championship,
     EloHistory,
     Game,
@@ -18,6 +19,7 @@ from .models import (
     Match,
     MatchConfirmation,
     Player,
+    PlayerAchievement,
     ScheduledMatch,
     Team,
     UserProfile,
@@ -1000,3 +1002,18 @@ class EloHistoryAdmin(admin.ModelAdmin):
 
         # Fallback if accessed via GET (optional)
         return HttpResponseRedirect("../")
+
+
+@admin.register(Achievement)
+class AchievementAdmin(admin.ModelAdmin):
+    list_display = ('name', 'tier', 'group', 'threshold', 'slug')
+    list_filter = ('tier', 'group')
+    search_fields = ('name', 'slug')
+
+
+@admin.register(PlayerAchievement)
+class PlayerAchievementAdmin(admin.ModelAdmin):
+    list_display = ('player', 'achievement', 'awarded_at')
+    list_filter = ('achievement__group', 'achievement__tier')
+    search_fields = ('player__name', 'achievement__name')
+    raw_id_fields = ('player', 'match')

@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 from .forms import GameForm, MatchEditForm, MatchForm, PlayerRegistrationForm, ScheduledMatchForm, MatchConvertForm, \
     ChampionshipCreateForm, ChampionshipEditForm, ScheduledMatchEditForm
+from .achievements import get_achievement_progress
 from .models import Game, Location, Match, Player, UserProfile, MatchConfirmation, ScheduledMatch, Team, Championship, EloHistory
 from .emails import send_scheduled_match_email, send_passkey_deleted_email
 
@@ -280,12 +281,16 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
             cached_stats['elo_chart_data'] = elo_data
             cache.set(stats_cache_key, cached_stats, 600)
 
+        # Achievement data
+        achievement_progress = get_achievement_progress(player)
+
         context.update({
             'matches': confirmed_matches_page.object_list,
             'page_obj': confirmed_matches_page,
             'is_paginated': paginator.num_pages > 1,
             'elo_chart_labels': elo_labels,
             'elo_chart_data': elo_data,
+            'achievement_progress': achievement_progress,
             **cached_stats,
         })
 
