@@ -116,6 +116,33 @@
         </div>
     </div>
 
+    <!-- Win Probability -->
+    {% if team1_win_pct is not None %}
+    <div class="rounded-lg border bg-white p-4">
+        <div class="flex items-center justify-between mb-2">
+            <span class="text-xs font-medium text-muted-foreground">
+                {% if match.winner %}Pre-Match Prediction{% else %}Win Probability{% endif %}
+            </span>
+            {% if match.winner %}
+                {% if team1_win_pct > team2_win_pct and match.winner == match.team2 or team2_win_pct > team1_win_pct and match.winner == match.team1 %}
+                <span class="inline-flex items-center rounded-md bg-destructive/10 px-2 py-0.5 text-xs font-medium text-destructive">Upset!</span>
+                {% elif team1_win_pct == team2_win_pct %}
+                {% else %}
+                <span class="inline-flex items-center rounded-md bg-success/10 px-2 py-0.5 text-xs font-medium text-success">Expected</span>
+                {% endif %}
+            {% endif %}
+        </div>
+        <div class="flex justify-between text-sm font-medium mb-1.5">
+            <span>{{ match.team1 }} {{ team1_win_pct }}%</span>
+            <span>{{ team2_win_pct }}% {{ match.team2 }}</span>
+        </div>
+        <div class="flex h-2.5 rounded-full overflow-hidden">
+            <div class="bg-primary transition-all" style="width: {{ team1_win_pct }}%"></div>
+            <div class="bg-destructive transition-all" style="width: {{ team2_win_pct }}%"></div>
+        </div>
+    </div>
+    {% endif %}
+
     <!-- Score Card -->
     <div class="grid grid-cols-1 gap-4">
         <!-- Desktop Layout -->

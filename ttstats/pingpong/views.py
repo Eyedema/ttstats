@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 from .forms import GameForm, MatchEditForm, MatchForm, PlayerRegistrationForm, ScheduledMatchForm, MatchConvertForm, \
     ChampionshipCreateForm, ChampionshipEditForm, ScheduledMatchEditForm
 from .achievements import get_achievement_progress
+from .elo import calculate_expected_score, get_win_probability
 from .models import Game, Location, Match, Player, UserProfile, MatchConfirmation, ScheduledMatch, Team, Championship, EloHistory
 from .emails import send_scheduled_match_email, send_passkey_deleted_email
 
@@ -176,6 +177,11 @@ class MatchDetailView(LoginRequiredMixin, DetailView):
                 context['player1_elo_change'] = change
             elif change.player in match.team2.players.all():
                 context['player2_elo_change'] = change
+
+        # Win probability (uses pre-match Elo if EloHistory exists)
+        t1_pct, t2_pct = get_win_probability(match.team1, match.team2, match=match)
+        context['team1_win_pct'] = t1_pct
+        context['team2_win_pct'] = t2_pct
 
         return context
 
@@ -1118,15 +1124,23 @@ class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
                     "matches": list(reversed(matches)),
                 }
 
+                # Win probability based on current Elo
+                p1_pct = round(calculate_expected_score(player1.elo_rating, player2.elo_rating) * 100)
+                h2h_data["player1_win_pct"] = p1_pct
+                h2h_data["player2_win_pct"] = 100 - p1_pct
+
                 # Cache for 30 minutes
                 cache.set(h2h_cache_key, h2h_data, 1800)
                 context.update(h2h_data)
             else:
+                p1_pct = round(calculate_expected_score(player1.elo_rating, player2.elo_rating) * 100)
                 h2h_data = {
                     "player1": player1,
                     "player2": player2,
                     "has_data": False,
                     "has_2v2_matches": has_2v2_matches,
+                    "player1_win_pct": p1_pct,
+                    "player2_win_pct": 100 - p1_pct,
                 }
                 cache.set(h2h_cache_key, h2h_data, 1800)
                 context.update(h2h_data)
@@ -1536,7 +1550,15 @@ class CalendarView(LoginRequiredMixin, TemplateView):
         # Get upcoming scheduled matches (all future)
         upcoming_matches = ScheduledMatch.objects.filter(
             scheduled_date__gte=today
+        ).select_related('team1', 'team2').prefetch_related(
+            'team1__players', 'team2__players',
         ).order_by("scheduled_date", "scheduled_time")[:5]
+
+        # Attach win probability to upcoming matches
+        for sm in upcoming_matches:
+            t1_pct, t2_pct = get_win_probability(sm.team1, sm.team2)
+            sm.team1_win_pct = t1_pct
+            sm.team2_win_pct = t2_pct
 
         context.update(
             {
@@ -1587,6 +1609,11 @@ class ScheduledMatchDetailView(LoginRequiredMixin, DetailView):
         # Check if user can convert (participant or staff)
         can_convert = scheduled_match.user_can_view(user)
         context['can_convert'] = can_convert
+
+        # Win probability
+        t1_pct, t2_pct = get_win_probability(scheduled_match.team1, scheduled_match.team2)
+        context['team1_win_pct'] = t1_pct
+        context['team2_win_pct'] = t2_pct
 
         return context
 

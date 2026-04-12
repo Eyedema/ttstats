@@ -51,6 +51,44 @@ def calculate_elo_change(r1, r2, actual_score, k_factor):
     expected = calculate_expected_score(r1, r2)
     return round(k_factor * (actual_score - expected))
 
+
+def get_win_probability(team1, team2, match=None):
+    """Return (team1_pct, team2_pct) as integer percentages.
+
+    If match is provided and has EloHistory records, uses pre-match ratings
+    so the prediction reflects what was expected before the match was played.
+    Otherwise uses current player ratings.
+    """
+    from .models import EloHistory
+
+    team1_players = list(team1.players.all())
+    team2_players = list(team2.players.all())
+
+    if not team1_players or not team2_players:
+        return (50, 50)
+
+    # Try to use pre-match ratings from EloHistory
+    if match:
+        elo_map = {
+            eh.player_id: eh.old_rating
+            for eh in EloHistory.objects.filter(match=match)
+        }
+        if elo_map:
+            r1 = sum(elo_map.get(p.pk, p.elo_rating) for p in team1_players) / len(team1_players)
+            r2 = sum(elo_map.get(p.pk, p.elo_rating) for p in team2_players) / len(team2_players)
+        else:
+            r1 = sum(p.elo_rating for p in team1_players) / len(team1_players)
+            r2 = sum(p.elo_rating for p in team2_players) / len(team2_players)
+    else:
+        r1 = sum(p.elo_rating for p in team1_players) / len(team1_players)
+        r2 = sum(p.elo_rating for p in team2_players) / len(team2_players)
+
+    prob = calculate_expected_score(r1, r2)
+    t1_pct = round(prob * 100)
+    t2_pct = 100 - t1_pct
+    return (t1_pct, t2_pct)
+
+
 def update_player_elo(match):
     """
     Calculate and update Elo ratings after match completion.
