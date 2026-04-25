@@ -9,6 +9,7 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.auth.views import LoginView
 from django.core.cache import cache
+from django.core.exceptions import PermissionDenied
 from django.core.mail import send_mail
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db.models import Count, F, Q, Sum
@@ -416,6 +417,9 @@ class GameCreateView(LoginRequiredMixin, CreateView):
     def dispatch(self, request, *args, **kwargs):
         self.match = get_object_or_404(Match, pk=kwargs["match_pk"])
 
+        if request.user.is_authenticated and not self.match.user_can_edit(request.user):
+            raise PermissionDenied
+
         # Check if match is already complete
         if self.match.winner:
             messages.warning(
@@ -671,6 +675,12 @@ class MatchUpdateView(LoginRequiredMixin, UpdateView):
 
     model = Match
     template_name = "pingpong/match_form.html"
+
+    def get_object(self, queryset=None):
+        obj = super().get_object(queryset)
+        if not obj.user_can_edit(self.request.user):
+            raise PermissionDenied
+        return obj
 
     def get_form_class(self):
         # If match has a winner, only allow editing location and notes

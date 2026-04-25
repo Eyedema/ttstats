@@ -349,6 +349,49 @@ class TestMatchUpdateView:
         assert resp.status_code == 200
         assert resp.context.get("is_complete") is True
 
+    def test_non_participant_cannot_edit(self):
+        """A user who isn't in either team must not be able to edit the match."""
+        p1 = PlayerFactory(with_user=True)
+        p2 = PlayerFactory(with_user=True)
+        m = MatchFactory(player1=p1, player2=p2)
+
+        outsider, _ = _verified_user_with_player()
+        c = _login_client(outsider)
+        resp = c.get(reverse("pingpong:match_edit", args=[m.pk]))
+        # Manager filtering hides the match from the outsider entirely.
+        assert resp.status_code == 404
+
+        resp = c.post(
+            reverse("pingpong:match_edit", args=[m.pk]),
+            {"date_played": "2026-01-01T12:00", "best_of": 3, "notes": "tampered"},
+        )
+        assert resp.status_code == 404
+        m.refresh_from_db()
+        assert "tampered" not in (m.notes or "")
+
+    def test_championship_spectator_cannot_edit_other_match(self):
+        """Championship participants must not be able to edit matches between *other* players in the same championship."""
+        from .conftest import ChampionshipFactory, TeamFactory
+
+        spectator, sp_player = _verified_user_with_player()
+        p1 = PlayerFactory(with_user=True)
+        p2 = PlayerFactory(with_user=True)
+
+        sp_team = TeamFactory(players=[sp_player])
+        t1 = TeamFactory(players=[p1])
+        t2 = TeamFactory(players=[p2])
+
+        champ = ChampionshipFactory(with_participants=[sp_team, t1, t2])
+        m = MatchFactory(player1=p1, player2=p2)
+        m.championship = champ
+        m.save()
+
+        c = _login_client(spectator)
+        resp = c.get(reverse("pingpong:match_edit", args=[m.pk]))
+        # Manager grants visibility (championship participant), but ownership
+        # check on the view should reject the edit.
+        assert resp.status_code == 403
+
 
 # ===========================================================================
 # GameCreateView
@@ -421,6 +464,32 @@ class TestGameCreateView:
         # Winner is now a Team, and p is in team1
         assert m.winner == m.team1
         assert p in m.winner.players.all()
+
+    def test_championship_spectator_cannot_add_game_to_other_match(self):
+        """Championship spectators must not add games to matches between other players."""
+        from .conftest import ChampionshipFactory, TeamFactory
+
+        spectator, sp_player = _verified_user_with_player()
+        p1 = PlayerFactory(with_user=True)
+        p2 = PlayerFactory(with_user=True)
+
+        sp_team = TeamFactory(players=[sp_player])
+        t1 = TeamFactory(players=[p1])
+        t2 = TeamFactory(players=[p2])
+
+        champ = ChampionshipFactory(with_participants=[sp_team, t1, t2])
+        m = MatchFactory(player1=p1, player2=p2)
+        m.championship = champ
+        m.save()
+
+        c = _login_client(spectator)
+        resp = c.post(reverse("pingpong:game_add", args=[m.pk]), {
+            "game_number": 1,
+            "team1_score": 11,
+            "team2_score": 5,
+        })
+        assert resp.status_code == 403
+        assert m.games.count() == 0
 
 
 # ===========================================================================
