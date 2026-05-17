@@ -1,0 +1,197 @@
+{% extends "pingpong/base.html" %}
+{% load static %}
+
+{% block title %}Live Scoreboard{% endblock %}
+
+{% block content %}
+{% csrf_token %}
+{{ bootstrap|json_script:"scoreboard-bootstrap" }}
+<div
+  id="scoreboard"
+  class="fixed inset-0 z-50 bg-background text-foreground select-none"
+  x-data="scoreboardApp()"
+  x-init="init()"
+  data-point-url="{{ point_url }}"
+  data-start-url="{{ start_url }}"
+  data-state-url="{{ state_url }}"
+  data-undo-url="{{ undo_url }}"
+  data-side-switch-url="{{ side_switch_url }}"
+  data-match-detail-url="{% url 'pingpong:match_detail' match.pk %}"
+  data-team1-label="{{ team1_label }}"
+  data-team2-label="{{ team2_label }}"
+>
+  <!-- Initial server picker (shown until live_state.started) -->
+  <div
+    x-show="!state.started"
+    x-cloak
+    class="absolute inset-0 flex flex-col items-center justify-center gap-6 p-8 bg-background"
+  >
+    <h1 class="text-3xl font-bold">Who's serving first?</h1>
+    <div class="flex gap-6">
+      <button
+        @click="startMatch('team1')"
+        class="px-10 py-6 rounded-2xl bg-primary text-primary-foreground text-2xl font-semibold"
+      >{{ team1_label }}</button>
+      <button
+        @click="startMatch('team2')"
+        class="px-10 py-6 rounded-2xl bg-primary text-primary-foreground text-2xl font-semibold"
+      >{{ team2_label }}</button>
+    </div>
+    <a href="{% url 'pingpong:dashboard' %}" class="text-sm text-muted-foreground underline">Cancel</a>
+  </div>
+
+  <!-- Active scoreboard (two tap zones) -->
+  <div
+    x-show="state.started"
+    x-cloak
+    class="grid grid-cols-2 h-full w-full"
+    :class="{ 'flex-row-reverse': state.side_switched }"
+  >
+    <!-- Team 1 tap zone -->
+    <button
+      type="button"
+      @click="addPoint('team1')"
+      :disabled="busy"
+      class="relative flex flex-col items-center justify-center bg-blue-600 text-white text-center"
+      :class="{ 'order-2': state.side_switched }"
+    >
+      <div class="absolute top-4 left-4 text-2xl font-semibold flex items-center gap-2">
+        <span x-show="currentServer === 'team1'" class="inline-block h-3 w-3 rounded-full bg-yellow-300 animate-pulse"></span>
+        <span>{{ team1_label }}</span>
+      </div>
+      <div class="absolute top-4 right-4 text-2xl font-semibold opacity-80" x-text="state.team1_games"></div>
+      <div class="text-[18rem] leading-none font-bold tabular-nums" x-text="state.team1_points"></div>
+    </button>
+
+    <!-- Team 2 tap zone -->
+    <button
+      type="button"
+      @click="addPoint('team2')"
+      :disabled="busy"
+      class="relative flex flex-col items-center justify-center bg-red-600 text-white text-center"
+      :class="{ 'order-1': state.side_switched }"
+    >
+      <div class="absolute top-4 left-4 text-2xl font-semibold flex items-center gap-2">
+        <span x-show="currentServer === 'team2'" class="inline-block h-3 w-3 rounded-full bg-yellow-300 animate-pulse"></span>
+        <span>{{ team2_label }}</span>
+      </div>
+      <div class="absolute top-4 right-4 text-2xl font-semibold opacity-80" x-text="state.team2_games"></div>
+      <div class="text-[18rem] leading-none font-bold tabular-nums" x-text="state.team2_points"></div>
+    </button>
+  </div>
+
+  <!-- Bottom controls -->
+  <div
+    x-show="state.started"
+    x-cloak
+    class="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-3 bg-card/95 backdrop-blur rounded-full px-5 py-2 shadow-lg"
+  >
+    <button @click="undo()" :disabled="busy" class="px-4 py-2 text-sm font-medium rounded-full bg-secondary text-secondary-foreground">Undo</button>
+    <span class="text-sm text-muted-foreground">Game <span x-text="state.current_game_number"></span> / {{ match.best_of }}</span>
+    <a href="{% url 'pingpong:dashboard' %}" class="text-sm underline">Exit</a>
+  </div>
+
+  <!-- Side-switch prompt (KAN-9) -->
+  <div
+    x-show="shouldPromptSideSwitch"
+    x-cloak
+    class="absolute inset-0 flex items-center justify-center bg-black/60 z-10"
+  >
+    <div class="bg-card text-card-foreground rounded-2xl p-8 shadow-xl text-center max-w-sm">
+      <h2 class="text-2xl font-bold mb-3">Switch sides</h2>
+      <p class="mb-6 text-muted-foreground">Deciding game has reached 5 — change ends before the next point.</p>
+      <button @click="confirmSideSwitch()" class="px-6 py-3 rounded-xl bg-primary text-primary-foreground font-semibold">Done</button>
+    </div>
+  </div>
+</div>
+
+<style>
+  [x-cloak] { display: none !important; }
+</style>
+
+<script>
+function scoreboardApp() {
+  return {
+    state: {},
+    currentServer: null,
+    shouldPromptSideSwitch: false,
+    busy: false,
+    wakeLock: null,
+    csrfToken: '',
+
+    init() {
+      const bootstrap = JSON.parse(document.getElementById('scoreboard-bootstrap').textContent);
+      this.applyPayload(bootstrap);
+      const csrfInput = document.querySelector('input[name=csrfmiddlewaretoken]');
+      this.csrfToken = csrfInput ? csrfInput.value : '';
+      this.acquireWakeLock();
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') this.acquireWakeLock();
+      });
+    },
+
+    async acquireWakeLock() {
+      if (!('wakeLock' in navigator)) return;
+      try {
+        this.wakeLock = await navigator.wakeLock.request('screen');
+      } catch (err) {
+        // user-denied or device unsupported — no-op
+      }
+    },
+
+    applyPayload(p) {
+      this.state = p.state || {};
+      this.currentServer = p.current_server;
+      this.shouldPromptSideSwitch = p.should_prompt_side_switch;
+      // localStorage mirror for offline resilience (KAN-11)
+      try {
+        localStorage.setItem('live_match_' + {{ match.pk }}, JSON.stringify(p));
+      } catch (_) {}
+      if (p.redirect_url) {
+        window.location.href = p.redirect_url;
+      }
+    },
+
+    async postJSON(url, body) {
+      this.busy = true;
+      try {
+        const resp = await fetch(url, {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': this.csrfToken,
+          },
+          body: JSON.stringify(body || {}),
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+          alert(data.error || 'Request failed');
+          return;
+        }
+        this.applyPayload(data);
+      } finally {
+        this.busy = false;
+      }
+    },
+
+    async startMatch(server) {
+      await this.postJSON(this.$root.dataset.startUrl, { initial_server: server });
+    },
+
+    async addPoint(side) {
+      if (this.shouldPromptSideSwitch) return; // block until acknowledged
+      await this.postJSON(this.$root.dataset.pointUrl, { side });
+    },
+
+    async confirmSideSwitch() {
+      await this.postJSON(this.$root.dataset.sideSwitchUrl, {});
+    },
+
+    async undo() {
+      await this.postJSON(this.$root.dataset.undoUrl, {});
+    },
+  };
+}
+</script>
+{% endblock %}

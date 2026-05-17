@@ -6,7 +6,7 @@ from django.contrib.auth.models import User
 from django.db import models
 from django.utils import timezone
 
-from .managers import ChampionshipManager, GameManager, MatchManager, PlayerManager, ScheduledMatchManager
+from .managers import ChampionshipManager, GameManager, LiveMatchManager, MatchManager, PlayerManager, ScheduledMatchManager
 
 # Email verification token expires after 24 hours
 VERIFICATION_TOKEN_EXPIRY = timedelta(hours=24)
@@ -166,8 +166,21 @@ class Match(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    # Live scoreboard mode (in-match scoring)
+    is_live = models.BooleanField(default=False, db_index=True)
+    live_state = models.JSONField(null=True, blank=True)
+    scorekeeper = models.ForeignKey(
+        Player,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="live_matches",
+        help_text="Player driving the live scoreboard for this match",
+    )
+
     all_objects = models.Manager()
     objects = MatchManager()
+    live_objects = LiveMatchManager()
 
     def user_can_edit(self, user):
         """Check if user can edit this match"""
@@ -311,10 +324,15 @@ class Match(models.Model):
         )
 
     def save(self, *args, **kwargs):
-        # Auto-determine winner based on games
-        if self.pk:  # Only if match already exists
-            t1_wins = self.games.filter(winner=self.team1).count()  # type: ignore
-            t2_wins = self.games.filter(winner=self.team2).count()  # type: ignore
+        # Auto-determine winner based on games. Use Game.all_objects so the
+        # GameManager's user/is_live filters don't hide our own children.
+        # Live matches skip winner detection entirely — the scoreboard
+        # endpoint flips is_live=False at match-end, then this save() picks
+        # up the winner and the normal signal pipeline runs.
+        if self.pk and not self.is_live:
+            games_qs = Game.all_objects.filter(match_id=self.pk)
+            t1_wins = games_qs.filter(winner=self.team1).count()
+            t2_wins = games_qs.filter(winner=self.team2).count()
             games_to_win = (self.best_of // 2) + 1
 
             # Update score cache
