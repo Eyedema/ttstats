@@ -7,13 +7,18 @@ class MatchManager(models.Manager):
     - Staff users: See all matches
     - Regular users: See only matches they participated in
     - Anonymous users: See no matches
+
+    Live matches (is_live=True) are excluded from every default query so they
+    stay invisible to leaderboards, Elo, head-to-head, championships, etc.
+    until the scorekeeper finishes them. Use ``Match.live_objects`` (or
+    ``Match.all_objects``) to query live matches directly.
     """
 
     def get_queryset(self):
         """Automatically filter matches based on current user"""
         from ttstats.middleware import get_current_user
 
-        qs = super().get_queryset()
+        qs = super().get_queryset().filter(is_live=False)
         user = get_current_user()
 
         # No user in context (e.g., management commands)
@@ -46,6 +51,18 @@ class MatchManager(models.Manager):
             return qs.none()
 
 
+class LiveMatchManager(models.Manager):
+    """Queryset over in-progress live matches only.
+
+    Bypasses the row-level user filter so a scorekeeper can always look up
+    their own live match by pk — view layer is responsible for the
+    scorekeeper check.
+    """
+
+    def get_queryset(self):
+        return super().get_queryset().filter(is_live=True)
+
+
 class PlayerManager(models.Manager):
     """    
     - Staff users: See all players
@@ -76,24 +93,26 @@ class PlayerManager(models.Manager):
 class GameManager(models.Manager):
     """
     Games are visible if their parent match is visible.
+    Games of live matches are hidden until the match completes — same
+    rationale as MatchManager.
     """
-    
+
     def get_queryset(self):
         """Filter games based on match visibility"""
         from ttstats.middleware import get_current_user
-        
-        qs = super().get_queryset()
+
+        qs = super().get_queryset().filter(match__is_live=False)
         user = get_current_user()
-        
+
         if not user:
             return qs
-        
+
         if not user.is_authenticated:
             return qs.none()
-        
+
         if user.is_staff or user.is_superuser:
             return qs
-        
+
         # Filter to games from matches user can see
         try:
             user_player = user.player

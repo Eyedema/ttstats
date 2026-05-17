@@ -9,10 +9,14 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.auth.views import LoginView
 from django.core.cache import cache
+from django.core.exceptions import PermissionDenied
 from django.core.mail import send_mail
 from django.core.serializers.json import DjangoJSONEncoder
+from django.db import transaction
 from django.db.models import Count, F, Q, Sum
-from django.http import HttpResponse
+from django.http import HttpResponse, JsonResponse
+from django.urls import reverse
+from django.views.decorators.http import require_POST
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse_lazy
 from django.utils.decorators import method_decorator
@@ -363,11 +367,45 @@ class DashboardView(LoginRequiredMixin, TemplateView):
             recent_matches = list(Match.objects.all().order_by("-date_played")[:5])
             cache.set('dashboard_recent_matches', recent_matches, 300)
 
+        # Live matches I'm scorekeeping right now (KAN-11). Not cached —
+        # this needs to stay fresh as the user scores points.
+        live_matches = []
+        try:
+            user_player = self.request.user.player
+            live_qs = Match.live_objects.filter(
+                scorekeeper=user_player, is_live=True
+            ).select_related("team1", "team2").prefetch_related(
+                "team1__players", "team2__players"
+            )
+            for m in live_qs:
+                state = m.live_state or {}
+                live_matches.append({
+                    "pk": m.pk,
+                    "opponent": " & ".join(
+                        p.name for p in m.team2.players.all()
+                    ),
+                    "team1_label": " & ".join(
+                        p.name for p in m.team1.players.all()
+                    ),
+                    "team1_games": state.get("team1_games", 0),
+                    "team2_games": state.get("team2_games", 0),
+                    "team1_points": state.get("team1_points", 0),
+                    "team2_points": state.get("team2_points", 0),
+                    "last_point_at": state.get("last_point_at"),
+                    "best_of": m.best_of,
+                    "resume_url": reverse(
+                        "pingpong:live_scoreboard", args=[m.pk]
+                    ),
+                })
+        except (AttributeError, Player.DoesNotExist):
+            pass
+
         context.update(
             {
                 "total_players": total_players,
                 "total_matches": total_matches,
                 "recent_matches": recent_matches,
+                "live_matches": live_matches,
             }
         )
 
@@ -415,6 +453,9 @@ class GameCreateView(LoginRequiredMixin, CreateView):
 
     def dispatch(self, request, *args, **kwargs):
         self.match = get_object_or_404(Match, pk=kwargs["match_pk"])
+
+        if request.user.is_authenticated and not self.match.user_can_edit(request.user):
+            raise PermissionDenied
 
         # Check if match is already complete
         if self.match.winner:
@@ -488,7 +529,10 @@ class MatchCreateView(LoginRequiredMixin, CreateView):
     template_name = "pingpong/match_form.html"
 
     def get_success_url(self):
-        # Redirect to match detail page after creating
+        # "Score live" branch on form_valid sets self._start_live and creates
+        # the match with is_live=True — jump straight into the scoreboard.
+        if getattr(self, "_start_live", False):
+            return reverse_lazy("pingpong:live_scoreboard", kwargs={"pk": self.object.pk})
         return reverse_lazy("pingpong:match_detail", kwargs={"pk": self.object.pk})
 
     def get_context_data(self, **kwargs):
@@ -662,7 +706,21 @@ class MatchCreateView(LoginRequiredMixin, CreateView):
         form.instance.team2 = team2
         form.instance.is_double = is_double
 
-        messages.success(self.request, "Match created successfully!")
+        # "Score live" branch — KAN-7. Doubles deferred (KAN-13).
+        self._start_live = bool(self.request.POST.get("start_live")) and not is_double
+        if self._start_live:
+            try:
+                user_player = user.player
+            except (AttributeError, Player.DoesNotExist):
+                messages.error(self.request, "You need a player profile to score live.")
+                return self.form_invalid(form)
+            form.instance.is_live = True
+            form.instance.scorekeeper = user_player
+            form.instance.live_state = live_scoring.initial_state(form.instance.best_of)
+            messages.success(self.request, "Live match started — tap a side to score.")
+        else:
+            messages.success(self.request, "Match created successfully!")
+
         return super().form_valid(form)
 
 
@@ -671,6 +729,12 @@ class MatchUpdateView(LoginRequiredMixin, UpdateView):
 
     model = Match
     template_name = "pingpong/match_form.html"
+
+    def get_object(self, queryset=None):
+        obj = super().get_object(queryset)
+        if not obj.user_can_edit(self.request.user):
+            raise PermissionDenied
+        return obj
 
     def get_form_class(self):
         # If match has a winner, only allow editing location and notes
@@ -2469,3 +2533,249 @@ class ScheduledMatchEditView(LoginRequiredMixin, UpdateView):
     def form_valid(self, form):
         messages.success(self.request, "Scheduled match updated successfully.")
         return super().form_valid(form)
+
+
+# ---------------------------------------------------------------------------
+# Live Scoreboard (KAN-4)
+# ---------------------------------------------------------------------------
+
+from . import live_scoring  # noqa: E402  (kept local to the section it serves)
+
+
+def _get_live_match_for_scorekeeper(request, pk):
+    """Load a live match, enforcing scorekeeper-only access.
+
+    Returns the Match instance. Raises PermissionDenied or Http404 on miss.
+    Uses ``all_objects`` so the default manager's is_live=False filter
+    doesn't hide our target.
+    """
+    match = get_object_or_404(Match.all_objects, pk=pk)
+    try:
+        user_player = request.user.player
+    except (AttributeError, Player.DoesNotExist):
+        raise PermissionDenied("You must have a player profile.")
+
+    if match.scorekeeper_id != user_player.pk and not request.user.is_staff:
+        raise PermissionDenied("Only the match scorekeeper can use the scoreboard.")
+    return match
+
+
+def _scoreboard_payload(match: Match, *, redirect_url: str | None = None) -> dict:
+    """JSON-friendly payload for the scoreboard client."""
+    state = match.live_state or {}
+    return {
+        "is_live": match.is_live,
+        "is_match_complete": not match.is_live and match.live_state is None,
+        "state": state,
+        "current_server": live_scoring.current_server(state) if state.get("started") else None,
+        "should_prompt_side_switch": (
+            live_scoring.should_prompt_side_switch(state) if state.get("started") else False
+        ),
+        "redirect_url": redirect_url,
+    }
+
+
+class LiveScoreboardView(LoginRequiredMixin, View):
+    """Render the scoreboard page (KAN-27 fills in the template)."""
+
+    template_name = "pingpong/scoreboard.html"
+
+    def get(self, request, pk):
+        match = _get_live_match_for_scorekeeper(request, pk)
+        if not match.is_live:
+            messages.info(request, "This match is no longer live.")
+            return redirect("pingpong:match_detail", pk=pk)
+
+        team1_players = list(match.team1.players.all())
+        team2_players = list(match.team2.players.all())
+
+        context = {
+            "match": match,
+            "team1_label": " & ".join(p.name for p in team1_players),
+            "team2_label": " & ".join(p.name for p in team2_players),
+            "bootstrap": _scoreboard_payload(match),
+            "point_url": reverse("pingpong:live_point", args=[pk]),
+            "start_url": reverse("pingpong:live_start", args=[pk]),
+            "state_url": reverse("pingpong:live_state", args=[pk]),
+            "undo_url": reverse("pingpong:live_undo", args=[pk]),
+            "side_switch_url": reverse("pingpong:live_side_switch", args=[pk]),
+        }
+        return render(request, self.template_name, context)
+
+
+@method_decorator(require_POST, name="dispatch")
+class LiveStartView(LoginRequiredMixin, View):
+    """Initialize live_state with the picked initial server."""
+
+    def post(self, request, pk):
+        try:
+            payload = json.loads(request.body or b"{}")
+        except json.JSONDecodeError:
+            return JsonResponse({"error": "Invalid JSON"}, status=400)
+
+        server = payload.get("initial_server")
+        if server not in ("team1", "team2"):
+            return JsonResponse({"error": "initial_server must be 'team1' or 'team2'"}, status=400)
+
+        with transaction.atomic():
+            match = _get_live_match_for_scorekeeper(request, pk)
+            # Re-fetch with lock so concurrent requests serialize
+            Match.all_objects.select_for_update().get(pk=match.pk)
+
+            if not match.is_live:
+                return JsonResponse({"error": "Match is not live"}, status=409)
+
+            current = match.live_state or live_scoring.initial_state(match.best_of)
+            if current.get("started"):
+                # Idempotent if already started with the same server
+                if current.get("initial_server") == server:
+                    return JsonResponse(_scoreboard_payload(match))
+                return JsonResponse({"error": "Match already started"}, status=409)
+
+            new_state = live_scoring.set_initial_server(current, server)
+            Match.all_objects.filter(pk=match.pk).update(live_state=new_state)
+            match.live_state = new_state
+
+        return JsonResponse(_scoreboard_payload(match))
+
+
+@method_decorator(require_POST, name="dispatch")
+class LivePointView(LoginRequiredMixin, View):
+    """Add a point. Server validates rules and returns canonical state."""
+
+    def post(self, request, pk):
+        try:
+            payload = json.loads(request.body or b"{}")
+        except json.JSONDecodeError:
+            return JsonResponse({"error": "Invalid JSON"}, status=400)
+
+        side = payload.get("side")
+        if side not in ("team1", "team2"):
+            return JsonResponse({"error": "side must be 'team1' or 'team2'"}, status=400)
+
+        with transaction.atomic():
+            match = _get_live_match_for_scorekeeper(request, pk)
+            Match.all_objects.select_for_update().get(pk=match.pk)
+            match.refresh_from_db()
+
+            if not match.is_live:
+                return JsonResponse({"error": "Match is not live"}, status=409)
+            if not match.live_state or not match.live_state.get("started"):
+                return JsonResponse({"error": "Match has not started — pick an initial server"}, status=409)
+
+            try:
+                new_state, completed = live_scoring.apply_point(match.live_state, side)
+            except ValueError as exc:
+                return JsonResponse({"error": str(exc)}, status=409)
+
+            redirect_url = None
+
+            if completed is None:
+                Match.all_objects.filter(pk=match.pk).update(live_state=new_state)
+                match.live_state = new_state
+            else:
+                match_complete = live_scoring.is_match_complete(new_state)
+                if match_complete:
+                    # Flip is_live OFF first so the upcoming Game.save() →
+                    # Match.save() pipeline runs the existing winner /
+                    # signal / Elo cascade as if it were a normal match.
+                    Match.all_objects.filter(pk=match.pk).update(
+                        is_live=False, live_state=None
+                    )
+                    match.is_live = False
+                    match.live_state = None
+                    # Hand off to the existing match_confirm flow: running
+                    # the live scoreboard implicitly attests the score, so
+                    # the scorekeeper is confirmed in one step and lands on
+                    # match_detail. The other player still confirms via the
+                    # email they receive from the post-save signal.
+                    redirect_url = reverse("pingpong:match_confirm", args=[match.pk])
+                else:
+                    Match.all_objects.filter(pk=match.pk).update(live_state=new_state)
+                    match.live_state = new_state
+
+                # Persist the completed Game row. While is_live=True (mid-match)
+                # this triggers Match.save() but the winner-detection guard
+                # short-circuits. On the final game, is_live=False so the
+                # normal signal pipeline runs.
+                Game.objects.create(
+                    match=match,
+                    game_number=completed["game_number"],
+                    team1_score=completed["team1_score"],
+                    team2_score=completed["team2_score"],
+                )
+
+        return JsonResponse(_scoreboard_payload(match, redirect_url=redirect_url))
+
+
+class LiveStateView(LoginRequiredMixin, View):
+    """GET the canonical state — used by the client to rehydrate on reload."""
+
+    def get(self, request, pk):
+        # all_objects so we can return a completed match's redirect too
+        match = get_object_or_404(Match.all_objects, pk=pk)
+        try:
+            user_player = request.user.player
+        except (AttributeError, Player.DoesNotExist):
+            raise PermissionDenied
+
+        if match.scorekeeper_id != user_player.pk and not request.user.is_staff:
+            raise PermissionDenied
+
+        redirect_url = None
+        if not match.is_live:
+            redirect_url = reverse("pingpong:match_detail", args=[match.pk])
+        return JsonResponse(_scoreboard_payload(match, redirect_url=redirect_url))
+
+
+@method_decorator(require_POST, name="dispatch")
+class LiveSideSwitchView(LoginRequiredMixin, View):
+    """Mark the deciding-game side switch as confirmed (KAN-9)."""
+
+    def post(self, request, pk):
+        with transaction.atomic():
+            match = _get_live_match_for_scorekeeper(request, pk)
+            Match.all_objects.select_for_update().get(pk=match.pk)
+            match.refresh_from_db()
+
+            if not match.is_live or not match.live_state:
+                return JsonResponse({"error": "Match is not live"}, status=409)
+
+            new_state = live_scoring.confirm_side_switch(match.live_state)
+            Match.all_objects.filter(pk=match.pk).update(live_state=new_state)
+            match.live_state = new_state
+
+        return JsonResponse(_scoreboard_payload(match))
+
+
+@method_decorator(require_POST, name="dispatch")
+class LiveUndoView(LoginRequiredMixin, View):
+    """Undo the most recent point (KAN-10).
+
+    If the undone point ended a game, the trailing Game row is deleted and
+    the in-progress game state is restored from the event log.
+    """
+
+    def post(self, request, pk):
+        with transaction.atomic():
+            match = _get_live_match_for_scorekeeper(request, pk)
+            Match.all_objects.select_for_update().get(pk=match.pk)
+            match.refresh_from_db()
+
+            if not match.is_live or not match.live_state:
+                return JsonResponse({"error": "Match is not live"}, status=409)
+
+            new_state, undone_game = live_scoring.undo_last_point(match.live_state)
+
+            if undone_game is not None:
+                # Drop the trailing Game row. Use all_objects to bypass the
+                # live-match GameManager filter.
+                Game.all_objects.filter(
+                    match=match,
+                    game_number=undone_game["game_number"],
+                ).delete()
+
+            Match.all_objects.filter(pk=match.pk).update(live_state=new_state)
+            match.live_state = new_state
+
+        return JsonResponse(_scoreboard_payload(match))

@@ -5,6 +5,64 @@
 
 {% block content %}
 <div class="max-w-7xl mx-auto space-y-6">
+    {% if live_matches %}
+    <!-- Resume live match banner (KAN-11) -->
+    <div
+        x-data="liveResumeBanner({{ live_matches|length }})"
+        x-show="visibleCount > 0"
+        x-cloak
+        class="space-y-3"
+    >
+        {% for lm in live_matches %}
+        <div
+            x-show="!dismissed.includes({{ lm.pk }})"
+            class="rounded-lg border border-primary/40 bg-primary/5 p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3"
+            data-testid="live-resume-banner"
+        >
+            <div class="flex items-start gap-3">
+                <span class="inline-block h-3 w-3 mt-2 rounded-full bg-red-500 animate-pulse flex-shrink-0"></span>
+                <div>
+                    <p class="font-semibold">Live match in progress vs {{ lm.opponent }}</p>
+                    <p class="text-sm text-muted-foreground">
+                        Game {{ lm.team1_games|add:lm.team2_games|add:1 }} / {{ lm.best_of }} ·
+                        Games {{ lm.team1_games }}-{{ lm.team2_games }} ·
+                        Current {{ lm.team1_points }}-{{ lm.team2_points }}
+                        {% if lm.last_point_at %} · last point {{ lm.last_point_at }}{% endif %}
+                    </p>
+                </div>
+            </div>
+            <div class="flex gap-2">
+                <a href="{{ lm.resume_url }}" class="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors min-h-[44px]">
+                    Resume
+                </a>
+                <button
+                    type="button"
+                    @click="dismiss({{ lm.pk }})"
+                    class="inline-flex items-center justify-center gap-2 rounded-md border bg-white px-4 py-2 text-sm font-medium hover:bg-secondary transition-colors min-h-[44px]"
+                    aria-label="Dismiss banner"
+                >
+                    Dismiss
+                </button>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    <script>
+    function liveResumeBanner(total) {
+        return {
+            dismissed: JSON.parse(localStorage.getItem('live_dismissed') || '[]'),
+            get visibleCount() {
+                return total - this.dismissed.length;
+            },
+            dismiss(pk) {
+                if (!this.dismissed.includes(pk)) this.dismissed.push(pk);
+                localStorage.setItem('live_dismissed', JSON.stringify(this.dismissed));
+            },
+        };
+    }
+    </script>
+    {% endif %}
+
     <!-- Welcome Header -->
     <div>
         <h2 class="text-2xl md:text-3xl font-bold tracking-tight">Welcome back, {{ user.first_name|default:user.username }}! 👋</h2>

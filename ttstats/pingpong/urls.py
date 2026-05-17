@@ -33,6 +33,14 @@ urlpatterns = [
         name="game_add",
     ),
     path('match/<int:pk>/confirm/', views.match_confirm, name='match_confirm'),
+
+    # Live scoreboard (KAN-4)
+    path("matches/<int:pk>/live/", views.LiveScoreboardView.as_view(), name="live_scoreboard"),
+    path("matches/<int:pk>/live/start/", views.LiveStartView.as_view(), name="live_start"),
+    path("matches/<int:pk>/live/point/", views.LivePointView.as_view(), name="live_point"),
+    path("matches/<int:pk>/live/state/", views.LiveStateView.as_view(), name="live_state"),
+    path("matches/<int:pk>/live/side-switch/", views.LiveSideSwitchView.as_view(), name="live_side_switch"),
+    path("matches/<int:pk>/live/undo/", views.LiveUndoView.as_view(), name="live_undo"),
     path("matches/schedule/", views.ScheduledMatchCreateView.as_view(), name="match_schedule"),
     path("scheduled-matches/<int:pk>/", views.ScheduledMatchDetailView.as_view(), name="scheduled_match_detail"),
     path("scheduled-matches/<int:scheduled_match_pk>/convert/", views.ScheduledMatchConvertView.as_view(), name="scheduled_match_convert"),

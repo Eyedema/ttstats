@@ -46,6 +46,12 @@ def handle_match_completion(sender, instance, created, **kwargs):
     if not getattr(instance, "_winner_just_set", False) or not instance.winner:
         return
 
+    # Live matches are mid-flight — the scoreboard endpoint flips is_live=False
+    # before saving the winning Game, so when this signal fires for a "real"
+    # finish, is_live will already be False here.
+    if instance.is_live:
+        return
+
     # 1. Auto-confirm if needed
     if instance.should_auto_confirm():
         all_players = (instance.team1.players.all() | instance.team2.players.all())
@@ -98,6 +104,9 @@ def update_elo_on_confirmation(sender, instance, created, **kwargs):
     # field values from the database. This fixes the issue where manual
     # confirmations via the match_confirm view don't trigger Elo updates.
     instance.refresh_from_db()
+
+    if instance.is_live:
+        return
 
     # Try to update Elo (has guards inside, safe to call anytime)
     update_player_elo(instance)
