@@ -39,6 +39,7 @@ from .achievements import get_achievement_progress
 from .elo import calculate_expected_score, get_win_probability
 from .models import Game, Location, Match, Player, UserProfile, MatchConfirmation, ScheduledMatch, Team, Championship, EloHistory
 from .emails import send_scheduled_match_email, send_passkey_deleted_email
+from .services import resolve_sides
 
 try:
     from django_otp_webauthn.models import WebAuthnCredential
@@ -653,53 +654,11 @@ class MatchCreateView(LoginRequiredMixin, CreateView):
                 )
                 return self.form_invalid(form)
 
-        # Create Team objects
-        from .models import Team
-
+        # Resolve the two sides to Team objects
         if is_double:
-            # Create 2-player teams (or reuse existing)
-            team1 = (Team.objects
-                     .filter(players=player1)
-                     .filter(players=player2)
-                     .first()
-                     )
-            if not team1:
-                team1 = Team.objects.create()
-                team1.players.set([player1, player2])
-                team1.save()
-
-            team2 = (Team.objects
-                     .filter(players=player3)
-                     .filter(players=player4)
-                     .first()
-                     )
-            if not team2:
-                team2 = Team.objects.create()
-                team2.players.set([player3, player4])
-                team2.save()
+            team1, team2 = resolve_sides([player1, player2], [player3, player4])
         else:
-            # Create 1-player teams (or reuse existing)
-            team1 = (Team.objects
-                     .filter(players=player1)
-                     .annotate(num_players=Count('players'))
-                     .filter(num_players=1)
-                     .first()
-                     )
-            if not team1:
-                team1 = Team.objects.create()
-                team1.players.set([player1])
-                team1.save()
-
-            team2 = (Team.objects
-                     .filter(players=player2)
-                     .annotate(num_players=Count('players'))
-                     .filter(num_players=1)
-                     .first()
-                     )
-            if not team2:
-                team2 = Team.objects.create()
-                team2.players.set([player2])
-                team2.save()
+            team1, team2 = resolve_sides([player1], [player2])
 
         # Assign teams to match instance (don't save yet)
         form.instance.team1 = team1
@@ -1465,32 +1424,8 @@ class ScheduledMatchCreateView(LoginRequiredMixin, CreateView):
                 )
                 return self.form_invalid(form)
 
-        # Create 1-player teams (scheduled matches are singles only for now)
-        from .models import Team
-
-        if True:  # Scheduled matches are singles-only
-            # Create 1-player teams (or reuse existing)
-            team1 = (Team.objects
-                     .filter(players=player1)
-                     .annotate(num_players=Count('players'))
-                     .filter(num_players=1)
-                     .first()
-                     )
-            if not team1:
-                team1 = Team.objects.create()
-                team1.players.set([player1])
-                team1.save()
-
-            team2 = (Team.objects
-                     .filter(players=player2)
-                     .annotate(num_players=Count('players'))
-                     .filter(num_players=1)
-                     .first()
-                     )
-            if not team2:
-                team2 = Team.objects.create()
-                team2.players.set([player2])
-                team2.save()
+        # Scheduled matches are singles-only for now
+        team1, team2 = resolve_sides([player1], [player2])
 
         # Assign teams to scheduled match
         form.instance.team1 = team1
@@ -1785,55 +1720,12 @@ class ScheduledMatchConvertView(LoginRequiredMixin, CreateView):
                 )
                 return self.form_invalid(form)
 
-        # Create or reuse Team objects (same logic as MatchCreateView)
+        # Resolve the two sides to Team objects. Note the pairing differs from
+        # MatchCreateView: this form lays out side 1 as player1+player3.
         if is_double:
-            # Create 2-player teams
-            team1 = (Team.objects
-                     .filter(players=player1)
-                     .filter(players=player3)
-                     .annotate(num_players=Count('players'))
-                     .filter(num_players=2)
-                     .first()
-                     )
-            if not team1:
-                team1 = Team.objects.create()
-                team1.players.set([player1, player3])
-                team1.save()
-
-            team2 = (Team.objects
-                     .filter(players=player2)
-                     .filter(players=player4)
-                     .annotate(num_players=Count('players'))
-                     .filter(num_players=2)
-                     .first()
-                     )
-            if not team2:
-                team2 = Team.objects.create()
-                team2.players.set([player2, player4])
-                team2.save()
+            team1, team2 = resolve_sides([player1, player3], [player2, player4])
         else:
-            # Create 1-player teams
-            team1 = (Team.objects
-                     .filter(players=player1)
-                     .annotate(num_players=Count('players'))
-                     .filter(num_players=1)
-                     .first()
-                     )
-            if not team1:
-                team1 = Team.objects.create()
-                team1.players.set([player1])
-                team1.save()
-
-            team2 = (Team.objects
-                     .filter(players=player2)
-                     .annotate(num_players=Count('players'))
-                     .filter(num_players=1)
-                     .first()
-                     )
-            if not team2:
-                team2 = Team.objects.create()
-                team2.players.set([player2])
-                team2.save()
+            team1, team2 = resolve_sides([player1], [player2])
 
         # Assign teams to match
         form.instance.team1 = team1
