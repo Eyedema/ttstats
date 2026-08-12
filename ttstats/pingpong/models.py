@@ -91,6 +91,33 @@ class Player(models.Model):
         return self.nickname if self.nickname else self.name
 
 
+def format_side_label(players):
+    """Human-readable name for a side: "Ada", "Ada and Bob", "Ada and Bob (+1)"."""
+    players = list(players)
+    if not players:
+        return ""
+    if len(players) == 1:
+        return str(players[0])
+    if len(players) == 2:
+        return f"{players[0]} and {players[1]}"
+    return f"{players[0]} and {players[1]} (+{len(players) - 2})"
+
+
+class SideLabelMixin:
+    """Side labels for anything exposing players_on(side)."""
+
+    def side_label(self, side):
+        return format_side_label(self.players_on(side)) or f"Side {int(side)}"
+
+    @property
+    def side1_label(self):
+        return self.side_label(Side.ONE)
+
+    @property
+    def side2_label(self):
+        return self.side_label(Side.TWO)
+
+
 class Team(models.Model):
     """Concept used for matches to include both singles and doubles score"""
 
@@ -123,7 +150,7 @@ class Side(models.IntegerChoices):
     TWO = 2, "Side 2"
 
 
-class Match(models.Model):
+class Match(SideLabelMixin, models.Model):
     """Individual match between two players"""
 
     is_double = models.BooleanField(default=False)
@@ -504,7 +531,7 @@ class UserProfile(models.Model):
         return f"Profile of {self.user.username}"
 
 
-class ScheduledMatch(models.Model):
+class ScheduledMatch(SideLabelMixin, models.Model):
     """A match scheduled for the future"""
 
     team1 = models.ForeignKey(

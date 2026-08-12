@@ -14,37 +14,29 @@ def send_match_confirmation_email(match, player):
         match: Match instance
         player: Player who needs to confirm
     """
+    from .models import Side
+
     user = player.user
 
-    player_team = None
-    opponent_team = None
-
-    if player in match.team1.players.all():
-        player_team, opponent_team = match.team1, match.team2
-        score = f"{match.team1_score}-{match.team2_score}"
-        opponent_name = f"{match.team2}"
-    elif player in match.team2.players.all():
-        player_team, opponent_team = match.team2, match.team1
-        score = f"{match.team2_score}-{match.team1_score}"
-        opponent_name = f"{match.team1}"
-    else:
+    player_side = next(
+        (p.side for p in match.participants.all() if p.player_id == player.pk), None
+    )
+    if player_side is None:
         return
 
-    # Determine result for this player
-    if player in match.winner.players.all():
-        result = "won"
-        emoji = "🎉"
-        if player in match.team1.players.all():
-            score = f"{match.team1_score}-{match.team2_score}"
-        else:
-            score = f"{match.team2_score}-{match.team1_score}"
+    opponent_side = Side.TWO if player_side == Side.ONE else Side.ONE
+    opponent_team = match.side_label(opponent_side)
+
+    # Always the player's own score first
+    if player_side == Side.ONE:
+        score = f"{match.team1_score}-{match.team2_score}"
     else:
-        result = "lost"
-        emoji = "💪"
-        if player in match.team1.players.all():
-            score = f"{match.team1_score}-{match.team2_score}"
-        else:
-            score = f"{match.team2_score}-{match.team1_score}"
+        score = f"{match.team2_score}-{match.team1_score}"
+
+    if match.winner_side == player_side:
+        result, emoji = "won", "🎉"
+    else:
+        result, emoji = "lost", "💪"
 
     # Build absolute URL
     protocol = getattr(settings, "SITE_PROTOCOL", "http")
@@ -127,9 +119,25 @@ def send_scheduled_match_email(scheduled_match, player):
         scheduled_match: ScheduledMatch instance
         player: Player who is being notified
     """
+    from .models import Side
+
     user = player.user
     if not user or not user.email:
         return
+
+    # Which side is the recipient on? The opponent used to be hard-coded to
+    # team2, so a player scheduled on side 2 was told they faced themselves.
+    player_side = next(
+        (
+            p.side
+            for p in scheduled_match.participants.all()
+            if p.player_id == player.pk
+        ),
+        Side.ONE,
+    )
+    opponent_side = Side.TWO if player_side == Side.ONE else Side.ONE
+    own_label = scheduled_match.side_label(player_side)
+    opponent_label = scheduled_match.side_label(opponent_side)
 
     # Build absolute URL
     protocol = getattr(settings, "SITE_PROTOCOL", "http")
@@ -149,7 +157,7 @@ A match has been scheduled for you!
 
 📅 Match Details:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  Opponent: {str(scheduled_match.team2)}
+  Opponent: {opponent_label}
   Date: {date_str}
   Time: {time_str}
   Location: {location_str}
@@ -171,8 +179,8 @@ Table Tennis Tracker Team
 
         <div style="background: #f3f4f6; padding: 20px; border-radius: 8px; margin: 20px 0;">
             <h3 style="margin-top: 0;">📅 Match Details</h3>
-            <p style="margin: 5px 0;"><strong>You:</strong> {scheduled_match.team1.name}</p>
-            <p style="margin: 5px 0;"><strong>Opponent:</strong> {scheduled_match.team2.name}</p>
+            <p style="margin: 5px 0;"><strong>You:</strong> {own_label}</p>
+            <p style="margin: 5px 0;"><strong>Opponent:</strong> {opponent_label}</p>
             <p style="margin: 5px 0;">📆 <strong>Date:</strong> {date_str}</p>
             <p style="margin: 5px 0;">🕐 <strong>Time:</strong> {time_str}</p>
             <p style="margin: 5px 0;">📍 <strong>Location:</strong> {location_str}</p>

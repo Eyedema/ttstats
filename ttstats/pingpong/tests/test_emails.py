@@ -181,3 +181,41 @@ class TestSendScheduledMatchEmail:
         mail.outbox.clear()
         send_scheduled_match_email(sm, sm.player1)
         assert "Match Scheduled" in mail.outbox[0].subject
+
+
+@pytest.mark.django_db
+class TestScheduledMatchEmailSides:
+    """The opponent was hard-coded to team2, and the HTML used team.name --
+    blank for almost every team.
+    """
+
+    def test_side_two_player_is_told_the_right_opponent(self):
+        p1 = PlayerFactory(with_user=True, name="Ada")
+        p2 = PlayerFactory(with_user=True, name="Bob")
+        sm = ScheduledMatchFactory(player1=p1, player2=p2)
+
+        mail.outbox.clear()
+        send_scheduled_match_email(sm, p2)
+        body = mail.outbox[0].body
+        assert "Opponent: Ada" in body
+        assert "Opponent: Bob" not in body
+
+    def test_side_one_player_is_told_the_right_opponent(self):
+        p1 = PlayerFactory(with_user=True, name="Ada")
+        p2 = PlayerFactory(with_user=True, name="Bob")
+        sm = ScheduledMatchFactory(player1=p1, player2=p2)
+
+        mail.outbox.clear()
+        send_scheduled_match_email(sm, p1)
+        assert "Opponent: Bob" in mail.outbox[0].body
+
+    def test_html_names_both_sides_instead_of_blank_team_names(self):
+        p1 = PlayerFactory(with_user=True, name="Ada")
+        p2 = PlayerFactory(with_user=True, name="Bob")
+        sm = ScheduledMatchFactory(player1=p1, player2=p2)
+
+        mail.outbox.clear()
+        send_scheduled_match_email(sm, p1)
+        html = mail.outbox[0].alternatives[0][0]
+        assert "<strong>You:</strong> Ada" in html
+        assert "<strong>Opponent:</strong> Bob" in html

@@ -11,29 +11,23 @@ def invalidate_match_caches(match):
     Invalidate all caches related to a match.
     Call from signals when matches are created/updated/confirmed.
     """
+    from .models import Side
+
     keys_to_delete = []
 
-    # Get all players involved
-    all_players = set()
-    all_players.update(match.team1.players.all())
-    all_players.update(match.team2.players.all())
+    side1 = list(match.players_on(Side.ONE))
+    side2 = list(match.players_on(Side.TWO))
 
     # Invalidate player-specific caches
-    for player in all_players:
+    for player in side1 + side2:
         keys_to_delete.append(f'player_stats_{player.pk}')
         keys_to_delete.append(f'pending_matches_{player.pk}')
 
     # Invalidate head-to-head cache (singles only)
-    if match.team1.players.count() == 1 and match.team2.players.count() == 1:
-        p1 = match.team1.players.first()
-        p2 = match.team2.players.first()
-        if p1 and p2:
-            cache_key = f'h2h_{min(p1.pk, p2.pk)}_{max(p1.pk, p2.pk)}'
-            keys_to_delete.append(cache_key)
-
-    # Invalidate team caches
-    keys_to_delete.append(f'team_stats_{match.team1.pk}')
-    keys_to_delete.append(f'team_stats_{match.team2.pk}')
+    if len(side1) == 1 and len(side2) == 1:
+        p1, p2 = side1[0], side2[0]
+        cache_key = f'h2h_{min(p1.pk, p2.pk)}_{max(p1.pk, p2.pk)}'
+        keys_to_delete.append(cache_key)
 
     # Invalidate global caches
     keys_to_delete.extend([
