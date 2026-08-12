@@ -936,3 +936,108 @@ class UserProfileModelTest(TestCase):
         self.user.profile.save()
 
         self.assertTrue(self.user.profile.is_token_expired())
+
+
+# ===========================================================================
+# Match.recompute -- pytest style, per CLAUDE.md. The TestCase classes above
+# predate that rule.
+# ===========================================================================
+
+import pytest
+from django.db.models.signals import post_save
+
+from .conftest import GameFactory, MatchFactory, PlayerFactory, confirm_match
+
+
+@pytest.mark.django_db
+class TestMatchRecompute:
+    def _finished_match(self):
+        m = MatchFactory(best_of=5)
+        for n in (1, 2, 3):
+            GameFactory(match=m, game_number=n, team1_score=11, team2_score=4)
+        m.refresh_from_db()
+        return m
+
+    def test_sets_winner_and_score_caches(self):
+        m = self._finished_match()
+        assert m.winner == m.team1
+        assert m.team1_score_cache == 3
+        assert m.team2_score_cache == 0
+
+    def test_is_idempotent(self):
+        m = self._finished_match()
+        before = (m.winner_id, m.team1_score_cache, m.team2_score_cache, m.is_confirmed)
+
+        m.recompute()
+        m.recompute()
+        m.refresh_from_db()
+
+        after = (m.winner_id, m.team1_score_cache, m.team2_score_cache, m.is_confirmed)
+        assert before == after
+
+    def test_persists_without_calling_save(self):
+        m = self._finished_match()
+        Match.all_objects.filter(pk=m.pk).update(
+            team1_score_cache=99, team2_score_cache=99, is_confirmed=False
+        )
+
+        m.refresh_from_db()
+        m.recompute()
+
+        fresh = Match.all_objects.get(pk=m.pk)
+        assert fresh.team1_score_cache == 3
+        assert fresh.team2_score_cache == 0
+
+    def test_does_not_fire_match_save_signals(self):
+        """The old code used Match.objects.update() to dodge signal re-entry.
+        recompute() must keep that property or the confirmation/Elo pipeline
+        re-runs on every refresh.
+        """
+        m = self._finished_match()
+        calls = []
+
+        def _spy(sender, instance, **kwargs):
+            calls.append(instance.pk)
+
+        post_save.connect(_spy, sender=Match)
+        try:
+            m.recompute()
+        finally:
+            post_save.disconnect(_spy, sender=Match)
+
+        assert calls == []
+
+    def test_save_false_mutates_without_touching_the_database(self):
+        m = self._finished_match()
+        Match.all_objects.filter(pk=m.pk).update(team1_score_cache=42)
+        m.refresh_from_db()
+
+        m.recompute(save=False)
+
+        assert m.team1_score_cache == 3
+        assert Match.all_objects.get(pk=m.pk).team1_score_cache == 42
+
+    def test_unfinished_match_has_no_winner(self):
+        m = MatchFactory(best_of=5)
+        GameFactory(match=m, game_number=1, team1_score=11, team2_score=4)
+        m.refresh_from_db()
+
+        assert m.winner is None
+        assert m.team1_score_cache == 1
+
+    def test_confirmation_status_is_recomputed(self):
+        p1 = PlayerFactory(with_user=True)
+        p2 = PlayerFactory(with_user=True)
+        for p in (p1, p2):
+            p.user.profile.email_verified = True
+            p.user.profile.save()
+
+        m = MatchFactory(player1=p1, player2=p2, best_of=5)
+        for n in (1, 2, 3):
+            GameFactory(match=m, game_number=n, team1_score=11, team2_score=4)
+        m.refresh_from_db()
+        assert m.is_confirmed is False
+
+        confirm_match(m)
+        m.refresh_from_db()
+        assert m.is_confirmed is True

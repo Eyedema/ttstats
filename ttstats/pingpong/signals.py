@@ -73,11 +73,9 @@ def handle_match_completion(sender, instance, created, **kwargs):
             ):
                 send_match_confirmation_email(instance, player)
 
-    # 3. Update is_confirmed denormalized field
-    new_confirmed = instance._calculate_confirmation_status()
-    if new_confirmed != instance.is_confirmed:
-        Match.objects.filter(pk=instance.pk).update(is_confirmed=new_confirmed)
-        instance.is_confirmed = new_confirmed
+    # 3. Refresh the denormalized fields (winner, score caches, is_confirmed).
+    #    recompute() persists with a queryset update, so no signal re-entry.
+    instance.recompute()
 
     # 4. Update Elo ratings (only runs if confirmed)
     update_player_elo(instance)
@@ -118,11 +116,8 @@ def update_elo_on_match_confirmation(sender, instance, created, **kwargs):
     if created:
         match = instance.match
 
-        # Update is_confirmed denormalized field
-        new_status = match._calculate_confirmation_status()
-        if new_status != match.is_confirmed:
-            Match.objects.filter(pk=match.pk).update(is_confirmed=new_status)
-            match.is_confirmed = new_status
+        # Refresh the denormalized fields (no signal re-entry -- see recompute)
+        match.recompute()
 
         # Try to update Elo for the match (has guards inside, safe to call anytime)
         update_player_elo(match)

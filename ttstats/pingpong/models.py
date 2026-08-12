@@ -6,6 +6,7 @@ from django.contrib.auth.models import User
 from django.db import models
 from django.utils import timezone
 
+from . import match_state
 from .managers import ChampionshipManager, GameManager, LiveMatchManager, MatchManager, PlayerManager, ScheduledMatchManager
 
 # Email verification token expires after 24 hours
@@ -215,44 +216,39 @@ class Match(models.Model):
     def team2_score(self):
         return self.games.filter(winner=self.team2).count()
 
-    @property
-    def team1_confirmed(self):
-        """All Team 1 members have confirmed"""
-        team1_players = self.team1.players.filter(user__profile__email_verified=True)
-        team1_ids = {p.id for p in team1_players}
-        confirmed_ids = {c.id for c in self.confirmations.all()}
-
-        if team1_ids.issubset(confirmed_ids):
-            return True
-
-        all_unverified = all(
-            not (p.user and p.user.profile.email_verified)
-            for p in team1_players.all()
+    def _verified_player_ids(self, team):
+        """Ids of players on ``team`` whose email is verified."""
+        return set(
+            team.players.filter(
+                user__profile__email_verified=True
+            ).values_list("id", flat=True)
         )
 
-        return all_unverified
+    def _confirmed_player_ids(self):
+        return set(self.confirmations.values_list("id", flat=True))
+
+    @property
+    def team1_confirmed(self):
+        """All verified Team 1 members have confirmed"""
+        return match_state.side_confirmed(
+            self._verified_player_ids(self.team1), self._confirmed_player_ids()
+        )
 
     @property
     def team2_confirmed(self):
-        """All Team 2 members have confirmed"""
-        team2_players = self.team2.players.filter(user__profile__email_verified=True)
-        team2_ids = {p.id for p in team2_players}
-        confirmed_ids = {c.id for c in self.confirmations.all()}
-
-        if team2_ids.issubset(confirmed_ids):
-            return True
-
-        all_unverified = all(
-            not (p.user and p.user.profile.email_verified)
-            for p in team2_players.all()
+        """All verified Team 2 members have confirmed"""
+        return match_state.side_confirmed(
+            self._verified_player_ids(self.team2), self._confirmed_player_ids()
         )
-
-        return all_unverified
 
     @property
     def match_confirmed(self):
-        """Tutti i giocatori di entrambi i team hanno confermato"""
-        return self.team1_confirmed and self.team2_confirmed
+        """Every verified player on both teams has confirmed."""
+        return match_state.confirmation_complete(
+            self._verified_player_ids(self.team1),
+            self._verified_player_ids(self.team2),
+            self._confirmed_player_ids(),
+        )
 
     @property
     def player1(self):
@@ -269,22 +265,12 @@ class Match(models.Model):
         return None
 
     def should_auto_confirm(self):
-        if not self.winner or self.match_confirmed:
-            return False
-
-        team1_all_unverified = True
-        for player in self.team1.players.all():
-            if player.user and player.user.profile.email_verified:
-                team1_all_unverified = False
-                break
-
-        team2_all_unverified = True
-        for player in self.team2.players.all():
-            if player.user and player.user.profile.email_verified:
-                team2_all_unverified = False
-                break
-
-        return team1_all_unverified or team2_all_unverified
+        return match_state.should_auto_confirm(
+            has_winner=bool(self.winner),
+            already_confirmed=self.match_confirmed,
+            side1_has_verified=bool(self._verified_player_ids(self.team1)),
+            side2_has_verified=bool(self._verified_player_ids(self.team2)),
+        )
 
     def get_unverified_players(self):
         unverified = []
@@ -297,52 +283,55 @@ class Match(models.Model):
 
         return unverified
 
-    def update_cache_fields(self):
-        """Update all denormalized cache fields. Call from signals after changes."""
-        self.team1_score_cache = self.games.filter(winner=self.team1).count()
-        self.team2_score_cache = self.games.filter(winner=self.team2).count()
-        self.is_confirmed = self._calculate_confirmation_status()
-
-    def _calculate_confirmation_status(self):
-        """Calculate actual confirmation status from live data."""
-        team1_verified_ids = set(
-            self.team1.players.filter(
-                user__profile__email_verified=True
-            ).values_list('id', flat=True)
-        )
-        team2_verified_ids = set(
-            self.team2.players.filter(
-                user__profile__email_verified=True
-            ).values_list('id', flat=True)
-        )
-        confirmed_ids = set(
-            self.confirmations.all().values_list('id', flat=True)
-        )
+    def _game_wins(self):
+        """Games won per side. Uses Game.all_objects so the GameManager's
+        user/is_live filters don't hide our own children.
+        """
+        games_qs = Game.all_objects.filter(match_id=self.pk)
         return (
-            team1_verified_ids.issubset(confirmed_ids) and
-            team2_verified_ids.issubset(confirmed_ids)
+            games_qs.filter(winner=self.team1).count(),
+            games_qs.filter(winner=self.team2).count(),
         )
+
+    def recompute(self, save=True):
+        """Single source of truth for winner, score caches and is_confirmed.
+
+        With ``save=True`` the new values are written with a queryset update so
+        no pre/post_save signal fires -- callers are usually inside one. With
+        ``save=False`` the instance is only mutated, for use from ``save()``.
+
+        Live matches skip winner detection: the scoreboard endpoint flips
+        is_live=False at match-end, then the normal pipeline picks the winner up.
+        """
+        if not self.pk:
+            return
+
+        if not self.is_live:
+            side1_wins, side2_wins = self._game_wins()
+            self.team1_score_cache = side1_wins
+            self.team2_score_cache = side2_wins
+
+            decided = match_state.winner_side(side1_wins, side2_wins, self.best_of)
+            if decided == match_state.SIDE_1:
+                self.winner = self.team1
+            elif decided == match_state.SIDE_2:
+                self.winner = self.team2
+            # An undecided result deliberately leaves an existing winner in
+            # place rather than clearing it, matching long-standing behaviour.
+
+        self.is_confirmed = self.match_confirmed
+
+        if save:
+            Match.all_objects.filter(pk=self.pk).update(
+                team1_score_cache=self.team1_score_cache,
+                team2_score_cache=self.team2_score_cache,
+                winner=self.winner,
+                is_confirmed=self.is_confirmed,
+            )
 
     def save(self, *args, **kwargs):
-        # Auto-determine winner based on games. Use Game.all_objects so the
-        # GameManager's user/is_live filters don't hide our own children.
-        # Live matches skip winner detection entirely — the scoreboard
-        # endpoint flips is_live=False at match-end, then this save() picks
-        # up the winner and the normal signal pipeline runs.
         if self.pk and not self.is_live:
-            games_qs = Game.all_objects.filter(match_id=self.pk)
-            t1_wins = games_qs.filter(winner=self.team1).count()
-            t2_wins = games_qs.filter(winner=self.team2).count()
-            games_to_win = (self.best_of // 2) + 1
-
-            # Update score cache
-            self.team1_score_cache = t1_wins
-            self.team2_score_cache = t2_wins
-
-            if t1_wins >= games_to_win:
-                self.winner = self.team1
-            elif t2_wins >= games_to_win:
-                self.winner = self.team2
+            self.recompute(save=False)
         super().save(*args, **kwargs)
 
 
