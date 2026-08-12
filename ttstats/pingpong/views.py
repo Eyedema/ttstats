@@ -2490,13 +2490,12 @@ class LiveScoreboardView(LoginRequiredMixin, View):
             messages.info(request, "This match is no longer live.")
             return redirect("pingpong:match_detail", pk=pk)
 
-        team1_players = list(match.team1.players.all())
-        team2_players = list(match.team2.players.all())
+        cache_side_players(match)
 
         context = {
             "match": match,
-            "team1_label": " & ".join(p.name for p in team1_players),
-            "team2_label": " & ".join(p.name for p in team2_players),
+            "team1_label": " & ".join(p.name for p in match.cached_team1_players),
+            "team2_label": " & ".join(p.name for p in match.cached_team2_players),
             "bootstrap": _scoreboard_payload(match),
             "point_url": reverse("pingpong:live_point", args=[pk]),
             "start_url": reverse("pingpong:live_start", args=[pk]),

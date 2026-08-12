@@ -7,6 +7,7 @@ from django.core.management import call_command
 from django.http import HttpResponseRedirect
 from django.urls import path
 from django.utils.html import format_html
+from django.utils.safestring import mark_safe
 from django_otp_webauthn.models import WebAuthnCredential
 
 from .emails import send_verification_email
@@ -147,9 +148,9 @@ class HasWinnerFilter(SimpleListFilter):
 
     def queryset(self, request, queryset):
         if self.value() == "yes":
-            return queryset.filter(winner__isnull=False)
+            return queryset.filter(winner_side__isnull=False)
         if self.value() == "no":
-            return queryset.filter(winner__isnull=True)
+            return queryset.filter(winner_side__isnull=True)
         return queryset
 
 
@@ -249,15 +250,11 @@ class CustomUserAdmin(BaseUserAdmin):
         """Show email verification status with color"""
         try:
             if obj.profile.email_verified:
-                return format_html(
-                    '<span style="color: green; font-weight: bold;">✓ Verified</span>'
-                )
+                return mark_safe('<span style="color: green; font-weight: bold;">✓ Verified</span>')
             else:
-                return format_html(
-                    '<span style="color: orange; font-weight: bold;">✗ Unverified</span>'
-                )
+                return mark_safe('<span style="color: orange; font-weight: bold;">✗ Unverified</span>')
         except UserProfile.DoesNotExist:
-            return format_html('<span style="color: red;">No Profile</span>')
+            return mark_safe('<span style="color: red;">No Profile</span>')
 
     email_verified_status.short_description = "Email Status"
     email_verified_status.admin_order_field = "profile__email_verified"
@@ -313,10 +310,8 @@ class UserProfileAdmin(admin.ModelAdmin):
     def email_verified_icon(self, obj):
         """Show verification status with icon"""
         if obj.email_verified:
-            return format_html(
-                '<span style="color: green; font-weight: bold;">✓</span>'
-            )
-        return format_html('<span style="color: red; font-weight: bold;">✗</span>')
+            return mark_safe('<span style="color: green; font-weight: bold;">✓</span>')
+        return mark_safe('<span style="color: red; font-weight: bold;">✗</span>')
 
     email_verified_icon.short_description = "Verified"
     email_verified_icon.admin_order_field = "email_verified"
@@ -537,14 +532,11 @@ class MatchAdmin(admin.ModelAdmin):
         "date_played",
         "location",
         HasWinnerFilter,
-        "team1__players",
-        "team2__players",
+        "participants__player",
     )
     search_fields = (
-        "team1__players__name",
-        "team1__players__nickname",
-        "team2__players__name",
-        "team2__players__nickname",
+        "participants__player__name",
+        "participants__player__nickname",
         "notes",
         "id",
     )
@@ -582,14 +574,12 @@ class MatchAdmin(admin.ModelAdmin):
         """Optimize query with select_related and prefetch_related"""
         qs = super().get_queryset(request)
         return qs.select_related("team1", "team2", "winner", "location").prefetch_related(
-            "team1__players", "team2__players", "games"
+            "participants__player", "games"
         )
 
     def teams_display(self, obj):
-        """Show team matchup"""
-        team1 = obj.team1 if obj.team1 else "N/A"
-        team2 = obj.team2 if obj.team2 else "N/A"
-        return f"{team1} vs {team2}"
+        """Show the matchup by side"""
+        return f"{obj.side1_label} vs {obj.side2_label}"
 
     teams_display.short_description = "Matchup"
     teams_display.admin_order_field = "team1"
@@ -606,13 +596,12 @@ class MatchAdmin(admin.ModelAdmin):
 
     def winner_display(self, obj):
         """Show winner with color formatting"""
-        if obj.winner:
+        if obj.winner_side:
             return format_html(
-                '<span style="color: green; font-weight: bold;">{}</span>', obj.winner
+                '<span style="color: green; font-weight: bold;">{}</span>',
+                obj.side_label(obj.winner_side),
             )
-        return format_html(
-            '<span style="color: orange;">In Progress</span>'
-        )
+        return mark_safe('<span style="color: orange;">In Progress</span>')
 
     winner_display.short_description = "Winner"
     winner_display.admin_order_field = "winner"
@@ -621,14 +610,10 @@ class MatchAdmin(admin.ModelAdmin):
         """Show confirmation status with icon"""
         try:
             if obj.match_confirmed:
-                return format_html(
-                    '<span style="color: green; font-weight: bold;">✓ Confirmed</span>'
-                )
+                return mark_safe('<span style="color: green; font-weight: bold;">✓ Confirmed</span>')
         except (AttributeError, TypeError):
             pass
-        return format_html(
-            '<span style="color: orange; font-weight: bold;">⏳ Pending</span>'
-        )
+        return mark_safe('<span style="color: orange; font-weight: bold;">⏳ Pending</span>')
 
     confirmation_status.short_description = "Status"
     confirmation_status.admin_order_field = None  # Not sortable (property)
@@ -655,8 +640,7 @@ class GameAdmin(admin.ModelAdmin):
         HasDurationFilter,
     )
     search_fields = (
-        "match__team1__players__name",
-        "match__team2__players__name",
+        "match__participants__player__name",
         "match__id",
     )
     readonly_fields = ("winner", "match_date", "match_link")
@@ -724,8 +708,7 @@ class MatchConfirmationAdmin(admin.ModelAdmin):
         "player__name",
         "player__nickname",
         "match__id",
-        "match__team1__players__name",
-        "match__team2__players__name",
+        "match__participants__player__name",
     )
     readonly_fields = ("confirmed_at", "match_link", "match_date", "match_winner")
     date_hierarchy = "confirmed_at"
@@ -805,15 +788,12 @@ class ScheduledMatchAdmin(admin.ModelAdmin):
         "location",
         "notification_sent",
         "created_by",
-        "team1__players",
-        "team2__players",
+        "participants__player",
         UpcomingFilter,
     )
     search_fields = (
-        "team1__players__name",
-        "team1__players__nickname",
-        "team2__players__name",
-        "team2__players__nickname",
+        "participants__player__name",
+        "participants__player__nickname",
         "notes",
         "location__name",
     )
@@ -849,7 +829,7 @@ class ScheduledMatchAdmin(admin.ModelAdmin):
         """Optimize query with select_related and prefetch_related"""
         qs = super().get_queryset(request)
         return qs.select_related("team1", "team2", "location", "created_by").prefetch_related(
-            "team1__players", "team2__players"
+            "participants__player"
         )
 
     def teams_display(self, obj):
@@ -864,10 +844,8 @@ class ScheduledMatchAdmin(admin.ModelAdmin):
     def notification_sent_icon(self, obj):
         """Show notification status with icon"""
         if obj.notification_sent:
-            return format_html(
-                '<span style="color: green; font-weight: bold;">✓</span>'
-            )
-        return format_html('<span style="color: red; font-weight: bold;">✗</span>')
+            return mark_safe('<span style="color: green; font-weight: bold;">✓</span>')
+        return mark_safe('<span style="color: red; font-weight: bold;">✗</span>')
 
     notification_sent_icon.short_description = "Notified"
     notification_sent_icon.admin_order_field = "notification_sent"
@@ -886,7 +864,7 @@ class ScheduledMatchAdmin(admin.ModelAdmin):
                     "s" if days != 1 else "",
                 )
             elif days == 0:
-                return format_html('<span style="color: orange; font-weight: bold;">Today</span>')
+                return mark_safe('<span style="color: orange; font-weight: bold;">Today</span>')
             else:
                 return format_html(
                     '<span style="color: red;">{} day{} ago</span>',
