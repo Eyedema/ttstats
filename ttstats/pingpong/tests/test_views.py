@@ -1063,3 +1063,52 @@ class TestMatchConfirmEloUpdate:
         assert history_p1.old_rating == 1500
         assert history_p1.new_rating == player1.elo_rating
         assert history_p1.rating_change > 0
+
+
+@pytest.mark.django_db
+class TestHeadToHeadSinglesDetection:
+    """Head-to-head is singles-only. That used to be enforced by annotating
+    each team's player count; it is now a participant count.
+    """
+
+    def _h2h(self, client, p1, p2):
+        return client.get(
+            reverse("pingpong:head_to_head"), {"player1": p1.pk, "player2": p2.pk}
+        )
+
+    def test_doubles_match_between_the_same_pair_is_excluded(self):
+        u, me = _verified_user_with_player()
+        opponent = PlayerFactory(with_user=True)
+        partner = PlayerFactory(with_user=True)
+        other = PlayerFactory(with_user=True)
+
+        doubles = MatchFactory(
+            team1_players=[me, partner],
+            team2_players=[opponent, other],
+            is_double=True,
+        )
+        for n in (1, 2, 3):
+            GameFactory(match=doubles, game_number=n, team1_score=11, team2_score=5)
+        doubles.refresh_from_db()
+        confirm_match(doubles)
+
+        resp = self._h2h(_login_client(u), me, opponent)
+        assert resp.status_code == 200
+        assert resp.context.get("total_matches") in (None, 0)
+        assert resp.context.get("has_2v2_matches") is True
+
+    def test_singles_matches_are_counted(self):
+        u, me = _verified_user_with_player()
+        opponent = PlayerFactory(with_user=True)
+
+        m = MatchFactory(player1=me, player2=opponent)
+        for n in (1, 2, 3):
+            GameFactory(match=m, game_number=n, team1_score=11, team2_score=5)
+        m.refresh_from_db()
+        confirm_match(m)
+
+        resp = self._h2h(_login_client(u), me, opponent)
+        assert resp.status_code == 200
+        assert resp.context["total_matches"] == 1
+        assert resp.context["player1_match_wins"] == 1
+        assert resp.context["player2_match_wins"] == 0

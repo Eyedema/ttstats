@@ -62,6 +62,21 @@ def participants_prefetch(lookup="participants", scheduled=False):
     )
 
 
+def _player_side(player, match):
+    """Which side a player is on, from prefetched participants."""
+    for participant in match.participants.all():
+        if participant.player_id == player.pk:
+            return participant.side
+    return None
+
+
+def _player_won(player, match):
+    return (
+        match.winner_side is not None
+        and match.winner_side == _player_side(player, match)
+    )
+
+
 def cache_side_players(obj):
     """Attach cached_team1_players / cached_team2_players (+ player1/2).
 
@@ -200,10 +215,14 @@ class MatchDetailView(LoginRequiredMixin, DetailView):
         elo_changes = match.elo_history.select_related('player').all()
 
         # Pass separate elo changes for easier template access
+        side_by_player = {
+            p.player_id: p.side for p in match.participants.all()
+        }
         for change in elo_changes:
-            if change.player in match.team1.players.all():
+            side = side_by_player.get(change.player_id)
+            if side == Side.ONE:
                 context['player1_elo_change'] = change
-            elif change.player in match.team2.players.all():
+            elif side == Side.TWO:
                 context['player2_elo_change'] = change
 
         # Win probability (uses pre-match Elo if EloHistory exists)
@@ -237,17 +256,14 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
             # Cache miss - fetch and compute stats
             # Use is_confirmed=True to filter at DB level
             all_matches = Match.objects.filter(
-                Q(team1__players=player) | Q(team2__players=player),
+                participants__player=player,
                 is_confirmed=True,
-            ).select_related('team1', 'team2', 'winner').prefetch_related(
-                'team1__players',
-                'team2__players',
-            ).order_by('-date_played').distinct()
+            ).prefetch_related(participants_prefetch()).order_by('-date_played')
 
             confirmed_matches = list(all_matches)
 
             total_matches = len(confirmed_matches)
-            wins = len([m for m in confirmed_matches if m.winner and player in m.winner.players.all()])
+            wins = len([m for m in confirmed_matches if _player_won(player, m)])
             losses = total_matches - wins
             streaks = self._calculate_streaks(confirmed_matches)
 
@@ -265,12 +281,9 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
 
         # Always fetch paginated matches fresh (lightweight with DB-level filtering)
         confirmed_matches_qs = Match.objects.filter(
-            Q(team1__players=player) | Q(team2__players=player),
+            participants__player=player,
             is_confirmed=True,
-        ).select_related('team1', 'team2', 'winner').prefetch_related(
-            'team1__players',
-            'team2__players',
-        ).order_by('-date_played').distinct()
+        ).prefetch_related(participants_prefetch()).order_by('-date_played')
 
         from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
 
@@ -286,7 +299,8 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
 
         # Add p1_score, p2_score, and player_won to each match from player's perspective
         for match in confirmed_matches_page.object_list:
-            if player in match.team1.players.all():
+            cache_side_players(match)
+            if _player_side(player, match) == Side.ONE:
                 match.p1_score = match.team1_score
                 match.p2_score = match.team2_score
             else:
@@ -294,7 +308,7 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
                 match.p2_score = match.team1_score
 
             # Check if player won (works for both 1v1 and 2v2)
-            match.player_won = match.winner and player in match.winner.players.all()
+            match.player_won = _player_won(player, match)
 
         # Elo chart data (included in player_stats cache)
         if 'elo_chart_labels' in cached_stats:
@@ -337,7 +351,7 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
         longest_win = longest_loss = win_streak = loss_streak = 0
 
         for match in matches:
-            player_won = self.object in match.winner.players.all()
+            player_won = _player_won(self.object, match)
 
             if player_won:
                 if streak_type != 'win':
@@ -400,18 +414,17 @@ class DashboardView(LoginRequiredMixin, TemplateView):
             user_player = self.request.user.player
             live_qs = Match.live_objects.filter(
                 scorekeeper=user_player, is_live=True
-            ).select_related("team1", "team2").prefetch_related(
-                "team1__players", "team2__players"
-            )
+            ).prefetch_related(participants_prefetch())
             for m in live_qs:
                 state = m.live_state or {}
+                cache_side_players(m)
                 live_matches.append({
                     "pk": m.pk,
                     "opponent": " & ".join(
-                        p.name for p in m.team2.players.all()
+                        p.name for p in m.cached_team2_players
                     ),
                     "team1_label": " & ".join(
-                        p.name for p in m.team1.players.all()
+                        p.name for p in m.cached_team1_players
                     ),
                     "team1_games": state.get("team1_games", 0),
                     "team2_games": state.get("team2_games", 0),
@@ -818,13 +831,8 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
             )
 
         # Prefetch only what we need for stats
-        matches_query = matches_query.select_related(
-            'team1', 'team2', 'winner'
-        ).prefetch_related(
-            'team1__players',
-            'team2__players',
-            'winner__players',
-            'games'
+        matches_query = matches_query.prefetch_related(
+            participants_prefetch(), 'games'
         )
 
         # Load all confirmed matches once into memory
@@ -833,18 +841,12 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
         # Build a lookup dictionary: player_id -> list of their matches
         # This avoids N+1 queries
         player_matches = {}
+        player_won_match = set()  # (player_id, match_id) pairs
         for match in confirmed_matches:
-            # Get players from team1
-            for player in match.team1.players.all():
-                if player.id not in player_matches:
-                    player_matches[player.id] = []
-                player_matches[player.id].append(match)
-
-            # Get players from team2
-            for player in match.team2.players.all():
-                if player.id not in player_matches:
-                    player_matches[player.id] = []
-                player_matches[player.id].append(match)
+            for participant in match.participants.all():
+                player_matches.setdefault(participant.player_id, []).append(match)
+                if match.winner_side == participant.side:
+                    player_won_match.add((participant.player_id, match.id))
 
         # Pre-cache game counts for all matches to avoid repeated queries
         match_game_counts = {}
@@ -870,11 +872,11 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
             total_matches = len(player_match_list)
 
             # Calculate wins using cached data
-            wins = 0
-            for match in player_match_list:
-                # winner.players is already prefetched
-                if match.winner and player in match.winner.players.all():
-                    wins += 1
+            wins = sum(
+                1
+                for match in player_match_list
+                if (player.id, match.id) in player_won_match
+            )
 
             losses = total_matches - wins
             win_rate = (wins / total_matches * 100) if total_matches > 0 else 0
@@ -944,54 +946,37 @@ class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
                 return context
 
             # Check if any 2v2 matches exist between these players
-            has_2v2_matches = Match.objects.filter(
-                Q(team1__players=player1) | Q(team2__players=player1)
-            ).filter(
-                Q(team1__players=player2) | Q(team2__players=player2)
-            ).filter(
-                is_double=True
-            ).exists()
+            has_2v2_matches = (
+                Match.objects.filter(participants__player=player1)
+                .filter(participants__player=player2)
+                .filter(is_double=True)
+                .exists()
+            )
             context['has_2v2_matches'] = has_2v2_matches
 
             # Get all confirmed 1v1 matches between these players
             # Use is_confirmed=True for DB-level filtering
+            # A true 1v1: exactly two participants, one being each player.
             all_matches = (
-                Match.objects.annotate(
-                    team1_player_count=Count('team1__players', distinct=True),
-                    team2_player_count=Count('team2__players', distinct=True)
-                )
-                .filter(
-                    team1_player_count=1,
-                    team2_player_count=1,
-                    is_confirmed=True,
-                )
-                .filter(
-                    Q(team1__players=player1, team2__players=player2) |
-                    Q(team1__players=player2, team2__players=player1)
-                )
-                .select_related("team1", "team2", "winner")
-                .prefetch_related(
-                    "games",
-                    "team1__players",
-                    "team2__players",
-                )
-                .distinct()
+                Match.objects.annotate(participant_count=Count('participants'))
+                .filter(participant_count=2, is_confirmed=True)
+                .filter(participants__player=player1)
+                .filter(participants__player=player2)
+                .prefetch_related("games", participants_prefetch())
                 .order_by("date_played")
             )
 
-            matches = list(all_matches)
+            matches = [cache_side_players(m) for m in all_matches]
 
             if matches:
                 # Basic stats (matches is now a list, not QuerySet)
                 total_matches = len(matches)
-                player1_match_wins = len([
-                    m for m in matches
-                    if m.winner and player1 in m.winner.players.all()
-                ])
-                player2_match_wins = len([
-                    m for m in matches
-                    if m.winner and player2 in m.winner.players.all()
-                ])
+                player1_match_wins = len(
+                    [m for m in matches if _player_won(player1, m)]
+                )
+                player2_match_wins = len(
+                    [m for m in matches if _player_won(player2, m)]
+                )
 
                 # Game-level analysis
                 all_games = []
@@ -1006,7 +991,7 @@ class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
                     games = match.games.all()
                     for game in games:
                         # Determine scores based on who was player1 in the match
-                        if match.team1.players.first() == player1:
+                        if match.cached_player1 == player1:
                             p1_score = game.team1_score
                             p2_score = game.team2_score
                         else:
@@ -1083,27 +1068,25 @@ class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
                 # Recent form (last 5 matches) - matches is already ordered by date_played
                 recent_matches = list(reversed(matches[-5:]))  # Get last 5 and reverse for desc order
                 player1_recent_wins = sum(
-                    1 for m in recent_matches
-                    if m.winner and player1 in m.winner.players.all()
+                    1 for m in recent_matches if _player_won(player1, m)
                 )
                 player2_recent_wins = sum(
-                    1 for m in recent_matches
-                    if m.winner and player2 in m.winner.players.all()
+                    1 for m in recent_matches if _player_won(player2, m)
                 )
 
                 # Match margins (for average margin per match chart)
                 match_margins = []
                 for match in matches:
-                    if match.winner.players.first() == player1:
+                    if _player_won(player1, match):
                         margin = (
                             match.team1_score - match.team2_score
-                            if match.team1.players.first() == player1
+                            if match.cached_player1 == player1
                             else match.team2_score - match.team1_score
                         )
-                    elif match.winner.players.first() == player2:
+                    elif _player_won(player2, match):
                         margin = -(
                             match.team1_score - match.team2_score
-                            if match.team1.players.first() == player1
+                            if match.cached_player1 == player1
                             else match.team2_score - match.team1_score
                         )
                     else:
@@ -1258,8 +1241,7 @@ def match_confirm(request, pk):
         user_player = Player.objects.get(user=request.user)
 
         # Verify the player belongs to one of the two teams
-        if (user_player not in match.team1.players.all() and
-                user_player not in match.team2.players.all()):
+        if not match.participants.filter(player=user_player).exists():
             messages.error(request, "You are not a player in this match.")
             return redirect("pingpong:match_detail", pk=pk)
 
@@ -1574,13 +1556,16 @@ class CalendarView(LoginRequiredMixin, TemplateView):
         # Get upcoming scheduled matches (all future)
         upcoming_matches = ScheduledMatch.objects.filter(
             scheduled_date__gte=today
-        ).select_related('team1', 'team2').prefetch_related(
-            'team1__players', 'team2__players',
+        ).prefetch_related(
+            participants_prefetch(scheduled=True)
         ).order_by("scheduled_date", "scheduled_time")[:5]
 
         # Attach win probability to upcoming matches
         for sm in upcoming_matches:
-            t1_pct, t2_pct = get_win_probability(sm.side1_players, sm.side2_players)
+            cache_side_players(sm)
+            t1_pct, t2_pct = get_win_probability(
+                sm.cached_team1_players, sm.cached_team2_players
+            )
             sm.team1_win_pct = t1_pct
             sm.team2_win_pct = t2_pct
 
