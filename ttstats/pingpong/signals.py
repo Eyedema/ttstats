@@ -6,8 +6,9 @@ from django_otp_webauthn.models import WebAuthnCredential
 from .achievements import check_achievements_for_player
 from .cache_utils import invalidate_match_caches, invalidate_player_caches
 from .emails import send_match_confirmation_email, send_passkey_registered_email
-from .models import Game, Match, MatchConfirmation, Player, UserProfile
+from .models import Game, Match, MatchConfirmation, Player, ScheduledMatch, UserProfile
 from .elo import update_player_elo
+from .services import sync_match_participants, sync_scheduled_match_participants
 
 
 @receiver(post_save, sender=User)
@@ -23,6 +24,21 @@ def create_user_profile(sender, instance, created, **kwargs):
             userprofile = UserProfile.objects.create(user=instance)
             userprofile.create_verification_token()
             userprofile.save()
+
+
+@receiver(post_save, sender=Match)
+def sync_participants_on_match_save(sender, instance, **kwargs):
+    """Keep MatchParticipant in step with the Team FKs during the migration.
+
+    Hooking the save covers every creation path -- views, factories, admin,
+    shell -- instead of each one remembering to write participant rows.
+    """
+    sync_match_participants(instance)
+
+
+@receiver(post_save, sender=ScheduledMatch)
+def sync_participants_on_scheduled_match_save(sender, instance, **kwargs):
+    sync_scheduled_match_participants(instance)
 
 
 @receiver(pre_save, sender=Match)

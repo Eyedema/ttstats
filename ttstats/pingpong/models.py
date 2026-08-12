@@ -354,6 +354,9 @@ class Match(models.Model):
             # An undecided result deliberately leaves an existing winner in
             # place rather than clearing it, matching long-standing behaviour.
 
+        # Dual-write: keep winner_side derived from the winner FK until the
+        # FK goes away, so the two can never drift apart.
+        self.winner_side = self._winner_side_from_fk()
         self.is_confirmed = self.match_confirmed
 
         if save:
@@ -361,8 +364,18 @@ class Match(models.Model):
                 team1_score_cache=self.team1_score_cache,
                 team2_score_cache=self.team2_score_cache,
                 winner=self.winner,
+                winner_side=self.winner_side,
                 is_confirmed=self.is_confirmed,
             )
+
+    def _winner_side_from_fk(self):
+        if self.winner_id is None:
+            return None
+        if self.winner_id == self.team1_id:
+            return Side.ONE
+        if self.winner_id == self.team2_id:
+            return Side.TWO
+        return None
 
     def save(self, *args, **kwargs):
         if self.pk and not self.is_live:
@@ -440,11 +453,13 @@ class Game(models.Model):
         return f"Game {self.game_number}: {self.team1_score}-{self.team2_score}"
 
     def save(self, *args, **kwargs):
-        # Auto-determine winner
+        # Auto-determine winner (dual-written as FK and side during migration)
         if self.team1_score > self.team2_score:
             self.winner = self.match.team1
+            self.winner_side = Side.ONE
         elif self.team2_score > self.team1_score:
             self.winner = self.match.team2
+            self.winner_side = Side.TWO
 
         super().save(*args, **kwargs)
 

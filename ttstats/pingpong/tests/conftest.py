@@ -7,6 +7,7 @@ from django.test import Client
 from factory.django import DjangoModelFactory
 
 from pingpong.models import Championship, Game, Location, Match, MatchConfirmation, Player, ScheduledMatch, Team
+from pingpong.services import resolve_team
 
 
 # ---------------------------------------------------------------------------
@@ -116,32 +117,17 @@ class MatchFactory(DjangoModelFactory):
         kwargs.pop('player1_confirmed', None)
         kwargs.pop('player2_confirmed', None)
 
-        # Handle team creation based on what was provided
+        # Resolve teams through the same service the views use, so tests get
+        # production's team-reuse semantics rather than throwaway teams.
         if team1 is None:
-            if team1_players:
-                team1 = Team.objects.create()
-                team1.players.set(team1_players)
-            elif player1:
-                team1 = Team.objects.create()
-                team1.players.set([player1])
-            else:
-                # Create default player with user for team1
-                default_player1 = PlayerFactory(with_user=True)
-                team1 = Team.objects.create()
-                team1.players.set([default_player1])
+            team1 = resolve_team(
+                team1_players or [player1 or PlayerFactory(with_user=True)]
+            )
 
         if team2 is None:
-            if team2_players:
-                team2 = Team.objects.create()
-                team2.players.set(team2_players)
-            elif player2:
-                team2 = Team.objects.create()
-                team2.players.set([player2])
-            else:
-                # Create default player with user for team2
-                default_player2 = PlayerFactory(with_user=True)
-                team2 = Team.objects.create()
-                team2.players.set([default_player2])
+            team2 = resolve_team(
+                team2_players or [player2 or PlayerFactory(with_user=True)]
+            )
 
         kwargs['team1'] = team1
         kwargs['team2'] = team2
@@ -192,32 +178,16 @@ class ScheduledMatchFactory(DjangoModelFactory):
         team1_players = kwargs.pop('team1_players', None)
         team2_players = kwargs.pop('team2_players', None)
 
-        # Handle team creation based on what was provided
+        # Same reuse semantics as MatchFactory / the views.
         if team1 is None:
-            if team1_players:
-                team1 = Team.objects.create()
-                team1.players.set(team1_players)
-            elif player1:
-                team1 = Team.objects.create()
-                team1.players.set([player1])
-            else:
-                # Create default player with user for team1
-                default_player1 = PlayerFactory(with_user=True)
-                team1 = Team.objects.create()
-                team1.players.set([default_player1])
+            team1 = resolve_team(
+                team1_players or [player1 or PlayerFactory(with_user=True)]
+            )
 
         if team2 is None:
-            if team2_players:
-                team2 = Team.objects.create()
-                team2.players.set(team2_players)
-            elif player2:
-                team2 = Team.objects.create()
-                team2.players.set([player2])
-            else:
-                # Create default player with user for team2
-                default_player2 = PlayerFactory(with_user=True)
-                team2 = Team.objects.create()
-                team2.players.set([default_player2])
+            team2 = resolve_team(
+                team2_players or [player2 or PlayerFactory(with_user=True)]
+            )
 
         kwargs['team1'] = team1
         kwargs['team2'] = team2

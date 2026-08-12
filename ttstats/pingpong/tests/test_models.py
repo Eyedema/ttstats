@@ -1066,16 +1066,36 @@ class TestMatchParticipant:
 
         assert p.match_participations.count() == 2
 
-    def test_participants_are_reachable_from_the_match(self):
-        from pingpong.models import MatchParticipant, Side
+    def test_participants_are_synced_from_teams_on_save(self):
+        from pingpong.models import Side
 
-        m = MatchFactory()
-        a, b = PlayerFactory(), PlayerFactory()
-        MatchParticipant.objects.create(match=m, player=a, side=Side.ONE)
-        MatchParticipant.objects.create(match=m, player=b, side=Side.TWO)
+        a, b = PlayerFactory(with_user=True), PlayerFactory(with_user=True)
+        m = MatchFactory(player1=a, player2=b)
 
         assert m.participants.count() == 2
         assert {mp.player for mp in m.participants.filter(side=Side.ONE)} == {a}
+        assert {mp.player for mp in m.participants.filter(side=Side.TWO)} == {b}
+
+    def test_sync_is_idempotent_across_saves(self):
+        m = MatchFactory()
+        m.save()
+        m.save()
+        assert m.participants.count() == 2
+
+    def test_sync_follows_a_team_membership_change(self):
+        from pingpong.models import Side
+
+        a, b = PlayerFactory(with_user=True), PlayerFactory(with_user=True)
+        replacement = PlayerFactory(with_user=True)
+        m = MatchFactory(player1=a, player2=b)
+
+        m.team1.players.set([replacement])
+        m.save()
+
+        assert set(
+            m.participants.filter(side=Side.ONE).values_list("player_id", flat=True)
+        ) == {replacement.pk}
+        assert m.participants.count() == 2
 
     def test_deleting_the_match_removes_participants(self):
         from pingpong.models import MatchParticipant, Side
