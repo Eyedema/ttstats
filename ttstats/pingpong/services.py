@@ -106,3 +106,47 @@ def sync_scheduled_match_participants(scheduled_match):
     _sync_participants(
         scheduled_match, ScheduledMatchParticipant, "scheduled_match"
     )
+
+
+def link_championship_entries(obj):
+    """Point side1_entry / side2_entry at the entries matching each side.
+
+    Runs on save for anything in a championship whose entry links are not set
+    yet, so converting a scheduled match, creating one in the admin, or
+    building one in a factory all end up linked without each remembering to.
+    Already-set links are left alone.
+    """
+    from .models import ChampionshipEntry
+
+    if not obj.championship_id:
+        return
+    if obj.side1_entry_id and obj.side2_entry_id:
+        return
+
+    entries = ChampionshipEntry.objects.filter(
+        championship_id=obj.championship_id
+    ).prefetch_related("members")
+    by_members = {
+        frozenset(m.player_id for m in entry.members.all()): entry
+        for entry in entries
+    }
+
+    updates = {}
+    for attr, side in (("side1_entry", Side.ONE), ("side2_entry", Side.TWO)):
+        if getattr(obj, f"{attr}_id"):
+            continue
+        key = frozenset(
+            p.player_id for p in obj.participants.all() if p.side == side
+        )
+        entry = by_members.get(key)
+        if entry is not None:
+            updates[attr] = entry
+
+    if not updates:
+        return
+
+    type(obj).all_objects.filter(pk=obj.pk).update(
+        **{f"{attr}_id": entry.pk for attr, entry in updates.items()}
+    )
+    for attr, entry in updates.items():
+        setattr(obj, attr, entry)

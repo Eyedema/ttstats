@@ -2136,39 +2136,38 @@ class ChampionshipDetailView(LoginRequiredMixin, DetailView):
         context['completed_count'] = completed_matches.count()
 
         # Pass participants count to avoid multiple COUNT queries in template
-        context['participants_count'] = championship.participants.count()
+        context['participants_count'] = championship.entries.count()
 
         # Build results matrix for round-robin display
         # Use winner__isnull=False instead of is_confirmed=True because
         # championship matches may have winners but not yet be confirmed
         confirmed_champ_matches = Match.all_objects.filter(
-            championship=championship, winner__isnull=False
-        ).select_related('team1', 'team2', 'winner').prefetch_related('games')
+            championship=championship, winner_side__isnull=False
+        )
 
         matrix = {}
         for match in confirmed_champ_matches:
-            t1_score = sum(1 for g in match.games.all() if g.winner_id == match.team1_id)
-            t2_score = sum(1 for g in match.games.all() if g.winner_id == match.team2_id)
-            matrix[(match.team1_id, match.team2_id)] = {
-                'score': f'{t1_score}-{t2_score}',
-                'won': match.winner_id == match.team1_id,
+            matrix[(match.side1_entry_id, match.side2_entry_id)] = {
+                'score': f'{match.team1_score_cache}-{match.team2_score_cache}',
+                'won': match.winner_side == Side.ONE,
                 'match_pk': match.pk,
             }
 
         standings = context.get('standings', [])
-        matrix_teams = [s['team'] for s in standings]
+        matrix_teams = [s['entry'] for s in standings]
         matrix_rows = []
-        for team in matrix_teams:
+        for entry in matrix_teams:
             row = []
             for opponent in matrix_teams:
-                if team.pk == opponent.pk:
+                if entry.pk == opponent.pk:
                     row.append({'self': True})
                 else:
-                    result = matrix.get((team.pk, opponent.pk))
+                    result = matrix.get((entry.pk, opponent.pk))
                     row.append(result if result else {'pending': True})
             matrix_rows.append({
-                'team': team,
-                'display_name': team.name or str(team),
+                'team': entry,
+                'entry': entry,
+                'display_name': str(entry),
                 'cells': row,
             })
         context['matrix_rows'] = matrix_rows
@@ -2178,25 +2177,31 @@ class ChampionshipDetailView(LoginRequiredMixin, DetailView):
         try:
             player = self.request.user.player
             # Get user's teams that match championship type
-            required_size = 1 if championship.championship_type == Championship.ChampionshipType.SINGLES else 2
+            already_entered = championship.entry_members.filter(
+                player=player
+            ).exists()
 
-            user_teams = Team.objects.annotate(
-                player_count=Count('players', distinct=True)
-            ).filter(
-                player_count=required_size,
-                players=player,
-            ).exclude(
-                pk__in=championship.participants.values_list('pk', flat=True)
-            ).distinct().order_by('name')
+            # Doubles entries need a partner, so offer the other players who
+            # have not entered yet.
+            available_partners = Player.objects.exclude(pk=player.pk).exclude(
+                pk__in=championship.entry_members.values_list('player_id', flat=True)
+            ).order_by('name')
 
             context['can_register'] = (
-                    championship.is_registration_open and
-                    not championship.is_full and
-                    user_teams.exists()
+                    championship.is_registration_open
+                    and not championship.is_full
+                    and not already_entered
             )
-            context['user_teams'] = user_teams
+            context['needs_partner'] = (
+                championship.championship_type
+                == Championship.ChampionshipType.DOUBLES
+            )
+            context['available_partners'] = available_partners
+            context['user_teams'] = []
         except (AttributeError, Player.DoesNotExist):
             context['can_register'] = False
+            context['needs_partner'] = False
+            context['available_partners'] = []
             context['user_teams'] = []
 
         return context
@@ -2292,34 +2297,36 @@ class ChampionshipRegisterView(LoginRequiredMixin, View):
 
     def post(self, request, pk):
         championship = get_object_or_404(Championship, pk=pk)
-        team_id = request.POST.get('team')
-
-        if not team_id:
-            messages.error(request, "Please select a team to register")
-            return redirect('pingpong:championship_detail', pk=pk)
-
-        team = get_object_or_404(Team, pk=team_id)
-
-        # Verify user is part of this team
         try:
             player = request.user.player
-            if player not in team.players.all():
-                messages.error(request, "You can only register your own teams")
-                return redirect('pingpong:championship_detail', pk=pk)
         except (AttributeError, Player.DoesNotExist):
             messages.error(request, "You need a player profile to register")
             return redirect('pingpong:championship_detail', pk=pk)
 
-        # Try to register
-        if championship.register_team(team):
+        # You always enter as yourself; doubles additionally needs a partner.
+        entry_players = [player]
+        if championship.championship_type == Championship.ChampionshipType.DOUBLES:
+            partner_id = request.POST.get('partner') or request.POST.get('team')
+            if not partner_id:
+                messages.error(request, "Please choose a partner to register")
+                return redirect('pingpong:championship_detail', pk=pk)
+            partner = get_object_or_404(Player, pk=partner_id)
+            if partner.pk == player.pk:
+                messages.error(request, "You cannot partner with yourself")
+                return redirect('pingpong:championship_detail', pk=pk)
+            entry_players.append(partner)
+
+        entry = championship.register_entry(entry_players)
+        if entry is not None:
             messages.success(
                 request,
-                f"Successfully registered {team} for {championship.name}!"
+                f"Successfully registered {entry} for {championship.name}!"
             )
         else:
             messages.error(
                 request,
-                f"Unable to register. Championship may be full or registration closed."
+                "Unable to register. Championship may be full, registration "
+                "closed, or one of you is already entered."
             )
 
         return redirect('pingpong:championship_detail', pk=pk)
@@ -2364,22 +2371,17 @@ class ChampionshipUnregisterView(LoginRequiredMixin, View):
 
     def post(self, request, pk):
         championship = get_object_or_404(Championship, pk=pk)
-        team_id = request.POST.get('team')
 
-        if not team_id:
-            messages.error(request, "Invalid team")
-            return redirect('pingpong:championship_detail', pk=pk)
-
-        team = get_object_or_404(Team, pk=team_id)
-
-        # Verify user is part of this team
         try:
             player = request.user.player
-            if player not in team.players.all():
-                messages.error(request, "You can only unregister your own teams")
-                return redirect('pingpong:championship_detail', pk=pk)
         except (AttributeError, Player.DoesNotExist):
             messages.error(request, "You need a player profile")
+            return redirect('pingpong:championship_detail', pk=pk)
+
+        # You can only withdraw the entry you are part of.
+        entry = championship.entries.filter(members__player=player).first()
+        if entry is None:
+            messages.error(request, "You are not registered for this championship")
             return redirect('pingpong:championship_detail', pk=pk)
 
         # Check if championship allows unregistration
@@ -2387,9 +2389,17 @@ class ChampionshipUnregisterView(LoginRequiredMixin, View):
             messages.error(request, "Cannot unregister after championship has started")
             return redirect('pingpong:championship_detail', pk=pk)
 
-        # Unregister
-        championship.participants.remove(team)
-        messages.success(request, f"Successfully unregistered {team} from {championship.name}")
+        label = str(entry)
+        # Keep the legacy M2M in step while it still exists.
+        entry_player_ids = set(entry.members.values_list('player_id', flat=True))
+        for team in championship.participants.prefetch_related('players'):
+            if {p.pk for p in team.players.all()} == entry_player_ids:
+                championship.participants.remove(team)
+        entry.delete()
+
+        messages.success(
+            request, f"Successfully unregistered {label} from {championship.name}"
+        )
 
         return redirect('pingpong:championship_detail', pk=pk)
 

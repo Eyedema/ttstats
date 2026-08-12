@@ -6,7 +6,7 @@ from django.core.cache import cache as django_cache
 from django.test import Client
 from factory.django import DjangoModelFactory
 
-from pingpong.models import Championship, Game, Location, Match, MatchConfirmation, Player, ScheduledMatch, Team
+from pingpong.models import Championship, ChampionshipEntry, ChampionshipEntryMember, Game, Location, Match, MatchConfirmation, Player, ScheduledMatch, Team
 from pingpong.services import resolve_team
 
 
@@ -222,6 +222,7 @@ class ChampionshipFactory(DjangoModelFactory):
     @classmethod
     def _create(cls, model_class, *args, **kwargs):
         participants = kwargs.pop('with_participants', None)
+        entries = kwargs.pop('with_entries', None)
         created_by = kwargs.pop('created_by', None)
 
         if created_by:
@@ -229,8 +230,21 @@ class ChampionshipFactory(DjangoModelFactory):
 
         championship = super()._create(model_class, *args, **kwargs)
 
+        # with_participants takes Teams (legacy), with_entries takes lists of
+        # players. Both end up as ChampionshipEntry rows; Teams are still set
+        # too while the M2M exists.
         if participants:
             championship.participants.set(participants)
+            entries = entries or [list(t.players.all()) for t in participants]
+
+        for players in entries or []:
+            entry = ChampionshipEntry.objects.create(championship=championship)
+            ChampionshipEntryMember.objects.bulk_create([
+                ChampionshipEntryMember(
+                    entry=entry, player=p, championship=championship
+                )
+                for p in players
+            ])
 
         return championship
 

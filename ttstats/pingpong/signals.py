@@ -8,7 +8,11 @@ from .cache_utils import invalidate_match_caches, invalidate_player_caches
 from .emails import send_match_confirmation_email, send_passkey_registered_email
 from .models import Game, Match, MatchConfirmation, Player, ScheduledMatch, UserProfile
 from .elo import update_player_elo
-from .services import sync_match_participants, sync_scheduled_match_participants
+from .services import (
+    link_championship_entries,
+    sync_match_participants,
+    sync_scheduled_match_participants,
+)
 
 
 @receiver(post_save, sender=User)
@@ -34,11 +38,13 @@ def sync_participants_on_match_save(sender, instance, **kwargs):
     shell -- instead of each one remembering to write participant rows.
     """
     sync_match_participants(instance)
+    link_championship_entries(instance)
 
 
 @receiver(post_save, sender=ScheduledMatch)
 def sync_participants_on_scheduled_match_save(sender, instance, **kwargs):
     sync_scheduled_match_participants(instance)
+    link_championship_entries(instance)
 
 
 @receiver(pre_save, sender=Match)

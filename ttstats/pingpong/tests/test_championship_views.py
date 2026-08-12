@@ -251,17 +251,52 @@ class TestChampionshipEditView:
 
 @pytest.mark.django_db
 class TestChampionshipRegistration:
-    def test_register_team(self):
+    def test_register_creates_an_entry(self):
         player = _player_with_verified_user()
-        team = _singles_team(player)
         client = _auth_client(player.user)
         champ = ChampionshipFactory()
         resp = client.post(
-            reverse("pingpong:championship_register", args=[champ.pk]),
-            {"team": team.pk},
+            reverse("pingpong:championship_register", args=[champ.pk]), {}
         )
         assert resp.status_code == 302
-        assert champ.participants.filter(pk=team.pk).exists()
+        assert champ.entries.count() == 1
+        assert list(champ.entries.first().players) == [player]
+
+    def test_registering_twice_is_rejected(self):
+        player = _player_with_verified_user()
+        client = _auth_client(player.user)
+        champ = ChampionshipFactory()
+        url = reverse("pingpong:championship_register", args=[champ.pk])
+        client.post(url, {})
+        client.post(url, {})
+        assert champ.entries.count() == 1
+
+    def test_doubles_registration_requires_a_partner(self):
+        from pingpong.models import Championship as C
+
+        player = _player_with_verified_user()
+        client = _auth_client(player.user)
+        champ = ChampionshipFactory(championship_type=C.ChampionshipType.DOUBLES)
+        resp = client.post(
+            reverse("pingpong:championship_register", args=[champ.pk]), {}
+        )
+        assert resp.status_code == 302
+        assert champ.entries.count() == 0
+
+    def test_doubles_registration_with_a_partner(self):
+        from pingpong.models import Championship as C
+
+        player = _player_with_verified_user()
+        partner = _player_with_verified_user()
+        client = _auth_client(player.user)
+        champ = ChampionshipFactory(championship_type=C.ChampionshipType.DOUBLES)
+        resp = client.post(
+            reverse("pingpong:championship_register", args=[champ.pk]),
+            {"partner": partner.pk},
+        )
+        assert resp.status_code == 302
+        assert champ.entries.count() == 1
+        assert set(champ.entries.first().players) == {player, partner}
 
     def test_unregister_team(self):
         player = _player_with_verified_user()

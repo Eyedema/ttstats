@@ -160,12 +160,16 @@ class ChampionshipManager(models.Manager):
 
         # Regular users see public + their championships
         try:
+            from .models import ChampionshipEntryMember
             user_player = user.player
+            entered = Exists(
+                ChampionshipEntryMember.objects.filter(
+                    championship_id=OuterRef('pk'), player=user_player
+                )
+            )
             return qs.filter(
-                Q(is_public=True) |
-                Q(participants__players=user_player) |
-                Q(created_by=user_player)
-            ).distinct()
+                Q(is_public=True) | Q(created_by=user_player) | entered
+            )
         except AttributeError:
             return qs.filter(is_public=True)
 

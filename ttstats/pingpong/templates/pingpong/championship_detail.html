@@ -144,15 +144,17 @@
         {% if can_register %}
         <form method="post" action="{% url 'pingpong:championship_register' championship.pk %}" class="space-y-4">
             {% csrf_token %}
+            {% if needs_partner %}
             <div class="space-y-2">
-                <label class="text-sm font-medium">Select Your Team</label>
-                <select name="team" required class="flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring">
-                    <option value="">Choose a team...</option>
-                    {% for team in user_teams %}
-                    <option value="{{ team.pk }}">{{ team }}</option>
+                <label class="text-sm font-medium">Choose Your Partner</label>
+                <select name="partner" required class="flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring">
+                    <option value="">Choose a partner...</option>
+                    {% for partner in available_partners %}
+                    <option value="{{ partner.pk }}">{{ partner }}</option>
                     {% endfor %}
                 </select>
             </div>
+            {% endif %}
             <button type="submit" class="inline-flex items-center justify-center gap-2 rounded-md bg-success px-4 py-2 text-sm font-medium text-white hover:bg-success/90 transition-colors min-h-[44px]">
                 <img src="{% static 'pingpong/icons/check.svg' %}" class="w-4 h-4 invert" alt="">
                 Register for Championship
@@ -219,9 +221,9 @@
                             </div>
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap">
-                            <div class="font-medium">{{ entry.team }}</div>
+                            <div class="font-medium">{{ entry.entry }}</div>
                             <div class="text-xs text-muted-foreground">
-                                {% for player in entry.team.players.all %}
+                                {% for player in entry.entry.players %}
                                     {{ player.name }}{% if not forloop.last %}, {% endif %}
                                 {% endfor %}
                             </div>
@@ -264,9 +266,9 @@
                         {% endif %}
                     </div>
                     <div class="flex-1">
-                        <div class="font-semibold">{{ entry.team }}</div>
+                        <div class="font-semibold">{{ entry.entry }}</div>
                         <div class="text-xs text-muted-foreground">
-                            {% for player in entry.team.players.all %}
+                            {% for player in entry.entry.players %}
                                 {{ player.name }}{% if not forloop.last %}, {% endif %}
                             {% endfor %}
                         </div>
@@ -361,23 +363,22 @@
             <h2 class="text-lg md:text-xl font-semibold">Participants ({{ participants_count }})</h2>
         </div>
         <div class="p-4 grid grid-cols-1 md:grid-cols-2 gap-3">
-            {% for team in championship.participants.all %}
+            {% for entry in championship.entries.all %}
             <div class="flex items-center gap-3 p-3 rounded-lg border hover:bg-muted/50">
                 <div class="w-10 h-10 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-semibold flex-shrink-0">
-                    {{ team.name|slice:":1"|default:"T"|upper }}
+                    {{ entry|stringformat:"s"|slice:":1"|upper }}
                 </div>
                 <div class="flex-1 min-w-0">
-                    <div class="font-medium truncate">{{ team }}</div>
+                    <div class="font-medium truncate">{{ entry }}</div>
                     <div class="text-xs text-muted-foreground truncate">
-                        {% for player in team.players.all %}
+                        {% for player in entry.players %}
                             {{ player.name }}{% if not forloop.last %}, {% endif %}
                         {% endfor %}
                     </div>
                 </div>
-                {% if championship.status == 'registration' and user.player in team.players.all %}
+                {% if championship.status == 'registration' and user.player in entry.players %}
                 <form method="post" action="{% url 'pingpong:championship_unregister' championship.pk %}">
                     {% csrf_token %}
-                    <input type="hidden" name="team" value="{{ team.pk }}">
                     <button type="submit" class="text-xs text-destructive hover:underline">
                         Unregister
                     </button>

@@ -888,108 +888,104 @@ class Championship(models.Model):
     @property
     def current_participants_count(self):
         """Get current number of participants"""
-        return self.participants.count()
+        return self.entries.count()
 
     @property
     def is_full(self):
         """Check if championship is at capacity"""
         return self.current_participants_count >= self.max_participants
 
-    def can_register(self, team):
-        """Check if a team can register for this championship"""
+    @property
+    def required_entry_size(self):
+        return 1 if self.championship_type == self.ChampionshipType.SINGLES else 2
+
+    def can_register(self, players):
+        """Whether ``players`` may enter as one competitor."""
+        players = list(players)
         if not self.is_registration_open:
             return False
         if self.is_full:
             return False
-        if self.participants.filter(pk=team.pk).exists():
+        if len(players) != self.required_entry_size:
             return False
-        # Check team size matches championship type
-        team_size = team.players.count()
-        if self.championship_type == self.ChampionshipType.SINGLES and team_size != 1:
+        if len({p.pk for p in players}) != len(players):
             return False
-        if self.championship_type == self.ChampionshipType.DOUBLES and team_size != 2:
+        # One entry per player per championship (also a DB constraint).
+        if self.entry_members.filter(player__in=players).exists():
             return False
         return True
 
-    def register_team(self, team):
-        """Register a team for the championship"""
-        if self.can_register(team):
-            self.participants.add(team)
-            return True
-        return False
+    def register_entry(self, players, display_name=""):
+        """Create an entry for ``players``. Returns the entry, or None."""
+        players = list(players)
+        if not self.can_register(players):
+            return None
+        entry = ChampionshipEntry.objects.create(
+            championship=self, display_name=display_name
+        )
+        ChampionshipEntryMember.objects.bulk_create(
+            [
+                ChampionshipEntryMember(entry=entry, player=p, championship=self)
+                for p in players
+            ]
+        )
+        return entry
 
     def generate_schedule(self):
-        """
-        Generate round-robin schedule for the championship using the circle method.
+        """Generate the round-robin schedule (home and away legs).
 
-        Creates home and away rounds (andata e ritorno). Each round has n/2 matches
-        where every team plays exactly once. Rounds are spaced 7 days apart.
+        The pairing itself lives in championship_scheduling as a pure
+        function; this method only turns pairings into rows.
         """
         from datetime import timedelta, time
 
-        participants = list(self.participants.all())
-        n = len(participants)
+        from .championship_scheduling import round_robin_double_rounds
+        from .services import resolve_team
 
-        if n < 2:
+        entries = list(self.entries.prefetch_related("members__player"))
+        if len(entries) < 2:
             return False
 
-        # Delete existing scheduled matches for this championship
         ScheduledMatch.all_objects.filter(championship=self).delete()
 
-        # Circle method for round-robin scheduling
-        # If odd number of participants, add a "bye" (None)
-        teams = list(participants)
-        if n % 2 == 1:
-            teams.append(None)  # bye
-
-        num_teams = len(teams)
-        num_rounds = num_teams - 1
-
-        # Generate rounds using circle method:
-        # Fix first team, rotate the rest
-        rounds = []  # List of (round_number, [(team1, team2), ...])
-
-        for round_idx in range(num_rounds):
-            round_matches = []
-            for i in range(num_teams // 2):
-                t1 = teams[i]
-                t2 = teams[num_teams - 1 - i]
-                if t1 is not None and t2 is not None:
-                    round_matches.append((t1, t2))
-            rounds.append((round_idx + 1, round_matches))
-
-            # Rotate: keep teams[0] fixed, rotate the rest clockwise
-            teams = [teams[0]] + [teams[-1]] + teams[1:-1]
-
-        # Create home leg (andata) and away leg (ritorno)
-        all_rounds = []
-        for round_num, matches in rounds:
-            all_rounds.append((round_num, matches))
-        for round_num, matches in rounds:
-            # Swap home/away for return leg
-            away_matches = [(t2, t1) for t1, t2 in matches]
-            all_rounds.append((round_num + num_rounds, away_matches))
-
-        # Create scheduled matches, 1 round per week
+        all_rounds = round_robin_double_rounds(entries)
         match_time = time(hour=18, minute=0)
 
-        matches_to_create = []
-        for round_num, round_matches in all_rounds:
+        to_create = []
+        for round_num, pairings in all_rounds:
             round_date = self.start_date + timedelta(weeks=round_num - 1)
-            for team1, team2 in round_matches:
-                matches_to_create.append(ScheduledMatch(
+            for entry1, entry2 in pairings:
+                to_create.append(ScheduledMatch(
                     championship=self,
-                    team1=team1,
-                    team2=team2,
+                    team1=resolve_team([m.player for m in entry1.members.all()]),
+                    team2=resolve_team([m.player for m in entry2.members.all()]),
+                    side1_entry=entry1,
+                    side2_entry=entry2,
                     scheduled_date=round_date,
                     scheduled_time=match_time,
                     location=self.location,
                     created_by=self.created_by,
                     round_number=round_num,
                 ))
-        ScheduledMatch.all_objects.bulk_create(matches_to_create)
+        created = ScheduledMatch.all_objects.bulk_create(to_create)
 
-        # Set end_date based on last round
+        # bulk_create does not fire post_save, so the participant rows the
+        # save hook would have written have to be built explicitly.
+        participant_rows = [
+            ScheduledMatchParticipant(
+                scheduled_match=scheduled, player_id=member.player_id, side=side
+            )
+            for scheduled in created
+            for side, entry in (
+                (Side.ONE, scheduled.side1_entry),
+                (Side.TWO, scheduled.side2_entry),
+            )
+            for member in entry.members.all()
+        ]
+        ScheduledMatchParticipant.objects.bulk_create(
+            participant_rows, ignore_conflicts=True
+        )
+
         if all_rounds:
             last_round_num = all_rounds[-1][0]
             self.end_date = self.start_date + timedelta(weeks=last_round_num - 1)
@@ -998,77 +994,54 @@ class Championship(models.Model):
         return True
 
     def get_standings(self):
-        """
-        Calculate championship standings.
+        """Calculate championship standings.
 
-        Ranking criteria:
-        1. Points (3 for win, 0 for loss)
-        2. Game difference (games won - games lost)
-        3. Total games won
-        4. Total games lost
+        Ranked by points (3 per win), then game difference, then games won,
+        then fewest games lost.
         """
-        standings = []
-
-        # Fetch all championship matches once with prefetch
-        all_matches_qs = Match.all_objects.filter(
-            championship=self,
-        ).select_related('team1', 'team2', 'winner').prefetch_related(
-            'games', 'confirmations',
-            'team1__players', 'team1__players__user__profile',
-            'team2__players', 'team2__players__user__profile',
+        matches = list(
+            Match.all_objects.filter(championship=self).prefetch_related(
+                'confirmations', 'participants__player__user__profile'
+            )
         )
-        # Filter to confirmed matches in Python using prefetched data
-        all_matches = [m for m in all_matches_qs if m.match_confirmed]
+        confirmed = [m for m in matches if m.match_confirmed]
 
-        # Pre-compute game scores using prefetched data (avoids N+1)
-        match_scores = {}
-        for match in all_matches:
-            t1_score = sum(1 for g in match.games.all() if g.winner_id == match.team1_id)
-            t2_score = sum(1 for g in match.games.all() if g.winner_id == match.team2_id)
-            match_scores[match.pk] = (t1_score, t2_score)
+        standings = []
+        for entry in self.entries.prefetch_related('members__player'):
+            played = wins = losses = games_won = games_lost = 0
 
-        participants = self.participants.prefetch_related('players').all()
-
-        for team in participants:
-            played = 0
-            wins = 0
-            losses = 0
-            games_won = 0
-            games_lost = 0
-
-            for match in all_matches:
-                if match.team1_id != team.pk and match.team2_id != team.pk:
+            for match in confirmed:
+                if match.side1_entry_id == entry.pk:
+                    my_side, mine, theirs = (
+                        Side.ONE, match.team1_score_cache, match.team2_score_cache
+                    )
+                elif match.side2_entry_id == entry.pk:
+                    my_side, mine, theirs = (
+                        Side.TWO, match.team2_score_cache, match.team1_score_cache
+                    )
+                else:
                     continue
 
                 played += 1
-                is_team1 = match.team1_id == team.pk
-                t1_score, t2_score = match_scores[match.pk]
-                team_score = t1_score if is_team1 else t2_score
-                opponent_score = t2_score if is_team1 else t1_score
-
-                games_won += team_score
-                games_lost += opponent_score
-
-                if match.winner_id == team.pk:
+                games_won += mine
+                games_lost += theirs
+                if match.winner_side == my_side:
                     wins += 1
                 else:
                     losses += 1
 
-            points = (wins * 3)
-            game_difference = games_won - games_lost
-
             standings.append({
-                'team': team,
+                'entry': entry,
+                'team': entry,  # legacy key, still used by templates
                 'played': played,
                 'wins': wins,
                 'losses': losses,
                 'games_won': games_won,
                 'games_lost': games_lost,
-                'game_difference': game_difference,
-                'points': points,
+                'game_difference': games_won - games_lost,
+                'points': wins * 3,
             })
 
-        # Sort by: points (desc), game difference (desc), games won (desc), games lost (asc)
         standings.sort(
             key=lambda x: (x['points'], x['game_difference'], x['games_won'], -x['games_lost']),
             reverse=True
@@ -1099,8 +1072,7 @@ class Championship(models.Model):
             championship=self
         ).prefetch_related(
             'confirmations',
-            'team1__players__user__profile',
-            'team2__players__user__profile',
+            'participants__player__user__profile',
         )
         for match in championship_matches:
             if not match.match_confirmed:
@@ -1121,7 +1093,7 @@ class Championship(models.Model):
         # Check if user is a participant
         try:
             player = user.player
-            return self.participants.filter(players=player).exists()
+            return self.entry_members.filter(player=player).exists()
         except (AttributeError, Player.DoesNotExist):
             return False
 
