@@ -143,10 +143,6 @@ function scoreboardApp() {
       this.state = p.state || {};
       this.currentServer = p.current_server;
       this.shouldPromptSideSwitch = p.should_prompt_side_switch;
-      // localStorage mirror for offline resilience (KAN-11)
-      try {
-        localStorage.setItem('live_match_' + {{ match.pk }}, JSON.stringify(p));
-      } catch (_) {}
       if (p.redirect_url) {
         window.location.href = p.redirect_url;
       }

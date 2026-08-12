@@ -214,7 +214,7 @@
                         <a href="{% url 'pingpong:player_detail' match.player1.pk %}" class="font-semibold hover:underline">
                             {{ match.player1 }}
                         </a>
-                        {% if match.winner == match.player1 %}
+                        {% if match.winner == match.team1 %}
                         <div class="flex items-center gap-1 text-xs text-success">
                             <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-3 h-3" alt="">
                             Winner
@@ -258,7 +258,7 @@
                         <a href="{% url 'pingpong:player_detail' match.player2.pk %}" class="font-semibold hover:underline">
                             {{ match.player2 }}
                         </a>
-                        {% if match.winner == match.player2 %}
+                        {% if match.winner == match.team2 %}
                         <div class="flex items-center gap-1 text-xs text-success">
                             <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-3 h-3" alt="">
                             Winner
@@ -332,7 +332,7 @@
             </div>
             {% else %}
             <!-- Player 1 Card -->
-            <div class="rounded-lg border bg-white p-4 {% if match.winner == match.player1 %}ring-2 ring-success{% endif %}">
+            <div class="rounded-lg border bg-white p-4 {% if match.winner == match.team1 %}ring-2 ring-success{% endif %}">
                 <div class="flex items-center justify-between mb-2">
                     <div class="flex items-center gap-3">
                         <div class="w-10 h-10 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-semibold">
@@ -342,7 +342,7 @@
                             <a href="{% url 'pingpong:player_detail' match.player1.pk %}" class="font-semibold hover:underline">
                                 {{ match.player1 }}
                             </a>
-                            {% if match.winner == match.player1 %}
+                            {% if match.winner == match.team1 %}
                             <div class="flex items-center gap-1 text-xs text-success font-bold">
                                 <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-3 h-3" alt="">
                                 WINNER
@@ -355,7 +355,7 @@
                             {% endif %}
                         </div>
                     </div>
-                    <div class="text-4xl font-bold {% if match.winner == match.player1 %}text-success{% endif %}">
+                    <div class="text-4xl font-bold {% if match.winner == match.team1 %}text-success{% endif %}">
                         {{ match.team1_score }}
                     </div>
                 </div>
@@ -380,7 +380,7 @@
             </div>
 
             <!-- Player 2 Card -->
-            <div class="rounded-lg border bg-white p-4 {% if match.winner == match.player2 %}ring-2 ring-success{% endif %}">
+            <div class="rounded-lg border bg-white p-4 {% if match.winner == match.team2 %}ring-2 ring-success{% endif %}">
                 <div class="flex items-center justify-between mb-2">
                     <div class="flex items-center gap-3">
                         <div class="w-10 h-10 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-semibold">
@@ -390,7 +390,7 @@
                             <a href="{% url 'pingpong:player_detail' match.player2.pk %}" class="font-semibold hover:underline">
                                 {{ match.player2 }}
                             </a>
-                            {% if match.winner == match.player2 %}
+                            {% if match.winner == match.team2 %}
                             <div class="flex items-center gap-1 text-xs text-success font-bold">
                                 <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-3 h-3" alt="">
                                 WINNER
@@ -403,7 +403,7 @@
                             {% endif %}
                         </div>
                     </div>
-                    <div class="text-4xl font-bold {% if match.winner == match.player2 %}text-success{% endif %}">
+                    <div class="text-4xl font-bold {% if match.winner == match.team2 %}text-success{% endif %}">
                         {{ match.team2_score }}
                     </div>
                 </div>

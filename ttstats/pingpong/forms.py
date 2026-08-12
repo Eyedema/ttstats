@@ -94,13 +94,6 @@ class MatchEditForm(forms.ModelForm):
         fields = ['location', 'notes']
 
 
-class TeamEditForm(forms.ModelForm):
-    """Form for editing completed teams - only name"""
-    class Meta:
-        model = Team
-        fields = ['name']
-
-
 class GameForm(forms.ModelForm):
     class Meta:
         model = Game

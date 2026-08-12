@@ -267,6 +267,48 @@ class TestMatchDetailView:
         assert resp.status_code == 404
 
 
+@pytest.mark.django_db
+class TestMatchDetailWinnerDisplay:
+    """The singles layout used to compare match.winner (a Team) against
+    match.player1 (a Player), so the winner badge never rendered. The literal
+    "WINNER" appears only in the badge blocks, once per winning side.
+    """
+
+    def _finished_singles(self, winner_side):
+        u, p = _verified_user_with_player()
+        other = PlayerFactory(with_user=True)
+        m = MatchFactory(player1=p, player2=other, best_of=5)
+        hi, lo = (11, 5) if winner_side == 1 else (5, 11)
+        for n in (1, 2, 3):
+            GameFactory(match=m, game_number=n, team1_score=hi, team2_score=lo)
+        m.refresh_from_db()
+        return u, m
+
+    def test_badge_renders_when_side1_wins(self):
+        u, m = self._finished_singles(1)
+        assert m.winner == m.team1
+        resp = _login_client(u).get(reverse("pingpong:match_detail", args=[m.pk]))
+        assert resp.status_code == 200
+        assert resp.content.decode().count("WINNER") == 1
+
+    def test_badge_renders_when_side2_wins(self):
+        u, m = self._finished_singles(2)
+        assert m.winner == m.team2
+        resp = _login_client(u).get(reverse("pingpong:match_detail", args=[m.pk]))
+        assert resp.status_code == 200
+        assert resp.content.decode().count("WINNER") == 1
+
+    def test_no_badge_while_match_unfinished(self):
+        u, p = _verified_user_with_player()
+        other = PlayerFactory(with_user=True)
+        m = MatchFactory(player1=p, player2=other, best_of=5)
+        GameFactory(match=m, game_number=1, team1_score=11, team2_score=5)
+        m.refresh_from_db()
+        assert m.winner is None
+        resp = _login_client(u).get(reverse("pingpong:match_detail", args=[m.pk]))
+        assert resp.content.decode().count("WINNER") == 0
+
+
 # ===========================================================================
 # MatchCreateView
 # ===========================================================================
