@@ -50,6 +50,53 @@ class TestSendMatchConfirmationEmail:
         # Player2 lost 0-3 (their score first)
         assert "0-3" in mail.outbox[0].body
 
+    def test_score_orientation_is_asymmetric_not_a_sweep(self):
+        """3-0/0-3 would also pass if the sides were swapped consistently.
+        Pin an uneven scoreline so orientation is unambiguous.
+        """
+        m = MatchFactory()
+        GameFactory(match=m, game_number=1, team1_score=11, team2_score=5)
+        GameFactory(match=m, game_number=2, team1_score=7, team2_score=11)
+        GameFactory(match=m, game_number=3, team1_score=11, team2_score=9)
+        GameFactory(match=m, game_number=4, team1_score=11, team2_score=6)
+        m.refresh_from_db()
+
+        mail.outbox.clear()
+        send_match_confirmation_email(m, m.player1)
+        assert "3-1" in mail.outbox[0].body
+
+        mail.outbox.clear()
+        send_match_confirmation_email(m, m.player2)
+        assert "1-3" in mail.outbox[0].body
+
+    def test_score_orientation_for_doubles_side2_player(self):
+        players = [PlayerFactory(with_user=True) for _ in range(4)]
+        m = MatchFactory(
+            team1_players=players[:2], team2_players=players[2:], is_double=True
+        )
+        for n in (1, 2, 3):
+            GameFactory(match=m, game_number=n, team1_score=11, team2_score=4)
+        m.refresh_from_db()
+
+        mail.outbox.clear()
+        send_match_confirmation_email(m, players[2])
+        body = mail.outbox[0].body
+        assert "0-3" in body
+        assert "LOST" in body
+
+        mail.outbox.clear()
+        send_match_confirmation_email(m, players[0])
+        body = mail.outbox[0].body
+        assert "3-0" in body
+        assert "WON" in body
+
+    def test_non_participant_gets_no_email(self):
+        m = self._make_complete_match()
+        outsider = PlayerFactory(with_user=True)
+        mail.outbox.clear()
+        send_match_confirmation_email(m, outsider)
+        assert mail.outbox == []
+
     def test_email_subject(self):
         m = self._make_complete_match()
         mail.outbox.clear()
