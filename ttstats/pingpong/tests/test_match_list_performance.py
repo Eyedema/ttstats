@@ -118,3 +118,50 @@ class TestMatchListViewPerformance:
         assert "page_obj" in response.context
         assert response.context["page_obj"].paginator.per_page == 10
         assert len(response.context["page_obj"].object_list) == 10
+
+
+@pytest.mark.django_db
+class TestMatchListViewPerformanceForRegularUser:
+    """The staff test above never exercises row-level filtering -- staff take
+    an early return. This one goes through MatchManager's semi-join.
+    """
+
+    def test_regular_user_list_stays_cheap_and_has_no_duplicate_rows(self):
+        from django.test.utils import CaptureQueriesContext
+
+        u = UserFactory()
+        u.profile.email_verified = True
+        u.profile.save()
+        me = PlayerFactory(user=u)
+        partner = PlayerFactory(with_user=True)
+
+        mine = []
+        for _ in range(10):
+            opp1, opp2 = PlayerFactory(with_user=True), PlayerFactory(with_user=True)
+            m = MatchFactory(
+                team1_players=[me, partner],
+                team2_players=[opp1, opp2],
+                is_double=True,
+            )
+            GameFactory(match=m, game_number=1, team1_score=11, team2_score=5)
+            mine.append(m.pk)
+        for _ in range(10):
+            MatchFactory()  # not mine
+
+        client = Client()
+        client.force_login(u)
+
+        with CaptureQueriesContext(connection) as context:
+            resp = client.get(reverse("pingpong:match_list"))
+            assert resp.status_code == 200
+            rows = list(resp.context["matches"])
+
+        # Doubles matches must appear once each; the old m2m OR needed
+        # .distinct() to achieve this, the semi-join gets it for free.
+        pks = [m.pk for m in rows]
+        assert sorted(pks) == sorted(mine)
+        assert len(pks) == len(set(pks))
+        # Currently ~35: the view still prefetches team1__players/team2__players.
+        # Step 3.5 switches those to participants__player; tighten this then.
+        print(f"\nRegular-user query count: {len(context.captured_queries)}")
+        assert len(context.captured_queries) <= 40
