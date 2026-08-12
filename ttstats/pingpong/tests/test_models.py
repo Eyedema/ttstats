@@ -1041,3 +1041,72 @@ class TestMatchRecompute:
         confirm_match(m)
         m.refresh_from_db()
         assert m.is_confirmed is True
+
+
+@pytest.mark.django_db
+class TestMatchParticipant:
+    def test_unique_per_match_and_player(self):
+        from django.db import IntegrityError
+        from pingpong.models import MatchParticipant, Side
+
+        m = MatchFactory()
+        p = PlayerFactory()
+        MatchParticipant.objects.create(match=m, player=p, side=Side.ONE)
+
+        with pytest.raises(IntegrityError):
+            MatchParticipant.objects.create(match=m, player=p, side=Side.TWO)
+
+    def test_same_player_may_appear_in_different_matches(self):
+        from pingpong.models import MatchParticipant, Side
+
+        p = PlayerFactory()
+        m1, m2 = MatchFactory(), MatchFactory()
+        MatchParticipant.objects.create(match=m1, player=p, side=Side.ONE)
+        MatchParticipant.objects.create(match=m2, player=p, side=Side.TWO)
+
+        assert p.match_participations.count() == 2
+
+    def test_participants_are_reachable_from_the_match(self):
+        from pingpong.models import MatchParticipant, Side
+
+        m = MatchFactory()
+        a, b = PlayerFactory(), PlayerFactory()
+        MatchParticipant.objects.create(match=m, player=a, side=Side.ONE)
+        MatchParticipant.objects.create(match=m, player=b, side=Side.TWO)
+
+        assert m.participants.count() == 2
+        assert {mp.player for mp in m.participants.filter(side=Side.ONE)} == {a}
+
+    def test_deleting_the_match_removes_participants(self):
+        from pingpong.models import MatchParticipant, Side
+
+        m = MatchFactory()
+        MatchParticipant.objects.create(match=m, player=PlayerFactory(), side=Side.ONE)
+        m.delete()
+
+        assert MatchParticipant.objects.count() == 0
+
+
+@pytest.mark.django_db
+class TestSideHelpers:
+    def test_players_on_returns_each_side(self):
+        from pingpong.models import Side
+
+        p1, p2 = PlayerFactory(with_user=True), PlayerFactory(with_user=True)
+        m = MatchFactory(player1=p1, player2=p2)
+
+        assert list(m.players_on(Side.ONE)) == [p1]
+        assert list(m.players_on(Side.TWO)) == [p2]
+        assert list(m.side1_players) == [p1]
+        assert list(m.side2_players) == [p2]
+
+    def test_players_on_for_doubles(self):
+        from pingpong.models import Side
+
+        players = [PlayerFactory(with_user=True) for _ in range(4)]
+        m = MatchFactory(
+            team1_players=players[:2], team2_players=players[2:], is_double=True
+        )
+
+        assert set(m.players_on(Side.ONE)) == set(players[:2])
+        assert set(m.players_on(Side.TWO)) == set(players[2:])

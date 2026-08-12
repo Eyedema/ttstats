@@ -112,6 +112,17 @@ class Team(models.Model):
             return f"{names[0]} and {names[1]} (+{len(players_list) - 2})"
 
 
+class Side(models.IntegerChoices):
+    """Which half of a match a player or result belongs to.
+
+    Replaces pointing at a Team object: a side is a position within one match,
+    not an entity, so an integer says what an FK could only imply.
+    """
+
+    ONE = 1, "Side 1"
+    TWO = 2, "Side 2"
+
+
 class Match(models.Model):
     """Individual match between two players"""
 
@@ -154,6 +165,10 @@ class Match(models.Model):
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
+    )
+    # Replacement for the winner FK; both are written during the migration.
+    winner_side = models.PositiveSmallIntegerField(
+        choices=Side.choices, null=True, blank=True, db_index=True
     )
 
     confirmations = models.ManyToManyField(Player, through='MatchConfirmation', related_name="player_matchconfirmations")
@@ -215,6 +230,26 @@ class Match(models.Model):
     @property
     def team2_score(self):
         return self.games.filter(winner=self.team2).count()
+
+    def team_for_side(self, side):
+        return self.team1 if side == Side.ONE else self.team2
+
+    def players_on(self, side):
+        """Players on one side of the match.
+
+        Still derived from the Team FKs; it will read MatchParticipant once the
+        backfill has run, so callers can migrate to it now.
+        """
+        team = self.team_for_side(side)
+        return team.players.all() if team else Player.objects.none()
+
+    @property
+    def side1_players(self):
+        return self.players_on(Side.ONE)
+
+    @property
+    def side2_players(self):
+        return self.players_on(Side.TWO)
 
     def _verified_player_ids(self, team):
         """Ids of players on ``team`` whose email is verified."""
@@ -344,6 +379,32 @@ class MatchConfirmation(models.Model):
         unique_together = ('match', 'player')  # Players need to confirm only once
 
 
+class MatchParticipant(models.Model):
+    """A player's place in a match. Replaces the Team indirection."""
+
+    match = models.ForeignKey(
+        Match, on_delete=models.CASCADE, related_name="participants"
+    )
+    player = models.ForeignKey(
+        Player, on_delete=models.CASCADE, related_name="match_participations"
+    )
+    side = models.PositiveSmallIntegerField(choices=Side.choices)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["match", "player"], name="uniq_match_player"
+            )
+        ]
+        indexes = [
+            models.Index(fields=["match", "side"]),
+            models.Index(fields=["player", "match"]),
+        ]
+
+    def __str__(self):
+        return f"{self.player} on side {self.side} of match {self.match_id}"
+
+
 class Game(models.Model):
     """Individual game within a match"""
 
@@ -358,6 +419,11 @@ class Game(models.Model):
         null=True,
         blank=True,
         related_name="games_won", # TODO: before it was won_games, search and replace it!
+    )
+    # Replacement for the winner FK. As an FK it had to equal one of the parent
+    # match's two teams -- an invariant nothing enforced; a side cannot be wrong.
+    winner_side = models.PositiveSmallIntegerField(
+        choices=Side.choices, null=True, blank=True
     )
 
     duration_minutes = models.IntegerField(null=True, blank=True)
@@ -534,6 +600,33 @@ class ScheduledMatch(models.Model):
     def is_fully_confirmed(self):
         """Check if linked match exists and is fully confirmed"""
         return bool(self.match and self.match.match_confirmed)
+
+
+class ScheduledMatchParticipant(models.Model):
+    """A player's place in a scheduled match. Mirrors MatchParticipant."""
+
+    scheduled_match = models.ForeignKey(
+        ScheduledMatch, on_delete=models.CASCADE, related_name="participants"
+    )
+    player = models.ForeignKey(
+        Player, on_delete=models.CASCADE, related_name="scheduled_match_participations"
+    )
+    side = models.PositiveSmallIntegerField(choices=Side.choices)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["scheduled_match", "player"],
+                name="uniq_scheduled_match_player",
+            )
+        ]
+        indexes = [models.Index(fields=["scheduled_match", "side"])]
+
+    def __str__(self):
+        return (
+            f"{self.player} on side {self.side} "
+            f"of scheduled match {self.scheduled_match_id}"
+        )
 
 
 class EloHistory(models.Model):
