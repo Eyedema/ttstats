@@ -184,7 +184,9 @@ class MatchDetailView(LoginRequiredMixin, DetailView):
                 context['player2_elo_change'] = change
 
         # Win probability (uses pre-match Elo if EloHistory exists)
-        t1_pct, t2_pct = get_win_probability(match.team1, match.team2, match=match)
+        t1_pct, t2_pct = get_win_probability(
+            match.side1_players, match.side2_players, match=match
+        )
         context['team1_win_pct'] = t1_pct
         context['team2_win_pct'] = t2_pct
 
@@ -1555,7 +1557,7 @@ class CalendarView(LoginRequiredMixin, TemplateView):
 
         # Attach win probability to upcoming matches
         for sm in upcoming_matches:
-            t1_pct, t2_pct = get_win_probability(sm.team1, sm.team2)
+            t1_pct, t2_pct = get_win_probability(sm.side1_players, sm.side2_players)
             sm.team1_win_pct = t1_pct
             sm.team2_win_pct = t2_pct
 
@@ -1610,7 +1612,9 @@ class ScheduledMatchDetailView(LoginRequiredMixin, DetailView):
         context['can_convert'] = can_convert
 
         # Win probability
-        t1_pct, t2_pct = get_win_probability(scheduled_match.team1, scheduled_match.team2)
+        t1_pct, t2_pct = get_win_probability(
+            scheduled_match.side1_players, scheduled_match.side2_players
+        )
         context['team1_win_pct'] = t1_pct
         context['team2_win_pct'] = t2_pct
 

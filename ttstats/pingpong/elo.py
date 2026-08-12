@@ -52,8 +52,11 @@ def calculate_elo_change(r1, r2, actual_score, k_factor):
     return round(k_factor * (actual_score - expected))
 
 
-def get_win_probability(team1, team2, match=None):
-    """Return (team1_pct, team2_pct) as integer percentages.
+def get_win_probability(side1_players, side2_players, match=None):
+    """Return (side1_pct, side2_pct) as integer percentages.
+
+    Takes the players on each side directly, so it works for a Match, a
+    ScheduledMatch, or a hypothetical pairing that isn't stored at all.
 
     If match is provided and has EloHistory records, uses pre-match ratings
     so the prediction reflects what was expected before the match was played.
@@ -61,8 +64,8 @@ def get_win_probability(team1, team2, match=None):
     """
     from .models import EloHistory
 
-    team1_players = list(team1.players.all())
-    team2_players = list(team2.players.all())
+    team1_players = list(side1_players)
+    team2_players = list(side2_players)
 
     if not team1_players or not team2_players:
         return (50, 50)
@@ -98,10 +101,10 @@ def update_player_elo(match):
     For 2v2, uses the average Elo of the team to calculate probabilities,
     then applies the same rating change to both players on the team.
     """
-    from .models import EloHistory, Match
+    from .models import EloHistory, Match, Side
 
     # Guard: Must have winner
-    if not match.winner:
+    if not match.winner_side:
         logger.debug(f"Skipping Elo update for match {match.pk}: no winner")
         return
 
@@ -119,20 +122,19 @@ def update_player_elo(match):
         return
 
     with transaction.atomic():
-        # 1. IDENTIFY TEAMS AND PLAYERS
-        # We determine if it's 2v2 by checking the number of players
-        team1_players = list(match.team1.players.all())
-        team2_players = list(match.team2.players.all())
-        
+        # 1. IDENTIFY SIDES AND PLAYERS
+        team1_players = list(match.players_on(Side.ONE))
+        team2_players = list(match.players_on(Side.TWO))
+
         is_double = match.is_double
 
-        if is_double:
-            # Calculate Team Elo (Average)
-            # If a team has 0 players (shouldn't happen), avoid division by zero
-            if not team1_players or not team2_players:
-                logger.error(f"Skipping Elo update for match {match.pk}: empty team found")
-                return
+        # An empty side means there is nothing to rate, singles or doubles.
+        if not team1_players or not team2_players:
+            logger.error(f"Skipping Elo update for match {match.pk}: empty side found")
+            return
 
+        if is_double:
+            # Team Elo is the average of its members
             r1 = sum(p.elo_rating for p in team1_players) / len(team1_players)
             r2 = sum(p.elo_rating for p in team2_players) / len(team2_players)
         else:
@@ -140,12 +142,8 @@ def update_player_elo(match):
             r1 = team1_players[0].elo_rating
             r2 = team2_players[0].elo_rating
 
-        # 2. DETERMINE OUTCOME (1 = Team 1 wins, 0 = Team 2 wins)
-        # We check if the winner object is the same as the team1 object
-        if match.winner == match.team1:
-            s1 = 1
-        else:
-            s1 = 0
+        # 2. DETERMINE OUTCOME (1 = side 1 wins, 0 = side 2 wins)
+        s1 = 1 if match.winner_side == Side.ONE else 0
         s2 = 1 - s1
 
         # 3. CALCULATE K-FACTORS

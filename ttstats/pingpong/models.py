@@ -235,13 +235,11 @@ class Match(models.Model):
         return self.team1 if side == Side.ONE else self.team2
 
     def players_on(self, side):
-        """Players on one side of the match.
-
-        Still derived from the Team FKs; it will read MatchParticipant once the
-        backfill has run, so callers can migrate to it now.
-        """
-        team = self.team_for_side(side)
-        return team.players.all() if team else Player.objects.none()
+        """Players on one side of the match, read from MatchParticipant."""
+        return Player.objects.filter(
+            match_participations__match_id=self.pk,
+            match_participations__side=side,
+        )
 
     @property
     def side1_players(self):
@@ -605,6 +603,21 @@ class ScheduledMatch(models.Model):
         if self.team2:
             return self.team2.players.first()
         return None
+
+    def players_on(self, side):
+        """Players on one side, read from ScheduledMatchParticipant."""
+        return Player.objects.filter(
+            scheduled_match_participations__scheduled_match_id=self.pk,
+            scheduled_match_participations__side=side,
+        )
+
+    @property
+    def side1_players(self):
+        return self.players_on(Side.ONE)
+
+    @property
+    def side2_players(self):
+        return self.players_on(Side.TWO)
 
     @property
     def is_converted(self):

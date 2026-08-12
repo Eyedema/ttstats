@@ -326,32 +326,33 @@ class TestGetWinProbability:
     def test_equal_ratings_50_50(self):
         p1 = PlayerFactory(elo_rating=1500)
         p2 = PlayerFactory(elo_rating=1500)
-        t1 = TeamFactory(players=[p1])
-        t2 = TeamFactory(players=[p2])
-        pct1, pct2 = get_win_probability(t1, t2)
+        pct1, pct2 = get_win_probability([p1], [p2])
         assert pct1 == 50
         assert pct2 == 50
 
     def test_higher_rated_favored(self):
         p1 = PlayerFactory(elo_rating=1600)
         p2 = PlayerFactory(elo_rating=1400)
-        t1 = TeamFactory(players=[p1])
-        t2 = TeamFactory(players=[p2])
-        pct1, pct2 = get_win_probability(t1, t2)
+        pct1, pct2 = get_win_probability([p1], [p2])
         assert pct1 > 50
         assert pct2 < 50
         assert pct1 + pct2 == 100
 
-    def test_doubles_uses_team_average(self):
+    def test_doubles_uses_side_average(self):
         p1 = PlayerFactory(elo_rating=1600)
         p2 = PlayerFactory(elo_rating=1400)  # avg = 1500
         p3 = PlayerFactory(elo_rating=1500)
         p4 = PlayerFactory(elo_rating=1500)  # avg = 1500
-        t1 = TeamFactory(players=[p1, p2])
-        t2 = TeamFactory(players=[p3, p4])
-        pct1, pct2 = get_win_probability(t1, t2)
+        pct1, pct2 = get_win_probability([p1, p2], [p3, p4])
         assert pct1 == 50
         assert pct2 == 50
+
+    def test_accepts_a_queryset_as_well_as_a_list(self):
+        p1 = PlayerFactory(elo_rating=1500, with_user=True)
+        p2 = PlayerFactory(elo_rating=1500, with_user=True)
+        m = MatchFactory(player1=p1, player2=p2)
+        pct1, pct2 = get_win_probability(m.side1_players, m.side2_players)
+        assert (pct1, pct2) == (50, 50)
 
     def test_uses_pre_match_elo_when_history_exists(self):
         p1 = PlayerFactory(elo_rating=1600)
@@ -377,13 +378,36 @@ class TestGetWinProbability:
         )
 
         # With match → uses old_rating (both 1500) → 50/50
-        pct1, pct2 = get_win_probability(t1, t2, match=m)
+        pct1, pct2 = get_win_probability([p1], [p2], match=m)
         assert pct1 == 50
         assert pct2 == 50
 
-    def test_empty_teams_return_50_50(self):
-        t1 = TeamFactory()
-        t2 = TeamFactory()
-        pct1, pct2 = get_win_probability(t1, t2)
-        assert pct1 == 50
-        assert pct2 == 50
+    def test_empty_sides_return_50_50(self):
+        assert get_win_probability([], []) == (50, 50)
+        assert get_win_probability([PlayerFactory()], []) == (50, 50)
+        assert get_win_probability([], [PlayerFactory()]) == (50, 50)
+
+
+@pytest.mark.django_db
+class TestEloEmptySideGuard:
+    def test_singles_match_with_an_empty_side_is_skipped_not_crashed(self):
+        """The empty-side guard used to run only for doubles, so a singles
+        match with no players on a side raised IndexError.
+        """
+        p1 = PlayerFactory(with_user=True)
+        p2 = PlayerFactory(with_user=True)
+        m = MatchFactory(player1=p1, player2=p2)
+        for n in (1, 2, 3):
+            GameFactory(match=m, game_number=n, team1_score=11, team2_score=5)
+        m.refresh_from_db()
+        confirm_match_silent(m)
+
+        EloHistory.objects.filter(match=m).delete()
+        m.team1.players.clear()
+        m.save()
+        m.refresh_from_db()
+        assert list(m.side1_players) == []
+
+        update_player_elo(m)  # must not raise
+
+        assert EloHistory.objects.filter(match=m).count() == 0
