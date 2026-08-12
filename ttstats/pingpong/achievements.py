@@ -10,9 +10,9 @@ Use Match.all_objects throughout to bypass row-level security.
 import logging
 from collections import Counter
 
-from django.db.models import Q, Prefetch
+from django.db.models import F, Prefetch
 
-from .models import Achievement, EloHistory, Game, Match, PlayerAchievement
+from .models import Achievement, EloHistory, Game, Match, PlayerAchievement, Side
 
 logger = logging.getLogger(__name__)
 
@@ -69,39 +69,48 @@ def _player_confirmed_matches(player):
     games via unfiltered manager to bypass GameManager."""
     return (
         Match.all_objects
-        .filter(
-            Q(team1__players=player) | Q(team2__players=player),
-            is_confirmed=True,
-        )
-        .select_related('team1', 'team2', 'winner')
+        .filter(participants__player=player, is_confirmed=True)
         .prefetch_related(
-            'team1__players', 'team2__players',
+            'participants__player',
             Prefetch('games', queryset=Game.all_objects.all()),
         )
         .order_by('-date_played')
-        .distinct()
     )
 
 
+def _player_won_count(player):
+    """How many confirmed matches the player has won.
+
+    Both conditions live in one filter() so they apply to the same
+    participant row -- the player's own side must be the winning one.
+    """
+    return Match.all_objects.filter(
+        participants__player=player,
+        winner_side=F('participants__side'),
+        is_confirmed=True,
+    ).count()
+
+
+def _player_side(player, match):
+    """Which side of the match the player is on, or None if not in it."""
+    for participant in match.participants.all():
+        if participant.player_id == player.pk:
+            return participant.side
+    return None
+
+
+def _opponent_side(player, match):
+    side = _player_side(player, match)
+    if side is None:
+        return None
+    return Side.TWO if side == Side.ONE else Side.ONE
+
+
 def _player_won_match(player, match):
-    """Did the player's team win this match?"""
-    if not match.winner:
+    """Did the player's side win this match?"""
+    if match.winner_side is None:
         return False
-    return player in match.winner.players.all()
-
-
-def _player_team(player, match):
-    """Return the team the player belongs to in this match."""
-    if player in match.team1.players.all():
-        return match.team1
-    return match.team2
-
-
-def _opponent_team(player, match):
-    """Return the opponent team."""
-    if player in match.team1.players.all():
-        return match.team2
-    return match.team1
+    return match.winner_side == _player_side(player, match)
 
 
 # ---------------------------------------------------------------------------
@@ -112,7 +121,7 @@ def _opponent_team(player, match):
 def check_first_blood(player, match):
     if not _player_won_match(player, match):
         return []
-    won_count = _player_confirmed_matches(player).filter(winner__players=player).count()
+    won_count = _player_won_count(player)
     if won_count >= 1:
         return ['first_blood']
     return []
@@ -133,7 +142,7 @@ def check_matches_played(player, match):
 
 @register_checker
 def check_matches_won(player, match):
-    won = _player_confirmed_matches(player).filter(winner__players=player).count()
+    won = _player_won_count(player)
     slugs = []
     if won >= 10:
         slugs.append('matches_won_bronze')
@@ -168,9 +177,9 @@ def check_win_streak(player, match):
 @register_checker
 def check_perfect_game(player, match):
     """Perfect Game: win a game 11-0 in this match."""
-    team = _player_team(player, match)
+    side = _player_side(player, match)
     for game in match.games.all():
-        if game.winner_id == team.pk:
+        if game.winner_side == side:
             if game.team1_score == 0 or game.team2_score == 0:
                 return ['perfect_game']
     return []
@@ -184,13 +193,13 @@ def check_comeback_king(player, match):
     if match.best_of < 5:
         return []
 
-    team = _player_team(player, match)
+    side = _player_side(player, match)
     games = list(match.games.order_by('game_number'))
     if len(games) < 3:
         return []
 
-    # First two games must be losses for the player's team
-    if games[0].winner_id == team.pk or games[1].winner_id == team.pk:
+    # First two games must be losses for the player's side
+    if games[0].winner_side == side or games[1].winner_side == side:
         return []
 
     return ['comeback_king']
@@ -202,10 +211,10 @@ def check_iron_wall(player, match):
     if not _player_won_match(player, match):
         return []
 
-    team = _player_team(player, match)
+    side = _player_side(player, match)
     total_conceded = 0
     for game in match.games.all():
-        if team.pk == match.team1_id:
+        if side == Side.ONE:
             total_conceded += game.team2_score
         else:
             total_conceded += game.team1_score
@@ -234,10 +243,10 @@ def check_deuce_master(player, match):
     deuce_wins = 0
 
     for m in all_matches:
-        team = _player_team(player, m)
+        side = _player_side(player, m)
         for game in m.games.all():
             if (game.team1_score >= 10 and game.team2_score >= 10
-                    and game.winner_id == team.pk):
+                    and game.winner_side == side):
                 deuce_wins += 1
 
     slugs = []
@@ -261,11 +270,10 @@ def check_giant_slayer(player, match):
     except EloHistory.DoesNotExist:
         return []
 
-    opponent_team = _opponent_team(player, match)
     opponent_ratings = list(
         EloHistory.objects.filter(
             match=match,
-            player__in=opponent_team.players.all(),
+            player__in=match.players_on(_opponent_side(player, match)),
         ).values_list('old_rating', flat=True)
     )
     if not opponent_ratings:
@@ -294,8 +302,7 @@ def check_rivalry(player, match):
     opponent_counts = Counter()
 
     for m in all_matches:
-        opp_team = _opponent_team(player, m)
-        opp_player = opp_team.players.first()
+        opp_player = m.players_on(_opponent_side(player, m)).first()
         if opp_player:
             opponent_counts[opp_player.pk] += 1
 
@@ -362,10 +369,10 @@ def get_achievement_progress(player):
     # Deuce wins count
     deuce_wins = 0
     for m in confirmed_list:
-        team = _player_team(player, m)
+        side = _player_side(player, m)
         for game in m.games.all():
             if (game.team1_score >= 10 and game.team2_score >= 10
-                    and game.winner_id == team.pk):
+                    and game.winner_side == side):
                 deuce_wins += 1
 
     # Giant slayer max gap
@@ -374,10 +381,10 @@ def get_achievement_progress(player):
         m = eh.match
         if not _player_won_match(player, m):
             continue
-        opp_team = _opponent_team(player, m)
         opp_ratings = list(
-            EloHistory.objects.filter(match=m, player__in=opp_team.players.all())
-            .values_list('old_rating', flat=True)
+            EloHistory.objects.filter(
+                match=m, player__in=m.players_on(_opponent_side(player, m))
+            ).values_list('old_rating', flat=True)
         )
         if opp_ratings:
             avg_opp = sum(opp_ratings) / len(opp_ratings)
@@ -389,8 +396,7 @@ def get_achievement_progress(player):
     for m in confirmed_list:
         if m.is_double:
             continue
-        opp_team = _opponent_team(player, m)
-        opp = opp_team.players.first()
+        opp = m.players_on(_opponent_side(player, m)).first()
         if opp:
             opponent_counts[opp.pk] += 1
     max_rivalry = max(opponent_counts.values()) if opponent_counts else 0
