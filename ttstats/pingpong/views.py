@@ -13,7 +13,7 @@ from django.core.exceptions import PermissionDenied
 from django.core.mail import send_mail
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db import transaction
-from django.db.models import Count, F, Q, Sum
+from django.db.models import Count, F, Prefetch, Q, Sum
 from django.http import HttpResponse, JsonResponse
 from django.urls import reverse
 from django.views.decorators.http import require_POST
@@ -37,7 +37,7 @@ from .forms import GameForm, MatchEditForm, MatchForm, PlayerRegistrationForm, S
     ChampionshipCreateForm, ChampionshipEditForm, ScheduledMatchEditForm
 from .achievements import get_achievement_progress
 from .elo import calculate_expected_score, get_win_probability
-from .models import Game, Location, Match, Player, UserProfile, MatchConfirmation, ScheduledMatch, Team, Championship, EloHistory
+from .models import Game, Location, Match, MatchParticipant, Player, UserProfile, MatchConfirmation, ScheduledMatch, ScheduledMatchParticipant, Side, Team, Championship, EloHistory, format_side_label
 from .emails import send_scheduled_match_email, send_passkey_deleted_email
 from .services import resolve_sides
 
@@ -45,6 +45,42 @@ try:
     from django_otp_webauthn.models import WebAuthnCredential
 except ImportError:
     WebAuthnCredential = None
+
+
+def participants_prefetch(lookup="participants", scheduled=False):
+    """Prefetch participants with their player/user/profile in one go.
+
+    Ordered by player name so cached_player1/2 match the old
+    team.players.all() ordering (Player.Meta.ordering).
+    """
+    model = ScheduledMatchParticipant if scheduled else MatchParticipant
+    return Prefetch(
+        lookup,
+        queryset=model.objects.select_related("player__user__profile").order_by(
+            "player__name"
+        ),
+    )
+
+
+def cache_side_players(obj):
+    """Attach cached_team1_players / cached_team2_players (+ player1/2).
+
+    Reads the prefetched participants, so it costs no extra queries.
+    """
+    participants = list(obj.participants.all())
+    obj.cached_team1_players = [p.player for p in participants if p.side == Side.ONE]
+    obj.cached_team2_players = [p.player for p in participants if p.side == Side.TWO]
+    obj.cached_player1 = (
+        obj.cached_team1_players[0] if obj.cached_team1_players else None
+    )
+    obj.cached_player2 = (
+        obj.cached_team2_players[0] if obj.cached_team2_players else None
+    )
+    # Labels too: templates rendering {{ match.team1 }} hit Team.__str__, which
+    # queries players once per row.
+    obj.cached_side1_label = format_side_label(obj.cached_team1_players) or "Side 1"
+    obj.cached_side2_label = format_side_label(obj.cached_team2_players) or "Side 2"
+    return obj
 
 
 # Create your views here.
@@ -70,9 +106,7 @@ class MatchListView(LoginRequiredMixin, ListView):
             Match.objects.all()
             .select_related("team1", "team2", "location", "winner", "championship")
             .prefetch_related(
-                "team1__players__user__profile",
-                "team2__players__user__profile",
-                "winner__players__user__profile",
+                participants_prefetch(),
                 "games",
                 "confirmations",
             )
@@ -95,36 +129,25 @@ class MatchListView(LoginRequiredMixin, ListView):
             # This prevents template from triggering new queries
             games = list(match.games.all())
             match.cached_team1_score = sum(
-                1 for g in games if g.winner_id == match.team1_id
+                1 for g in games if g.winner_side == Side.ONE
             )
             match.cached_team2_score = sum(
-                1 for g in games if g.winner_id == match.team2_id
+                1 for g in games if g.winner_side == Side.TWO
             )
 
-            # Cache team players as lists to avoid queries in template
-            if match.team1:
-                match.cached_team1_players = list(match.team1.players.all())
-                match.cached_player1 = (
-                    match.cached_team1_players[0] if match.cached_team1_players else None
-                )
-            else:
-                match.cached_team1_players = []
-                match.cached_player1 = None
+            # Cache side players as lists to avoid queries in template
+            cache_side_players(match)
 
-            if match.team2:
-                match.cached_team2_players = list(match.team2.players.all())
-                match.cached_player2 = (
-                    match.cached_team2_players[0] if match.cached_team2_players else None
-                )
-            else:
-                match.cached_team2_players = []
-                match.cached_player2 = None
-
-            # Cache winner players
-            if match.winner:
-                match.cached_winner_players = list(match.winner.players.all())
+            # Cache winner players and label
+            if match.winner_side == Side.ONE:
+                match.cached_winner_players = match.cached_team1_players
+                match.cached_winner_label = match.cached_side1_label
+            elif match.winner_side == Side.TWO:
+                match.cached_winner_players = match.cached_team2_players
+                match.cached_winner_label = match.cached_side2_label
             else:
                 match.cached_winner_players = []
+                match.cached_winner_label = ""
 
             # Cache match_confirmed status to avoid N+1 queries
             # This replicates the logic from Match.team1_confirmed and Match.team2_confirmed

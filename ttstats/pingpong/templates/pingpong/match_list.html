@@ -120,9 +120,9 @@
                             {% if match.is_double %}
                             <div class="space-y-1">
                                 <div class="text-sm font-medium">
-                                    {{ match.team1|default:"Team 1" }}
+                                    {{ match.cached_side1_label }}
                                     <div class="text-xs text-muted-foreground">vs</div>
-                                    {{ match.team2|default:"Team 2" }}
+                                    {{ match.cached_side2_label }}
                                 </div>
                             </div>
                             {% else %}
@@ -131,7 +131,7 @@
                                     <a href="{% url 'pingpong:player_detail' match.cached_player1.pk %}" class="text-sm font-medium hover:underline">
                                         {{ match.cached_player1 }}
                                     </a>
-                                    {% if match.winner == match.team1 %}
+                                    {% if match.winner_side == 1 %}
                                     <img src="{% static 'pingpong/icons/check.svg' %}" class="w-4 h-4 text-success" alt="">
                                     {% endif %}
                                 </div>
@@ -140,7 +140,7 @@
                                     <a href="{% url 'pingpong:player_detail' match.cached_player2.pk %}" class="text-sm font-medium hover:underline">
                                         {{ match.cached_player2 }}
                                     </a>
-                                    {% if match.winner == match.team2 %}
+                                    {% if match.winner_side == 2 %}
                                     <img src="{% static 'pingpong/icons/check.svg' %}" class="w-4 h-4 text-success" alt="">
                                     {% endif %}
                                 </div>
@@ -149,11 +149,11 @@
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap">
                             <div class="flex items-center gap-2">
-                                <span class="inline-flex items-center justify-center rounded-md px-3 py-1 text-sm font-bold {% if match.winner == match.team1 %}bg-success/10 text-success{% else %}bg-muted{% endif %}">
+                                <span class="inline-flex items-center justify-center rounded-md px-3 py-1 text-sm font-bold {% if match.winner_side == 1 %}bg-success/10 text-success{% else %}bg-muted{% endif %}">
                                     {{ match.cached_team1_score }}
                                 </span>
                                 <span class="text-muted-foreground font-bold">-</span>
-                                <span class="inline-flex items-center justify-center rounded-md px-3 py-1 text-sm font-bold {% if match.winner == match.team2 %}bg-success/10 text-success{% else %}bg-muted{% endif %}">
+                                <span class="inline-flex items-center justify-center rounded-md px-3 py-1 text-sm font-bold {% if match.winner_side == 2 %}bg-success/10 text-success{% else %}bg-muted{% endif %}">
                                     {{ match.cached_team2_score }}
                                 </span>
                             </div>
@@ -164,27 +164,19 @@
                             <div class="flex items-center gap-2">
                                 <div class="w-8 h-8 rounded-full bg-success/10 text-success flex items-center justify-center font-semibold text-xs">
                                     {% if match.is_double %}
-                                        {% if match.winner.name %}
-                                            {{ match.winner.name|slice:":1"|upper }}
-                                        {% else %}
-                                            {# It is a list (or iterable) #}
-                                            {% for person in match.cached_winner_players|slice:":2" %}
-                                                {# Handle if person is an object with .name or just a string #}
-                                                {{ person.name|default:person|slice:":1"|upper }}
-                                            {% endfor %}
-                                        {% endif %}
+                                        {% for person in match.cached_winner_players|slice:":2" %}
+                                            {{ person.name|slice:":1"|upper }}
+                                        {% endfor %}
                                     {% else %}
                                         {# It is a single object #}
-                                        {{ match.winner.name|slice:":1"|upper }}
+                                        {{ match.cached_winner_label|slice:":1"|upper }}
                                     {% endif %}
                                 </div>
                                 {% if match.is_double %}
-                                    <a href="{% url 'pingpong:team_detail' match.winner.pk %}" class="text-sm font-medium hover:underline">
-                                        {{ match.winner }}
-                                    </a>
+                                    <span class="text-sm font-medium">{{ match.cached_winner_label }}</span>
                                 {% else %}
-                                    <a href="{% url 'pingpong:player_detail' match.winner.players.first.pk %}" class="text-sm font-medium hover:underline">
-                                        {{ match.winner }}
+                                    <a href="{% url 'pingpong:player_detail' match.cached_winner_players.0.pk %}" class="text-sm font-medium hover:underline">
+                                        {{ match.cached_winner_label }}
                                     </a>
                                 {% endif %}
                             </div>
@@ -293,10 +285,10 @@
                 {% if match.is_double %}
                 <div class="space-y-2 mb-3">
                     <div class="flex items-center justify-between">
-                        <div class="{% if match.winner != match.team1 %}text-muted-foreground{% endif %}">
+                        <div class="{% if match.winner_side != 1 %}text-muted-foreground{% endif %}">
                             <div class="font-medium text-sm flex items-center gap-2">
-                                {{ match.team1.name|default:"Team 1" }}
-                                {% if match.winner == match.team1 %}
+                                {{ match.cached_side1_label }}
+                                {% if match.winner_side == 1 %}
                                 <img src="{% static 'pingpong/icons/check.svg' %}" class="w-4 h-4 text-success" alt="Winner">
                                 {% endif %}
                             </div>
@@ -304,15 +296,15 @@
                                 {% for player in match.cached_team1_players %}{{ player.name|truncatechars:15 }}{% if not forloop.last %} & {% endif %}{% endfor %}
                             </div>
                         </div>
-                        <span class="inline-flex items-center justify-center rounded-md px-3 py-1 text-base font-bold min-w-[44px] {% if match.winner == match.team1 %}bg-success/10 text-success{% else %}bg-muted{% endif %}">
+                        <span class="inline-flex items-center justify-center rounded-md px-3 py-1 text-base font-bold min-w-[44px] {% if match.winner_side == 1 %}bg-success/10 text-success{% else %}bg-muted{% endif %}">
                             {{ match.cached_team1_score }}
                         </span>
                     </div>
                     <div class="flex items-center justify-between">
-                        <div class="{% if match.winner != match.team2 %}text-muted-foreground{% endif %}">
+                        <div class="{% if match.winner_side != 2 %}text-muted-foreground{% endif %}">
                             <div class="font-medium text-sm flex items-center gap-2">
-                                {{ match.team2.name|default:"Team 2" }}
-                                {% if match.winner == match.team2 %}
+                                {{ match.cached_side2_label }}
+                                {% if match.winner_side == 2 %}
                                 <img src="{% static 'pingpong/icons/check.svg' %}" class="w-4 h-4 text-success" alt="Winner">
                                 {% endif %}
                             </div>
@@ -320,7 +312,7 @@
                                 {% for player in match.cached_team2_players %}{{ player.name|truncatechars:15 }}{% if not forloop.last %} & {% endif %}{% endfor %}
                             </div>
                         </div>
-                        <span class="inline-flex items-center justify-center rounded-md px-3 py-1 text-base font-bold min-w-[44px] {% if match.winner == match.team2 %}bg-success/10 text-success{% else %}bg-muted{% endif %}">
+                        <span class="inline-flex items-center justify-center rounded-md px-3 py-1 text-base font-bold min-w-[44px] {% if match.winner_side == 2 %}bg-success/10 text-success{% else %}bg-muted{% endif %}">
                             {{ match.cached_team2_score }}
                         </span>
                     </div>
@@ -328,24 +320,24 @@
                 {% else %}
                 <div class="space-y-2 mb-3">
                     <div class="flex items-center justify-between">
-                        <a href="{% url 'pingpong:player_detail' match.cached_player1.pk %}" class="font-medium text-sm hover:underline flex items-center gap-2 {% if match.winner != match.team1 %}text-muted-foreground{% endif %}">
+                        <a href="{% url 'pingpong:player_detail' match.cached_player1.pk %}" class="font-medium text-sm hover:underline flex items-center gap-2 {% if match.winner_side != 1 %}text-muted-foreground{% endif %}">
                             {{ match.cached_player1 }}
-                            {% if match.winner == match.team1 %}
+                            {% if match.winner_side == 1 %}
                             <img src="{% static 'pingpong/icons/check.svg' %}" class="w-4 h-4 text-success" alt="Winner">
                             {% endif %}
                         </a>
-                        <span class="inline-flex items-center justify-center rounded-md px-3 py-1 text-base font-bold min-w-[44px] {% if match.winner == match.team1 %}bg-success/10 text-success{% else %}bg-muted{% endif %}">
+                        <span class="inline-flex items-center justify-center rounded-md px-3 py-1 text-base font-bold min-w-[44px] {% if match.winner_side == 1 %}bg-success/10 text-success{% else %}bg-muted{% endif %}">
                             {{ match.cached_team1_score }}
                         </span>
                     </div>
                     <div class="flex items-center justify-between">
-                        <a href="{% url 'pingpong:player_detail' match.cached_player2.pk %}" class="font-medium text-sm hover:underline flex items-center gap-2 {% if match.winner != match.team2 %}text-muted-foreground{% endif %}">
+                        <a href="{% url 'pingpong:player_detail' match.cached_player2.pk %}" class="font-medium text-sm hover:underline flex items-center gap-2 {% if match.winner_side != 2 %}text-muted-foreground{% endif %}">
                             {{ match.cached_player2 }}
-                            {% if match.winner == match.team2 %}
+                            {% if match.winner_side == 2 %}
                             <img src="{% static 'pingpong/icons/check.svg' %}" class="w-4 h-4 text-success" alt="Winner">
                             {% endif %}
                         </a>
-                        <span class="inline-flex items-center justify-center rounded-md px-3 py-1 text-base font-bold min-w-[44px] {% if match.winner == match.team2 %}bg-success/10 text-success{% else %}bg-muted{% endif %}">
+                        <span class="inline-flex items-center justify-center rounded-md px-3 py-1 text-base font-bold min-w-[44px] {% if match.winner_side == 2 %}bg-success/10 text-success{% else %}bg-muted{% endif %}">
                             {{ match.cached_team2_score }}
                         </span>
                     </div>
