@@ -49,11 +49,6 @@ urlpatterns = [
     # Passkey management
     path("passkeys/", views.PasskeyManagementView.as_view(), name="passkey_management"),
 
-    # Teams
-    path("teams/", views.TeamsListView.as_view(), name="team_list"),
-    path("teams/<int:pk>/", views.TeamDetailView.as_view(), name="team_detail"),
-    path("teams/<int:pk>/edit/", views.TeamUpdateView.as_view(), name="team_edit"),
-
     path('championships/', views.ChampionshipListView.as_view(), name='championship_list'),
     path('championships/create/', views.ChampionshipCreateView.as_view(), name='championship_create'),
     path('championships/<int:pk>/', views.ChampionshipDetailView.as_view(), name='championship_detail'),

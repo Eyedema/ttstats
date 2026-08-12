@@ -270,7 +270,7 @@ class TestMatchDetailView:
 @pytest.mark.django_db
 class TestMatchDetailWinnerDisplay:
     """The singles layout used to compare match.winner (a Team) against
-    match.player1 (a Player), so the winner badge never rendered. The literal
+    match.side1_players.first() (a Player), so the winner badge never rendered. The literal
     "WINNER" appears only in the badge blocks, once per winning side.
     """
 
@@ -1096,6 +1096,25 @@ class TestHeadToHeadSinglesDetection:
         assert resp.status_code == 200
         assert resp.context.get("total_matches") in (None, 0)
         assert resp.context.get("has_2v2_matches") is True
+
+    def test_match_table_scores_are_oriented_to_player1(self):
+        """match.player1_score / player2_score were read by the template but
+        never set by the view, so the score column rendered blank.
+        """
+        u, me = _verified_user_with_player()
+        opponent = PlayerFactory(with_user=True)
+
+        # me on side 2, so orientation actually has to do something
+        m = MatchFactory(player1=opponent, player2=me, best_of=5)
+        for n in (1, 2, 3):
+            GameFactory(match=m, game_number=n, team1_score=11, team2_score=5)
+        m.refresh_from_db()
+        confirm_match(m)
+
+        resp = self._h2h(_login_client(u), me, opponent)
+        row = resp.context["matches"][0]
+        assert (row.player1_score, row.player2_score) == (0, 3)
+        assert row.player1_won is False
 
     def test_singles_matches_are_counted(self):
         u, me = _verified_user_with_player()

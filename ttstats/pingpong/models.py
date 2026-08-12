@@ -262,12 +262,21 @@ class Match(SideLabelMixin, models.Model):
         return f"{self.team1} vs {self.team2} - {self.date_played.date()}"
 
     @property
-    def team1_score(self):
-        return self.games.filter(winner=self.team1).count()
+    def side1_score(self):
+        """Games won by side 1. Reads the cache recompute() maintains."""
+        return self.team1_score_cache
 
     @property
-    def team2_score(self):
-        return self.games.filter(winner=self.team2).count()
+    def side2_score(self):
+        return self.team2_score_cache
+
+    # Legacy names, kept because templates and emails read them.
+    team1_score = side1_score
+    team2_score = side2_score
+
+    @property
+    def winner_label(self):
+        return self.side_label(self.winner_side) if self.winner_side else ""
 
     def team_for_side(self, side):
         return self.team1 if side == Side.ONE else self.team2
@@ -320,20 +329,6 @@ class Match(SideLabelMixin, models.Model):
             self._verified_player_ids(self.team2),
             self._confirmed_player_ids(),
         )
-
-    @property
-    def player1(self):
-        """Backward-compatible property: returns first player from team1"""
-        if self.team1:
-            return self.team1.players.first()
-        return None
-
-    @property
-    def player2(self):
-        """Backward-compatible property: returns first player from team2"""
-        if self.team2:
-            return self.team2.players.first()
-        return None
 
     def should_auto_confirm(self):
         return match_state.should_auto_confirm(
@@ -638,20 +633,6 @@ class ScheduledMatch(SideLabelMixin, models.Model):
     def user_can_edit(self, user):
         """Check if user can edit this scheduled match"""
         return self.user_can_view(user)
-
-    @property
-    def player1(self):
-        """Backward-compatible property: returns first player from team1"""
-        if self.team1:
-            return self.team1.players.first()
-        return None
-
-    @property
-    def player2(self):
-        """Backward-compatible property: returns first player from team2"""
-        if self.team2:
-            return self.team2.players.first()
-        return None
 
     def players_on(self, side):
         """Players on one side, read from ScheduledMatchParticipant."""

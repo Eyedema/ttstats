@@ -25,28 +25,28 @@ class TestSendMatchConfirmationEmail:
     def test_win_result_player1(self):
         m = self._make_complete_match()
         mail.outbox.clear()
-        send_match_confirmation_email(m, m.player1)
+        send_match_confirmation_email(m, m.side1_players.first())
         assert len(mail.outbox) == 1
         assert "WON" in mail.outbox[0].body
 
     def test_loss_result_player2(self):
         m = self._make_complete_match()
         mail.outbox.clear()
-        send_match_confirmation_email(m, m.player2)
+        send_match_confirmation_email(m, m.side2_players.first())
         assert len(mail.outbox) == 1
         assert "LOST" in mail.outbox[0].body
 
     def test_score_order_player1_is_winner(self):
         m = self._make_complete_match()
         mail.outbox.clear()
-        send_match_confirmation_email(m, m.player1)
+        send_match_confirmation_email(m, m.side1_players.first())
         # Player1 won so score should be "3-0" (their score first)
         assert "3-0" in mail.outbox[0].body
 
     def test_score_order_player2_is_loser(self):
         m = self._make_complete_match()
         mail.outbox.clear()
-        send_match_confirmation_email(m, m.player2)
+        send_match_confirmation_email(m, m.side2_players.first())
         # Player2 lost 0-3 (their score first)
         assert "0-3" in mail.outbox[0].body
 
@@ -62,11 +62,11 @@ class TestSendMatchConfirmationEmail:
         m.refresh_from_db()
 
         mail.outbox.clear()
-        send_match_confirmation_email(m, m.player1)
+        send_match_confirmation_email(m, m.side1_players.first())
         assert "3-1" in mail.outbox[0].body
 
         mail.outbox.clear()
-        send_match_confirmation_email(m, m.player2)
+        send_match_confirmation_email(m, m.side2_players.first())
         assert "1-3" in mail.outbox[0].body
 
     def test_score_orientation_for_doubles_side2_player(self):
@@ -100,26 +100,26 @@ class TestSendMatchConfirmationEmail:
     def test_email_subject(self):
         m = self._make_complete_match()
         mail.outbox.clear()
-        send_match_confirmation_email(m, m.player1)
+        send_match_confirmation_email(m, m.side1_players.first())
         assert "Match Complete" in mail.outbox[0].subject
 
     def test_email_recipient(self):
         m = self._make_complete_match()
         mail.outbox.clear()
-        send_match_confirmation_email(m, m.player1)
-        assert mail.outbox[0].to == [m.player1.user.email]
+        send_match_confirmation_email(m, m.side1_players.first())
+        assert mail.outbox[0].to == [m.side1_players.first().user.email]
 
     def test_url_construction_default(self):
         m = self._make_complete_match()
         mail.outbox.clear()
-        send_match_confirmation_email(m, m.player1)
+        send_match_confirmation_email(m, m.side1_players.first())
         assert f"/pingpong/matches/{m.pk}/" in mail.outbox[0].body
 
     @override_settings(SITE_PROTOCOL="https", SITE_DOMAIN="example.com")
     def test_url_construction_with_settings(self):
         m = self._make_complete_match()
         mail.outbox.clear()
-        send_match_confirmation_email(m, m.player1)
+        send_match_confirmation_email(m, m.side1_players.first())
         assert f"https://example.com/pingpong/matches/{m.pk}/" in mail.outbox[0].body
 
 
@@ -128,9 +128,9 @@ class TestSendScheduledMatchEmail:
     def test_email_sent(self):
         sm = ScheduledMatchFactory()
         mail.outbox.clear()
-        send_scheduled_match_email(sm, sm.player1)
+        send_scheduled_match_email(sm, sm.side1_players.first())
         assert len(mail.outbox) == 1
-        assert sm.player1.user.email in mail.outbox[0].to
+        assert sm.side1_players.first().user.email in mail.outbox[0].to
 
     def test_no_user_early_return(self):
         p1 = PlayerFactory()  # no user
@@ -154,13 +154,13 @@ class TestSendScheduledMatchEmail:
         loc = LocationFactory(name="The Club")
         sm = ScheduledMatchFactory(location=loc)
         mail.outbox.clear()
-        send_scheduled_match_email(sm, sm.player1)
+        send_scheduled_match_email(sm, sm.side1_players.first())
         assert "The Club" in mail.outbox[0].body
 
     def test_location_display_tbd(self):
         sm = ScheduledMatchFactory(location=None)
         mail.outbox.clear()
-        send_scheduled_match_email(sm, sm.player1)
+        send_scheduled_match_email(sm, sm.side1_players.first())
         assert "TBD" in mail.outbox[0].body
 
     def test_date_time_formatting(self):
@@ -171,7 +171,7 @@ class TestSendScheduledMatchEmail:
             scheduled_time=time(14, 30),
         )
         mail.outbox.clear()
-        send_scheduled_match_email(sm, sm.player1)
+        send_scheduled_match_email(sm, sm.side1_players.first())
         body = mail.outbox[0].body
         assert "June 15, 2025" in body or "Sunday, June 15, 2025" in body
         assert "02:30 PM" in body
@@ -179,7 +179,7 @@ class TestSendScheduledMatchEmail:
     def test_email_subject_contains_date(self):
         sm = ScheduledMatchFactory()
         mail.outbox.clear()
-        send_scheduled_match_email(sm, sm.player1)
+        send_scheduled_match_email(sm, sm.side1_players.first())
         assert "Match Scheduled" in mail.outbox[0].subject
 
 
