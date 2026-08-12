@@ -198,6 +198,17 @@ class Match(SideLabelMixin, models.Model):
         choices=Side.choices, null=True, blank=True, db_index=True
     )
 
+    # Championship entry per side, so standings never have to reverse-map a
+    # match to an entry by intersecting player sets.
+    side1_entry = models.ForeignKey(
+        'ChampionshipEntry', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='%(class)s_as_side1',
+    )
+    side2_entry = models.ForeignKey(
+        'ChampionshipEntry', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='%(class)s_as_side2',
+    )
+
     confirmations = models.ManyToManyField(Player, through='MatchConfirmation', related_name="player_matchconfirmations")
 
     # Denormalized cache fields for performance
@@ -571,6 +582,17 @@ class ScheduledMatch(SideLabelMixin, models.Model):
     )
 
     # Track if emails were sent
+    # Championship entry per side, so standings never have to reverse-map a
+    # match to an entry by intersecting player sets.
+    side1_entry = models.ForeignKey(
+        'ChampionshipEntry', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='%(class)s_as_side1',
+    )
+    side2_entry = models.ForeignKey(
+        'ChampionshipEntry', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='%(class)s_as_side2',
+    )
+
     notification_sent = models.BooleanField(default=False)
 
     # Link to actual match if scheduled match was converted
@@ -1114,3 +1136,64 @@ class Championship(models.Model):
             return self.created_by == player
         except (AttributeError, Player.DoesNotExist):
             return False
+
+
+class ChampionshipEntry(models.Model):
+    """One competitor in a championship: a player, or a pair for doubles.
+
+    Replaces registering a Team. An entry belongs to exactly one championship,
+    so the same people entering two championships are two entries -- which is
+    what lets the database enforce one entry per player per championship.
+    """
+
+    championship = models.ForeignKey(
+        Championship, on_delete=models.CASCADE, related_name="entries"
+    )
+    display_name = models.CharField(
+        max_length=100, blank=True, help_text="Optional team name for this entry"
+    )
+    seed = models.PositiveSmallIntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["seed", "created_at"]
+        verbose_name_plural = "championship entries"
+
+    @property
+    def players(self):
+        return Player.objects.filter(championship_entries__entry=self)
+
+    def __str__(self):
+        return self.display_name or format_side_label(self.players) or "Entry"
+
+
+class ChampionshipEntryMember(models.Model):
+    """A player belonging to a championship entry.
+
+    ``championship`` is denormalized from ``entry`` so the database can enforce
+    that a player appears in at most one entry per championship -- impossible
+    with the old M2M(Team), where a player could register two singleton teams.
+    """
+
+    entry = models.ForeignKey(
+        ChampionshipEntry, on_delete=models.CASCADE, related_name="members"
+    )
+    player = models.ForeignKey(
+        Player, on_delete=models.CASCADE, related_name="championship_entries"
+    )
+    championship = models.ForeignKey(
+        Championship, on_delete=models.CASCADE, related_name="entry_members"
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["entry", "player"], name="uniq_entry_player"
+            ),
+            models.UniqueConstraint(
+                fields=["championship", "player"], name="uniq_championship_player"
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.player} in {self.entry}"
