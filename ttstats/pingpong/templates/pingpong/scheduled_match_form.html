@@ -104,7 +104,9 @@
                                 <p class="text-xs md:text-sm text-muted-foreground">{{ form.player1.help_text }}</p>
                                 {% endif %}
                                 {% if form.player1.errors %}
-                                <p class="text-sm text-destructive">{{ form.player1.errors.0 }}</p>
+                                {% for error in form.player1.errors %}
+                                <p class="text-sm text-destructive">{{ error }}</p>
+                                {% endfor %}
                                 {% endif %}
                             </div>
 
@@ -124,7 +126,9 @@
                                 {% endfor %}
                             </select>
                             {% if form.player2.errors %}
-                            <p class="text-sm text-destructive">{{ form.player2.errors.0 }}</p>
+                            {% for error in form.player2.errors %}
+                            <p class="text-sm text-destructive">{{ error }}</p>
+                            {% endfor %}
                             {% endif %}
                         </div>
                     </div>
@@ -149,7 +153,9 @@
                                 required
                             />
                             {% if form.scheduled_date.errors %}
-                            <p class="text-xs md:text-sm text-destructive">{{ form.scheduled_date.errors.0 }}</p>
+                            {% for error in form.scheduled_date.errors %}
+                            <p class="text-xs md:text-sm text-destructive">{{ error }}</p>
+                            {% endfor %}
                             {% endif %}
                         </div>
                         <div class="space-y-2">
@@ -165,7 +171,9 @@
                                 required
                             />
                             {% if form.scheduled_time.errors %}
-                            <p class="text-xs md:text-sm text-destructive">{{ form.scheduled_time.errors.0 }}</p>
+                            {% for error in form.scheduled_time.errors %}
+                            <p class="text-xs md:text-sm text-destructive">{{ error }}</p>
+                            {% endfor %}
                             {% endif %}
                         </div>
                     </div>
@@ -194,7 +202,9 @@
                             {% endfor %}
                         </select>
                         {% if form.location.errors %}
-                        <p class="text-xs md:text-sm text-destructive">{{ form.location.errors.0 }}</p>
+                        {% for error in form.location.errors %}
+                        <p class="text-xs md:text-sm text-destructive">{{ error }}</p>
+                        {% endfor %}
                         {% else %}
                         <p class="text-xs md:text-sm text-muted-foreground">Where the match will take place</p>
                         {% endif %}
@@ -216,7 +226,9 @@
                             placeholder="Add any additional details about the match..."
                         >{{ form.notes.value|default:'' }}</textarea>
                         {% if form.notes.errors %}
-                        <p class="text-sm text-destructive">{{ form.notes.errors.0 }}</p>
+                        {% for error in form.notes.errors %}
+                        <p class="text-sm text-destructive">{{ error }}</p>
+                        {% endfor %}
                         {% else %}
                         <p class="text-sm text-muted-foreground">Any special arrangements or information about this match</p>
                         {% endif %}

@@ -64,7 +64,9 @@
                         required
                     />
                     {% if form.name.errors %}
-                    <p class="text-sm text-destructive">{{ form.name.errors.0 }}</p>
+                    {% for error in form.name.errors %}
+                    <p class="text-sm text-destructive">{{ error }}</p>
+                    {% endfor %}
                     {% else %}
                     <p class="text-sm text-muted-foreground">The player's full legal name</p>
                     {% endif %}
@@ -85,7 +87,9 @@
                         class="flex h-10 w-full rounded-md border border-input bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.nickname.errors %}border-destructive{% endif %}" 
                     />
                     {% if form.nickname.errors %}
-                    <p class="text-sm text-destructive">{{ form.nickname.errors.0 }}</p>
+                    {% for error in form.nickname.errors %}
+                    <p class="text-sm text-destructive">{{ error }}</p>
+                    {% endfor %}
                     {% else %}
                     <p class="text-sm text-muted-foreground">How they prefer to be called (used in displays)</p>
                     {% endif %}
@@ -110,7 +114,9 @@
                         </option>
                     </select>
                     {% if form.playing_style.errors %}
-                    <p class="text-sm text-destructive">{{ form.playing_style.errors.0 }}</p>
+                    {% for error in form.playing_style.errors %}
+                    <p class="text-sm text-destructive">{{ error }}</p>
+                    {% endfor %}
                     {% else %}
                     <p class="text-sm text-muted-foreground">Select the player's primary playing style</p>
                     {% endif %}
@@ -130,7 +136,9 @@
                         placeholder="Strengths: Strong forehand, quick reflexes&#10;Weaknesses: Struggles with backhand loops&#10;Strategy: Attack their backhand early"
                     >{{ form.notes.value|default:'' }}</textarea>
                     {% if form.notes.errors %}
-                    <p class="text-sm text-destructive">{{ form.notes.errors.0 }}</p>
+                    {% for error in form.notes.errors %}
+                    <p class="text-sm text-destructive">{{ error }}</p>
+                    {% endfor %}
                     {% else %}
                     <p class="text-sm text-muted-foreground">Add any observations about strengths, weaknesses, or strategies</p>
                     {% endif %}

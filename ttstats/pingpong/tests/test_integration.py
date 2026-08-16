@@ -293,3 +293,33 @@ class TestDoublesMatchLifecycle:
         ).content.decode()
         for player in (p1, p2, p3, p4):
             assert player.name in body, f"{player.name} missing from match detail"
+
+
+@pytest.mark.django_db
+class TestFormsShowEveryError:
+    """Templates printed `.errors.0` and dropped the rest.
+
+    Django's password validators are the clearest case: a weak password
+    fails several of them at once, and the user was told only the first
+    reason, fixed it, and was then told the next one.
+    """
+
+    def test_signup_lists_all_password_problems_at_once(self):
+        resp = Client().post(
+            reverse("pingpong:signup"),
+            {
+                "username": "shorty",
+                "email": "shorty@example.com",
+                "password1": "1",
+                "password2": "1",
+                "full_name": "Shorty Person",
+                "nickname": "",
+                "playing_style": "normal",
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.content.decode()
+
+        assert "too short" in body
+        assert "too common" in body
+        assert "entirely numeric" in body

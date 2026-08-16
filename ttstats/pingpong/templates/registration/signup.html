@@ -7,10 +7,12 @@
 {% block content %}
 <div class="rounded-lg border bg-card p-8 shadow">
     {% if form.non_field_errors %}
-    <div class="rounded-lg border border-destructive bg-destructive/10 p-4 mb-6">
+    <div class="rounded-lg border border-destructive bg-destructive/10 p-4 mb-6 space-y-1">
+        {% for error in form.non_field_errors %}
         <div class="flex items-center gap-2 text-destructive">
-            <span class="font-medium">{{ form.non_field_errors.0 }}</span>
+            <span class="font-medium">{{ error }}</span>
         </div>
+        {% endfor %}
     </div>
     {% endif %}
 
@@ -32,7 +34,9 @@
                 placeholder="Choose a username"
             />
             {% if form.username.errors %}
-                <p class="mt-1 text-sm text-destructive">{{ form.username.errors.0 }}</p>
+                {% for error in form.username.errors %}
+                <p class="mt-1 text-sm text-destructive">{{ error }}</p>
+                {% endfor %}
             {% endif %}
             <p class="mt-1 text-xs text-muted-foreground">This will be your login name</p>
         </div>
@@ -51,7 +55,9 @@
                 placeholder="your.email@example.com"
             />
             {% if form.email.errors %}
-                <p class="mt-1 text-sm text-destructive">{{ form.email.errors.0 }}</p>
+                {% for error in form.email.errors %}
+                <p class="mt-1 text-sm text-destructive">{{ error }}</p>
+                {% endfor %}
             {% endif %}
         </div>
 
@@ -69,7 +75,9 @@
                 placeholder="John Doe"
             />
             {% if form.full_name.errors %}
-                <p class="mt-1 text-sm text-destructive">{{ form.full_name.errors.0 }}</p>
+                {% for error in form.full_name.errors %}
+                <p class="mt-1 text-sm text-destructive">{{ error }}</p>
+                {% endfor %}
             {% endif %}
         </div>
 
@@ -86,7 +94,9 @@
                 placeholder="Optional display name"
             />
             {% if form.nickname.errors %}
-                <p class="mt-1 text-sm text-destructive">{{ form.nickname.errors.0 }}</p>
+                {% for error in form.nickname.errors %}
+                <p class="mt-1 text-sm text-destructive">{{ error }}</p>
+                {% endfor %}
             {% endif %}
             <p class="mt-1 text-xs text-muted-foreground">How you want to appear on the leaderboard</p>
         </div>
@@ -105,7 +115,9 @@
                 <option value="unknown" {% if form.playing_style.value == 'unknown' %}selected{% endif %}>Unknown</option>
             </select>
             {% if form.playing_style.errors %}
-                <p class="mt-1 text-sm text-destructive">{{ form.playing_style.errors.0 }}</p>
+                {% for error in form.playing_style.errors %}
+                <p class="mt-1 text-sm text-destructive">{{ error }}</p>
+                {% endfor %}
             {% endif %}
         </div>
 
@@ -121,7 +133,9 @@
                 class="mt-1 block w-full rounded-md border {% if form.password1.errors %}border-destructive{% else %}border-input{% endif %} px-3 py-2 shadow-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary"
             />
             {% if form.password1.errors %}
-                <p class="mt-1 text-sm text-destructive">{{ form.password1.errors.0 }}</p>
+                {% for error in form.password1.errors %}
+                <p class="mt-1 text-sm text-destructive">{{ error }}</p>
+                {% endfor %}
             {% endif %}
         </div>
 
@@ -137,7 +151,9 @@
                 class="mt-1 block w-full rounded-md border {% if form.password2.errors %}border-destructive{% else %}border-input{% endif %} px-3 py-2 shadow-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary"
             />
             {% if form.password2.errors %}
-                <p class="mt-1 text-sm text-destructive">{{ form.password2.errors.0 }}</p>
+                {% for error in form.password2.errors %}
+                <p class="mt-1 text-sm text-destructive">{{ error }}</p>
+                {% endfor %}
             {% endif %}
         </div>
 

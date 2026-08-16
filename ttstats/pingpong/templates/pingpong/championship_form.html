@@ -57,7 +57,9 @@
                     </label>
                     {{ form.name }}
                     {% if form.name.errors %}
-                    <p class="text-sm text-destructive">{{ form.name.errors.0 }}</p>
+                    {% for error in form.name.errors %}
+                    <p class="text-sm text-destructive">{{ error }}</p>
+                    {% endfor %}
                     {% else %}
                     <p class="text-sm text-muted-foreground">Give your championship a memorable name</p>
                     {% endif %}
@@ -71,7 +73,9 @@
                     </div>
                     {{ form.description }}
                     {% if form.description.errors %}
-                    <p class="text-sm text-destructive">{{ form.description.errors.0 }}</p>
+                    {% for error in form.description.errors %}
+                    <p class="text-sm text-destructive">{{ error }}</p>
+                    {% endfor %}
                     {% else %}
                     <p class="text-sm text-muted-foreground">Championship rules, format, prizes, etc.</p>
                     {% endif %}
@@ -96,7 +100,9 @@
                             {{ form.championship_type }}
                         </div>
                         {% if form.championship_type.errors %}
-                        <p class="text-sm text-destructive">{{ form.championship_type.errors.0 }}</p>
+                        {% for error in form.championship_type.errors %}
+                        <p class="text-sm text-destructive">{{ error }}</p>
+                        {% endfor %}
                         {% endif %}
                     </div>
 
@@ -107,7 +113,9 @@
                         </label>
                         {{ form.max_participants }}
                         {% if form.max_participants.errors %}
-                        <p class="text-sm text-destructive">{{ form.max_participants.errors.0 }}</p>
+                        {% for error in form.max_participants.errors %}
+                        <p class="text-sm text-destructive">{{ error }}</p>
+                        {% endfor %}
                         {% else %}
                         <p class="text-sm text-muted-foreground">Maximum number of teams/players</p>
                         {% endif %}
@@ -123,7 +131,9 @@
                         </label>
                     </div>
                     {% if form.is_public.errors %}
-                    <p class="text-sm text-destructive">{{ form.is_public.errors.0 }}</p>
+                    {% for error in form.is_public.errors %}
+                    <p class="text-sm text-destructive">{{ error }}</p>
+                    {% endfor %}
                     {% else %}
                     <p class="text-sm text-muted-foreground">Uncheck for private championships with fixed participants</p>
                     {% endif %}
@@ -142,7 +152,9 @@
                         </label>
                         {{ form.start_date }}
                         {% if form.start_date.errors %}
-                        <p class="text-sm text-destructive">{{ form.start_date.errors.0 }}</p>
+                        {% for error in form.start_date.errors %}
+                        <p class="text-sm text-destructive">{{ error }}</p>
+                        {% endfor %}
                         {% endif %}
                     </div>
 
@@ -154,7 +166,9 @@
                         </label>
                         {{ form.registration_deadline }}
                         {% if form.registration_deadline.errors %}
-                        <p class="text-sm text-destructive">{{ form.registration_deadline.errors.0 }}</p>
+                        {% for error in form.registration_deadline.errors %}
+                        <p class="text-sm text-destructive">{{ error }}</p>
+                        {% endfor %}
                         {% else %}
                         <p class="text-sm text-muted-foreground">Last day to register</p>
                         {% endif %}
@@ -170,7 +184,9 @@
                     </div>
                     {{ form.location }}
                     {% if form.location.errors %}
-                    <p class="text-sm text-destructive">{{ form.location.errors.0 }}</p>
+                    {% for error in form.location.errors %}
+                    <p class="text-sm text-destructive">{{ error }}</p>
+                    {% endfor %}
                     {% else %}
                     <p class="text-sm text-muted-foreground">Default location for championship matches</p>
                     {% endif %}
@@ -184,7 +200,9 @@
                     </label>
                     {{ form.status }}
                     {% if form.status.errors %}
-                    <p class="text-sm text-destructive">{{ form.status.errors.0 }}</p>
+                    {% for error in form.status.errors %}
+                    <p class="text-sm text-destructive">{{ error }}</p>
+                    {% endfor %}
                     {% endif %}
                 </div>
                 {% endif %}

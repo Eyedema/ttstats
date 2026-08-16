@@ -47,7 +47,9 @@
                     </label>
                     {{ form.scheduled_date }}
                     {% if form.scheduled_date.errors %}
-                    <p class="text-sm text-destructive">{{ form.scheduled_date.errors.0 }}</p>
+                    {% for error in form.scheduled_date.errors %}
+                    <p class="text-sm text-destructive">{{ error }}</p>
+                    {% endfor %}
                     {% endif %}
                 </div>
 
@@ -57,7 +59,9 @@
                     </label>
                     {{ form.scheduled_time }}
                     {% if form.scheduled_time.errors %}
-                    <p class="text-sm text-destructive">{{ form.scheduled_time.errors.0 }}</p>
+                    {% for error in form.scheduled_time.errors %}
+                    <p class="text-sm text-destructive">{{ error }}</p>
+                    {% endfor %}
                     {% endif %}
                 </div>
 
@@ -67,7 +71,9 @@
                     </label>
                     {{ form.location }}
                     {% if form.location.errors %}
-                    <p class="text-sm text-destructive">{{ form.location.errors.0 }}</p>
+                    {% for error in form.location.errors %}
+                    <p class="text-sm text-destructive">{{ error }}</p>
+                    {% endfor %}
                     {% endif %}
                 </div>
 
