@@ -35,7 +35,12 @@ services:
       context: .
       dockerfile: docker/django/Dockerfile
     command: python manage.py runserver 0.0.0.0:8000
-    env_file: .env.dev
+    # .env.dev.local is optional and loaded second, so it wins. Real credentials
+    # (e.g. a Supabase DATABASE_URL) belong there -- .env.dev is committed.
+    env_file:
+      - .env.dev
+      - path: .env.dev.local
+        required: false
     volumes:
       - ./ttstats:/app
     ports:

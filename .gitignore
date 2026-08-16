@@ -15,8 +15,11 @@ ttstats/staticfiles/
 *.log
 
 # Environment
+# .env.dev is tracked on purpose -- it is the dev template and holds only fake
+# credentials. Anything real (a Supabase DATABASE_URL) goes in .env.dev.local,
+# which compose.dev.yml loads after it and which is never committed.
 .env
-#.env.dev
+.env.dev.local
 .env.prod
 
 # Frontend build output (produced by `npm run build:css`; the Docker image

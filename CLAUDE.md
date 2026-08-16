@@ -275,6 +275,7 @@ Two shapes, both in use:
 ## Environment & Deployment
 
 - **Dev:** `DEBUG=True`, SQLite, Console email, `DJANGO_SETTINGS_MODULE=ttstats.settings.dev`
+- **`DATABASE_URL` opts dev into the Supabase clone of prod.** Unset, `dev.py` uses the SQLite file as before; set, it parses the URL with `dj-database-url` (`ssl_require=True`). Use Supabase's **session** pooler on port 5432 -- the transaction pooler on 6543 has no prepared statements and Django breaks on it. **Tests are unaffected either way**: `settings/test.py` overrides `DATABASES` to in-memory SQLite *after* `from .dev import *`, so an exported `DATABASE_URL` can never point the suite at a real database.
 - **Prod:** `DEBUG=False`, PostgreSQL, Mailgun, HTTPS, WhiteNoise, `DJANGO_SETTINGS_MODULE=ttstats.settings.prod`
 - **Docker services:** web (Django), db (PostgreSQL), redis (Redis 7 Alpine)
 - **CI/CD** (`.github/workflows/main.yml`): On push/PR runs tests with coverage; on master push deploys via SSH to VPS. The test job is gated on changed files -- **`.py` gates the test run, frontend extensions gate the asset build**, so a template-only commit still builds the CSS.

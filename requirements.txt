@@ -16,4 +16,5 @@ whitenoise==6.11.0
 pytest-cov
 pytest-xdist
 psycopg2-binary
+dj-database-url==2.3.0
 gunicorn
