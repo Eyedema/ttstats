@@ -16,6 +16,7 @@
 npm install                                        # Once, after cloning
 npm run build                                      # Vendor JS + compile CSS
 npm run watch:css                                  # Rebuild CSS on template change
+python scripts/check_css_coverage.py               # Classes used in templates but absent from the build
 
 # Development
 docker compose -f compose.dev.yml up --build       # Start dev environment (includes the assets watcher)
@@ -150,7 +151,9 @@ Key fixtures:
 
 Maintain integration tests that exercise complete user flows end-to-end through multiple view calls in sequence. **When adding a new feature**, also add an integration test covering its primary happy path.
 
-**Required integration test flows** (in `test_views.py` or `test_integration.py`):
+**Required integration test flows.** Flows 1-3 live in `test_integration.py`; flow 4 is
+`test_scheduled_match_conversion.py::TestConversionIntegration` and flow 5 is `test_views.py`'s
+`TestHeadToHead*`. Don't assume coverage from a `-k` match count -- check the flow exists.
 
 1. **Registration -> Verification -> Login:** POST signup -> GET verify-email with token -> POST login -> assert dashboard loads.
 2. **Match lifecycle (singles with Elo):** Create match -> add games (triggers winner) -> assert emails sent -> confirm as both players -> assert Elo updated -> verify leaderboard.
@@ -176,6 +179,15 @@ These are non-obvious behaviors that aren't clear from reading individual source
 - **`Match.recompute()` is the single source of truth** for `winner_side`, the score caches and `is_confirmed`. It writes via a queryset `.update()` so it cannot re-enter the signal pipeline. Never set those fields by hand; call `recompute()`.
 - The pure decision functions live in `match_state.py` (no Django imports): `winner_side()`, `side_confirmed()`, `confirmation_complete()`, `should_auto_confirm()`. Test them without a DB.
 - Views should use `Match.objects.filter(is_confirmed=True)` (DB-level), not Python-level filtering
+
+### Scoring Rules
+- `live_scoring.py` owns them: `WIN_POINTS` (11), `MIN_LEAD` (2), `is_game_won`,
+  `is_valid_final_score`, `common_final_scores`. Pure functions, no Django -- test without a DB.
+- `is_valid_final_score` is stricter than "someone is ahead": 11-10 has a leader but isn't over,
+  and 13-5 can't happen because play stops the moment the lead is enough.
+- `GameForm.clean()` defers to it. The Alt+1..4 presets in `game_form.html` come from
+  `common_final_scores()` via `json_script`. **Don't re-type scorelines anywhere** -- they were
+  previously written out in three places.
 
 ### Championship System
 - Championship matches may have winners but `is_confirmed=False` — always filter by `winner_side__isnull=False` for championship data, not `is_confirmed=True`
@@ -203,14 +215,45 @@ These are non-obvious behaviors that aren't clear from reading individual source
 - `<body>` carries `hx-headers` with the CSRF token, so every htmx request is authenticated without per-element wiring.
 - `prod.py`'s CSP now allows no external hosts at all. `'unsafe-inline'` is still required for scripts and styles because templates carry inline `<script>` blocks; B.5 is what removes them.
 
+### htmx Fragments
+Two shapes, both in use:
+- **Dual-mode view** -- one URL serves the page and the fragment. `LeaderboardView` does this:
+  `is_htmx(request)` (views.py) reads the `HX-Request` header, and `get_template_names()` picks
+  the partial. Prefer this over branching inside `get_context_data`.
+- **Dedicated fragment view** -- its own URL, only ever returns a partial:
+  `ChampionshipParticipantsFragmentView`, `MatchValidateView`.
+- **The full page must `{% include %}` the same partial the fragment returns**, so the two cannot
+  drift. All three partials (`_leaderboard_results`, `_championship_participants`, `_form_errors`)
+  are included on first paint.
+- **A fragment swapped with `hx-swap="outerHTML"` must render its own target `id`.** Drop it and
+  htmx can never target that element again -- the first swap works and every later one silently
+  does nothing.
+- Use `hx-push-url="true"` where the old code did a full submit, or you quietly remove deep links
+  and the back button.
+- Tom Select hides the real `<select>`, so its change events don't reach an ancestor's
+  `hx-trigger`. Re-dispatch a bubbling `change` from its `onChange`.
+- `<body>` carries `hx-headers` with the CSRF token; per-element wiring isn't needed.
+
 ### Forms
 - **Never hand-write `<option>` loops.** Render the widget (`{{ form.field }}`) or include `pingpong/_field.html`. A hand-written loop comparing `form.f.value` to a literal is wrong on a bound form: the POST value is a *string*, so `"7" == 7` is false and the user's choice disappears when validation fails.
 - `_field.html` renders label, widget, help text and **every** error (templates used to print `.errors.0` and drop the rest). Optional context: `label`, `help`, `badge`, `wrapper_class`.
 - `StyledFormMixin` (forms.py) puts `.field-input` on every widget and sets `error_css_class`. Add it to any new form; do not paste Tailwind strings into Python.
 - **Adding classes in a view:** use `append_widget_class(field, css)`. `widget.attrs.update({"class": ...})` replaces the attribute and silently drops `field-input`.
 - Choice lists belong in forms.py (`BEST_OF_CHOICES`), not in template markup.
+- **Live validation** is `MatchValidateView` (`matches/validate/`), which binds the real form and
+  renders `_form_errors.html`. It saves nothing. Validation rules belong there and in
+  `Form.clean()` -- never re-implemented in JS.
+- Filtering "still unfilled" errors must key on Django's `required` **error code**, not the
+  message: "Four players are required for a doubles match!" is a rule violation that happens to
+  contain the word "required".
 
 ### Template / Frontend
+- **Never `{% url 'pingpong:player_detail' <player>.pk %}` directly.** Use
+  `{% player_link player css="..." %}` (`templatetags/player_tags.py`), which degrades to plain
+  text when the player is gone. `MatchParticipant.player` is `on_delete=CASCADE`, so deleting a
+  player empties a side of every match they played; the raw `{% url %}` then gets an empty pk and
+  raises `NoReverseMatch`, permanently 500-ing the match list, match detail and player detail for
+  everyone. This happened.
 - `base.html` unconditionally renders `{% url 'pingpong:player_detail' user.player.pk %}` — every authenticated user **must** have a linked Player profile
 - Use `json_script` template tag for passing data to JavaScript, NOT `escapejs` (causes double-serialization)
 - Chart.js colors: use explicit `rgb()` values (e.g., `rgb(59, 130, 246)`), not CSS custom properties (render as black)
@@ -234,4 +277,6 @@ These are non-obvious behaviors that aren't clear from reading individual source
 - **Dev:** `DEBUG=True`, SQLite, Console email, `DJANGO_SETTINGS_MODULE=ttstats.settings.dev`
 - **Prod:** `DEBUG=False`, PostgreSQL, Mailgun, HTTPS, WhiteNoise, `DJANGO_SETTINGS_MODULE=ttstats.settings.prod`
 - **Docker services:** web (Django), db (PostgreSQL), redis (Redis 7 Alpine)
-- **CI/CD** (`.github/workflows/main.yml`): On push/PR runs tests with coverage; on master push deploys via SSH to VPS
+- **CI/CD** (`.github/workflows/main.yml`): On push/PR runs tests with coverage; on master push deploys via SSH to VPS. The test job is gated on changed files -- **`.py` gates the test run, frontend extensions gate the asset build**, so a template-only commit still builds the CSS.
+- **Migration `0028_drop_team` is one-way.** Reversing would re-add NOT NULL FK columns with nothing to put in them, so it raises a `RuntimeError` naming the remedy: restore a pre-0028 snapshot.
+- **Deploy runs `collectstatic` under `set -e`** (`docker/django/entrypoint.sh`), and prod uses WhiteNoise's hashing manifest storage. A vendored file whose `sourceMappingURL` target is missing therefore **fails the deploy**, not just the page -- `scripts/vendor_assets.mjs` copies `.map` siblings for exactly this reason.
