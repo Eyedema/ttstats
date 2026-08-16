@@ -1,0 +1,15 @@
+{
+  "name": "ttstats-assets",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Frontend asset build for TTStats (Tailwind CSS + vendored JS).",
+  "scripts": {
+    "build:css": "tailwindcss -i ttstats/pingpong/static/pingpong/src/app.css -o ttstats/pingpong/static/pingpong/css/app.css --minify",
+    "watch:css": "tailwindcss -i ttstats/pingpong/static/pingpong/src/app.css -o ttstats/pingpong/static/pingpong/css/app.css --watch"
+  },
+  "devDependencies": {
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17"
+  }
+}

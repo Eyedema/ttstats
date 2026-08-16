@@ -3,7 +3,7 @@
 ## Quick Reference
 
 - **Project:** TTStats (Table Tennis Stats Tracker)
-- **Stack:** Django 6.0, PostgreSQL 16, Redis 7, Tailwind CSS, Docker
+- **Stack:** Django 6.0, PostgreSQL 16, Redis 7, Tailwind CSS (v3, compiled), Docker
 - **Python Version:** 3.12
 - **Main App:** `ttstats/pingpong/`
 - **Test Framework:** pytest + pytest-django + factory-boy
@@ -12,8 +12,13 @@
 ## Common Commands
 
 ```bash
+# Frontend assets (Tailwind v3 build -- required for a styled page)
+npm install                                        # Once, after cloning
+npm run build:css                                  # One-off build
+npm run watch:css                                  # Rebuild on template change
+
 # Development
-docker compose -f compose.dev.yml up --build       # Start dev environment
+docker compose -f compose.dev.yml up --build       # Start dev environment (includes the assets watcher)
 docker compose -f compose.dev.yml exec web python manage.py migrate  # Run migrations
 docker compose -f compose.dev.yml exec web python manage.py createsuperuser
 
@@ -180,6 +185,14 @@ These are non-obvious behaviors that aren't clear from reading individual source
 - Round-robin pairing is a pure function in `championship_scheduling.py` (`round_robin_rounds`, `round_robin_double_rounds`) -- circle method, home + away (andata e ritorno). Test it without a DB.
 - Entrants are `ChampionshipEntry` + `ChampionshipEntryMember`, not teams. The denormalized `championship` FK on the member row lets the DB enforce one entry per player per championship. Register via `championship.register_entry(players)`.
 - **`generate_schedule()` uses `bulk_create`, which bypasses `post_save`** — it therefore builds `ScheduledMatchParticipant` rows explicitly. Any new bulk path must do the same or the schedule comes out with no participants.
+
+### Frontend Build
+- Tailwind is **compiled**, not loaded from a CDN. Source `static/pingpong/src/app.css`, output `static/pingpong/css/app.css` (gitignored). Config in `tailwind.config.js` at the repo root.
+- **Pinned to Tailwind v3.** The palette is a v3 `theme.extend.colors` object lifted from the old inline `base.html` config; v4's CSS-first config would be a rewrite.
+- **A class Tailwind cannot see is silently dropped.** The `content` globs cover all templates *and* `pingpong/*.py`, because `forms.py` still builds widget class strings in Python. If you move class names into a new Python module, add it to the globs.
+- Tests do not need the CSS to exist; `{% static %}` resolves without it. The browser does -- run `npm run build:css` after cloning.
+- Docker: a `node:20-alpine AS assets` stage builds the CSS, and the `COPY --from=assets` in the final stage must stay **after** `COPY ttstats/ .` or it gets overwritten. `compose.dev.yml` bind-mounts `./ttstats` over `/app`, which shadows the image's CSS -- hence the separate `assets` watcher service.
+- CI builds the CSS when either Python or frontend files change. Before this, a template-only commit got zero CI.
 
 ### Template / Frontend
 - `base.html` unconditionally renders `{% url 'pingpong:player_detail' user.player.pk %}` — every authenticated user **must** have a linked Player profile

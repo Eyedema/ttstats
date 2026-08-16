@@ -19,6 +19,17 @@ services:
       - redis_data_dev:/data
     command: redis-server --appendonly yes
 
+  # The web service bind-mounts ./ttstats over /app, which shadows the CSS the
+  # image built at COPY --from=assets time. This service rebuilds it into the
+  # mounted tree instead, and keeps rebuilding as templates change.
+  assets:
+    image: node:20-alpine
+    working_dir: /build
+    command: sh -c "npm ci && npm run watch:css"
+    volumes:
+      - .:/build
+      - node_modules_dev:/build/node_modules
+
   web:
     build:
       context: .
@@ -32,7 +43,9 @@ services:
     depends_on:
       - db
       - redis
+      - assets
 
 volumes:
   pgdata_dev:
   redis_data_dev:
+  node_modules_dev:
