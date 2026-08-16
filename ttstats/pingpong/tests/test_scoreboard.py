@@ -1239,3 +1239,62 @@ class TestGameFormUsesTheSharedRule:
 
     def test_accepts_a_deuce_finish(self):
         assert self._form(12, 10).is_valid()
+
+
+# ---------------------------------------------------------------------------
+# Scoreboard responsiveness (apple-design §1 "Response", §13 haptics)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+class TestScoreboardResponsiveness:
+    """Markup/handler contracts that would fail silently if broken.
+
+    None of this is testable through the Python layer -- the behaviour lives
+    in the Alpine component -- but each assertion pins a coupling that has a
+    real failure mode, so a refactor that drops one gets caught here rather
+    than on a phone at the table.
+    """
+
+    def _page(self, auth_client):
+        match, p1, _ = _make_live_match()
+        resp = auth_client(p1.user).get(
+            reverse("pingpong:live_scoreboard", args=[match.pk])
+        )
+        assert resp.status_code == 200
+        return resp.content.decode()
+
+    def test_score_reads_through_the_optimistic_overlay(self, auth_client):
+        """Binding straight to state.teamN_points puts the round-trip back on
+        the input path: the numeral would only move once the POST returned."""
+        body = self._page(auth_client)
+        assert "points('team1')" in body
+        assert "points('team2')" in body
+        assert 'x-text="state.team1_points"' not in body
+
+    def test_tap_zones_are_never_disabled(self, auth_client):
+        """`:disabled="busy"` on a tap zone drops points during a slow POST."""
+        body = self._page(auth_client)
+        zones = body.count("tap-zone")
+        assert zones == 2, f"expected two tap zones, found {zones}"
+        # The control cluster may still disable on `busy`; the zones may not.
+        for fragment in body.split("<button")[1:]:
+            if "tap-zone" in fragment.split(">")[0]:
+                assert ":disabled" not in fragment.split(">")[0]
+
+    def test_press_and_haptic_feedback_are_wired(self, auth_client):
+        body = self._page(auth_client)
+        assert "bumpScore" in body       # visual confirmation of the tap
+        assert "navigator.vibrate" in body
+
+    def test_errors_do_not_use_a_blocking_dialog(self, auth_client):
+        """alert() freezes the page mid-match and reads as a browser failure."""
+        body = self._page(auth_client)
+        assert "alert(" not in body
+        assert "showError" in body
+
+    def test_requests_are_serialised(self, auth_client):
+        """Points must reach the server in tap order once zones accept
+        taps while a request is in flight."""
+        body = self._page(auth_client)
+        assert "enqueue" in body

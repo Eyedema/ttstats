@@ -257,6 +257,43 @@ Two shapes, both in use:
 - `base.html` unconditionally renders `{% url 'pingpong:player_detail' user.player.pk %}` — every authenticated user **must** have a linked Player profile
 - Use `json_script` template tag for passing data to JavaScript, NOT `escapejs` (causes double-serialization)
 - Chart.js colors: use explicit `rgb()` values (e.g., `rgb(59, 130, 246)`), not CSS custom properties (render as black)
+- **The flash auto-dismiss in `base.html` keys on `[data-flash]`, not `[role="alert"]`.** It sweeps
+  the DOM 5s after load, so the old selector deleted any long-lived alert on the page — the
+  scoreboard's error toast — whether or not it had ever been shown. `_messages.html` sets the
+  attribute; a new flash partial must too.
+- `[x-cloak]` is declared once in `app.css`. Alpine is deferred, so every `x-show` element needs it
+  or it flashes visible on first paint. Don't re-add a per-template `<style>` copy.
+
+### Motion, materials & user preferences
+- **The `prefers-reduced-motion` / `prefers-reduced-transparency` blocks in `app.css` sit outside
+  every `@layer`** so they beat both component classes and Tailwind utilities. Moving them into a
+  layer silently disarms them.
+- Reduced motion narrows `transition-property` to opacity/colour rather than zeroing durations:
+  colour feedback still carries meaning, and elements that declared no transition don't acquire
+  one. Animations are clamped to a single 1ms iteration, which also parks `animate-pulse` on its
+  final frame instead of looping.
+- `.chrome-blur` + `.chrome-edge-bottom` are the translucent nav surfaces (sidebar, mobile header).
+  The edge is a gradient pseudo-element on the *fixed* element, not a `border-b`. Any new frosted
+  surface must also be covered by the reduced-transparency block, which goes fully solid — a
+  half-transparent fallback is the worst case for legibility.
+- The mobile menu is Alpine (`menuOpen` on the `.flex.min-h-screen` root, `@keydown.escape.window`).
+  It enters from the left and leaves the same way; keep the enter/leave transforms mirrored.
+
+### Live Scoreboard client (`scoreboard.html`)
+- **The score is optimistic.** `addPoint()` bumps a local overlay and renders through
+  `points(side)`; the POST reconciles. This is not a JS copy of the rules — the server always
+  increments that side first, so the displayed number is never wrong, only transient when the
+  point also ends the game.
+- **Never put `:disabled="busy"` back on a tap zone.** That drops points during a slow POST, which
+  is the whole failure this removed. `busy` still gates the Undo/start controls.
+- Because zones accept taps while a request is in flight, **all POSTs go through `enqueue()`** so
+  the server applies them in tap order. Adding a new endpoint call? Enqueue it.
+- The optimistic overlay is only cleared when `pending` hits 0. Clearing it on every response drags
+  the display backwards while taps are still outstanding.
+- Errors go to the `x-show="error"` toast via `showError()`. **No `alert()`** — it froze the page
+  mid-match and read as a browser failure.
+- Haptics live in the `HAPTICS` table and fire in the tap handler, on the same frame as the visual.
+  Keep them few: a buzz on everything trains the umpire to ignore all of them.
 
 ### Passkey Authentication
 - Optional WebAuthn/FIDO2 via django-otp + django-otp-webauthn

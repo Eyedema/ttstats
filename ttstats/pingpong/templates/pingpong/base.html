@@ -17,9 +17,12 @@
     <script defer src="{% static 'pingpong/js/vendor/alpine.min.js' %}"></script>
 
     <script>
-        // Auto-dismiss flash messages after 5s.
+        // Auto-dismiss flash messages after 5s. Scoped to [data-flash], not to
+        // every [role="alert"] on the page -- an alert raised by a long-lived
+        // screen (the scoreboard's error toast) is not a flash message and
+        // must not be ripped out of the DOM five seconds after load.
         setTimeout(() => {
-            const alerts = document.querySelectorAll('[role="alert"]');
+            const alerts = document.querySelectorAll('[data-flash]');
             alerts.forEach(alert => {
                 alert.style.transition = 'opacity 0.3s';
                 alert.style.opacity = '0';
@@ -34,10 +37,12 @@
 <body class="bg-background text-foreground"
       hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
 
-    <div class="flex min-h-screen">
+    <div class="flex min-h-screen"
+         x-data="{ menuOpen: false }"
+         @keydown.escape.window="menuOpen = false">
         <!-- Sidebar -->
         <aside
-            class="hidden lg:flex lg:flex-col lg:w-64 lg:fixed lg:inset-y-0 lg:left-0 border-r bg-white lg:overflow-y-auto">
+            class="hidden lg:flex lg:flex-col lg:w-64 lg:fixed lg:inset-y-0 lg:left-0 border-r chrome-blur lg:overflow-y-auto">
             <!-- Logo/Title -->
             <div class="p-6 border-b">
                 <h1 class="text-2xl font-bold flex items-center gap-2">
@@ -165,10 +170,13 @@
             </div>
         </aside>
 
-        <!-- Mobile header -->
-        <div class="lg:hidden fixed top-0 left-0 right-0 bg-white border-b z-10">
+        <!-- Mobile header. Translucent, with content passing underneath as it
+             scrolls; the boundary is a soft edge rather than a hard rule. -->
+        <div class="lg:hidden fixed top-0 left-0 right-0 chrome-blur chrome-edge-bottom z-10">
             <div class="flex items-center p-4">
-                <button id="mobile-menu-btn" class="p-2 hover:bg-secondary rounded-md">
+                <button @click="menuOpen = true" aria-label="Open menu"
+                        :aria-expanded="menuOpen"
+                        class="p-2 hover:bg-secondary active:bg-secondary/80 rounded-md transition-colors">
                     <img src="{% static 'pingpong/icons/menu.svg' %}" class="w-6 h-6" alt="Menu">
                 </button>
                 <a href="{% url 'pingpong:dashboard' %}">
@@ -180,12 +188,31 @@
             </div>
         </div>
 
-        <!-- Mobile menu overlay -->
-        <div id="mobile-menu" class="lg:hidden fixed inset-0 bg-black/50 z-20 hidden">
-            <div class="fixed inset-y-0 left-0 w-64 bg-white border-r">
+        <!-- Mobile menu overlay. The panel enters from the left and leaves the
+             same way -- a drawer that slid in from the edge and then vanished
+             in place reads as a different object arriving and departing. The
+             scrim dims to mark the task as modal. -->
+        <div x-show="menuOpen" x-cloak
+             x-transition:enter="transition ease-out duration-200"
+             x-transition:enter-start="opacity-0"
+             x-transition:enter-end="opacity-100"
+             x-transition:leave="transition ease-in duration-150"
+             x-transition:leave-start="opacity-100"
+             x-transition:leave-end="opacity-0"
+             @click.self="menuOpen = false"
+             class="lg:hidden fixed inset-0 bg-black/50 z-20">
+            <div x-show="menuOpen"
+                 x-transition:enter="transition ease-out duration-300"
+                 x-transition:enter-start="-translate-x-full opacity-0"
+                 x-transition:enter-end="translate-x-0 opacity-100"
+                 x-transition:leave="transition ease-in duration-200"
+                 x-transition:leave-start="translate-x-0 opacity-100"
+                 x-transition:leave-end="-translate-x-full opacity-0"
+                 class="fixed inset-y-0 left-0 w-64 bg-white border-r overflow-y-auto">
                 <div class="p-4 border-b flex justify-between items-center">
                     <h2 class="font-semibold">Menu</h2>
-                    <button id="mobile-menu-close" class="p-2 hover:bg-secondary rounded-md">
+                    <button @click="menuOpen = false" aria-label="Close menu"
+                            class="p-2 hover:bg-secondary active:bg-secondary/80 rounded-md transition-colors">
                         <img src="{% static 'pingpong/icons/x.svg' %}" class="w-5 h-5" alt="Close">
                     </button>
                 </div>
@@ -301,31 +328,6 @@
             </div>
         </main>
     </div>
-
-    <script>
-        // Mobile menu toggle
-        const mobileMenuBtn = document.getElementById('mobile-menu-btn');
-        const mobileMenu = document.getElementById('mobile-menu');
-        const mobileMenuClose = document.getElementById('mobile-menu-close');
-
-        if (mobileMenuBtn && mobileMenu) {
-            mobileMenuBtn.addEventListener('click', () => {
-                mobileMenu.classList.remove('hidden');
-            });
-        }
-
-        if (mobileMenuClose && mobileMenu) {
-            mobileMenuClose.addEventListener('click', () => {
-                mobileMenu.classList.add('hidden');
-            });
-
-            mobileMenu.addEventListener('click', (e) => {
-                if (e.target === mobileMenu) {
-                    mobileMenu.classList.add('hidden');
-                }
-            });
-        }
-    </script>
 
     {% block extra_js %}{% endblock %}
 </body>
