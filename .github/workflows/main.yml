@@ -193,6 +193,12 @@ jobs:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          # appleboy/ssh-action defaults to a 10m command_timeout, which is
+          # shorter than a cold `--build` on this VPS: the deploy of the
+          # participant refactor was killed while apt was still installing
+          # build-essential, leaving the repo pulled but the containers on the
+          # previous image. The build is the slow part, not the migrate.
+          command_timeout: 40m
           script: |
             set -e
             cd ${{ secrets.WORK_DIR }}
