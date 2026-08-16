@@ -1133,3 +1133,92 @@ class TestMatchConfirmHandoff:
         assert MatchConfirmation.objects.filter(match=match, player=p1).exists()
         recipients = [addr for em in mailoutbox for addr in em.to]
         assert p2.user.email in recipients
+
+
+class TestFinalScoreRules:
+    """is_valid_final_score / common_final_scores -- no DB, no Django."""
+
+    @pytest.mark.parametrize(
+        "t1,t2",
+        [
+            (11, 0),   # shutout
+            (11, 9),   # closest win without deuce
+            (0, 11),
+            (9, 11),
+            (12, 10),  # one exchange past deuce
+            (10, 12),
+            (15, 13),  # long deuce
+        ],
+    )
+    def test_accepts_scores_a_real_game_could_end_on(self, t1, t2):
+        assert ls.is_valid_final_score(t1, t2) is True
+
+    @pytest.mark.parametrize(
+        "t1,t2,why",
+        [
+            (11, 11, "a tie"),
+            (5, 3, "nobody reached 11"),
+            (10, 8, "nobody reached 11"),
+            (11, 10, "11-10 is not a win, play continues"),
+            (13, 5, "play would have stopped at 11-5"),
+            (20, 2, "same, further out"),
+            (-1, 11, "negative"),
+        ],
+    )
+    def test_rejects_scores_that_cannot_happen(self, t1, t2, why):
+        assert ls.is_valid_final_score(t1, t2) is False, why
+
+    def test_presets_are_the_four_shortcut_scorelines(self):
+        assert ls.common_final_scores() == [(11, 0), (11, 9), (0, 11), (9, 11)]
+
+    def test_every_preset_is_itself_a_valid_final_score(self):
+        """The presets are derived from the rules, so they must satisfy them."""
+        for t1, t2 in ls.common_final_scores():
+            assert ls.is_valid_final_score(t1, t2)
+
+    def test_presets_track_the_rule_constants(self):
+        """Derived, not typed out: the shutout and the closest win both
+        follow from WIN_POINTS and MIN_LEAD."""
+        presets = ls.common_final_scores()
+        assert presets[0] == (ls.WIN_POINTS, 0)
+        assert presets[1] == (ls.WIN_POINTS, ls.WIN_POINTS - ls.MIN_LEAD)
+
+
+@pytest.mark.django_db
+class TestGameFormUsesTheSharedRule:
+    """GameForm held a partial third copy of the scoring rules."""
+
+    def _form(self, t1, t2):
+        from pingpong.forms import GameForm
+
+        return GameForm({
+            "game_number": 1, "team1_score": t1, "team2_score": t2,
+        })
+
+    def test_accepts_a_legal_finish(self):
+        assert self._form(11, 5).is_valid()
+
+    def test_rejects_a_tie(self):
+        form = self._form(11, 11)
+        assert not form.is_valid()
+        assert "tie" in str(form.errors)
+
+    def test_rejects_a_score_where_nobody_reached_eleven(self):
+        """Previously accepted: the old check only looked at ties and 10-10."""
+        form = self._form(5, 3)
+        assert not form.is_valid()
+        assert "11 points" in str(form.errors)
+
+    def test_rejects_an_impossible_blowout(self):
+        """13-5 cannot occur -- play stops the moment the lead is enough.
+        Previously accepted."""
+        form = self._form(13, 5)
+        assert not form.is_valid()
+
+    def test_rejects_a_one_point_lead_past_deuce(self):
+        form = self._form(11, 10)
+        assert not form.is_valid()
+        assert "win by 2" in str(form.errors)
+
+    def test_accepts_a_deuce_finish(self):
+        assert self._form(12, 10).is_valid()

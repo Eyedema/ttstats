@@ -33,6 +33,7 @@ from django_ratelimit.exceptions import Ratelimited
 
 logger = logging.getLogger(__name__)
 
+from . import live_scoring
 from .forms import GameForm, MatchEditForm, MatchForm, PlayerRegistrationForm, ScheduledMatchForm, MatchConvertForm, \
     ChampionshipCreateForm, ChampionshipEditForm, ScheduledMatchEditForm
 from .achievements import get_achievement_progress
@@ -519,6 +520,9 @@ class GameCreateView(LoginRequiredMixin, CreateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["match"] = self.match
+        # The Alt+1..4 shortcut scorelines, derived from the scoring rules
+        # rather than typed into the template's JavaScript.
+        context["score_presets"] = live_scoring.common_final_scores()
         # Get next game number
         last_game = self.match.games.order_by("-game_number").first()
         context["next_game_number"] = (last_game.game_number + 1) if last_game else 1
@@ -2340,7 +2344,6 @@ class ScheduledMatchEditView(LoginRequiredMixin, UpdateView):
 # Live Scoreboard (KAN-4)
 # ---------------------------------------------------------------------------
 
-from . import live_scoring  # noqa: E402  (kept local to the section it serves)
 
 
 def _get_live_match_for_scorekeeper(request, pk):

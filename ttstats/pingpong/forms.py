@@ -2,6 +2,7 @@ from django import forms
 from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.models import User
 
+from . import live_scoring
 from .models import Game, Match, Player, ScheduledMatch, Championship
 
 # The set of legal match lengths. match_form.html used to hard-code these as
@@ -173,16 +174,35 @@ class GameForm(StyledFormMixin, forms.ModelForm):
         t1_score = cleaned_data.get('team1_score')
         t2_score = cleaned_data.get('team2_score')
         
-        if t1_score is not None and t2_score is not None:
-            if t1_score == t2_score:
-                raise forms.ValidationError("A game cannot end in a tie!")
-            
-            # Standard table tennis rules: must win by 2 at 10-10
-            if t1_score >= 10 and t2_score >= 10:
-                if abs(t1_score - t2_score) < 2:
-                    raise forms.ValidationError("When score is 10-10 or higher, you must win by 2 points!")
-        
-        return cleaned_data
+        if t1_score is None or t2_score is None:
+            return cleaned_data
+
+        # One rule, stated once, in live_scoring. This used to be a partial
+        # third copy that caught ties and 10-10 but happily accepted 5-3
+        # (nobody reached 11) or 13-5 (play would have stopped at 11-5).
+        if live_scoring.is_valid_final_score(t1_score, t2_score):
+            return cleaned_data
+
+        if t1_score == t2_score:
+            raise forms.ValidationError("A game cannot end in a tie!")
+
+        winner = max(t1_score, t2_score)
+        loser = min(t1_score, t2_score)
+        target = live_scoring.WIN_POINTS
+        lead = live_scoring.MIN_LEAD
+
+        if winner < target:
+            raise forms.ValidationError(
+                f"A game runs to {target} points -- neither side got there."
+            )
+        if winner - loser < lead:
+            raise forms.ValidationError(
+                f"At {target - 1}-all or beyond, you must win by {lead} points!"
+            )
+        raise forms.ValidationError(
+            f"{t1_score}-{t2_score} cannot happen: past {target - 1}-all the "
+            f"game ends as soon as one side leads by {lead}."
+        )
 
 
 class PlayerRegistrationForm(StyledFormMixin, UserCreationForm):

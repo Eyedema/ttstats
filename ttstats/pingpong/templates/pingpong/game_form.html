@@ -205,7 +205,11 @@
     </div>
 </div>
 
+{{ score_presets|json_script:"score-presets" }}
 <script>
+    const SCORE_PRESETS = JSON.parse(
+        document.getElementById('score-presets').textContent
+    );
     // Keyboard shortcuts for quick scoring
     document.addEventListener('keydown', function(e) {
         const team1Input = document.getElementById('id_team1_score');
@@ -247,26 +251,15 @@
             form.submit();
         }
 
-        // Quick score presets
+        // Quick score presets. The scorelines come from the server, which
+        // derives them from the scoring rules in live_scoring.py -- they used
+        // to be four hard-coded cases here.
         if (e.altKey) {
-            e.preventDefault();
-            switch(e.key) {
-                case '1': // 11-0
-                    team1Input.value = '11';
-                    team2Input.value = '0';
-                    break;
-                case '2': // 11-9
-                    team1Input.value = '11';
-                    team2Input.value = '9';
-                    break;
-                case '3': // 0-11
-                    team1Input.value = '0';
-                    team2Input.value = '11';
-                    break;
-                case '4': // 9-11
-                    team1Input.value = '9';
-                    team2Input.value = '11';
-                    break;
+            const preset = SCORE_PRESETS[Number(e.key) - 1];
+            if (preset) {
+                e.preventDefault();
+                team1Input.value = preset[0];
+                team2Input.value = preset[1];
             }
         }
     });
@@ -284,7 +277,7 @@
             <li><kbd class="px-1.5 py-0.5 text-xs bg-muted rounded">Tab</kbd> Switch to Team/Player 2</li>
             <li><kbd class="px-1.5 py-0.5 text-xs bg-muted rounded">Ctrl</kbd>+<kbd class="px-1.5 py-0.5 text-xs bg-muted rounded">Enter</kbd> Save & Add Next</li>
             <li><kbd class="px-1.5 py-0.5 text-xs bg-muted rounded">Shift</kbd>+<kbd class="px-1.5 py-0.5 text-xs bg-muted rounded">Enter</kbd> Save & Finish</li>
-            <li><kbd class="px-1.5 py-0.5 text-xs bg-muted rounded">Alt</kbd>+<kbd class="px-1.5 py-0.5 text-xs bg-muted rounded">1-4</kbd> Quick scores (11-0, 11-9, 0-11, 9-11)</li>
+            <li><kbd class="px-1.5 py-0.5 text-xs bg-muted rounded">Alt</kbd>+<kbd class="px-1.5 py-0.5 text-xs bg-muted rounded">1-${SCORE_PRESETS.length}</kbd> Quick scores (${SCORE_PRESETS.map(s => s.join('-')).join(', ')})</li>
         </ul>
     `;
     document.querySelector('.space-y-6').appendChild(helpText);
