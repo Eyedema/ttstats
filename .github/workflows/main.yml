@@ -65,12 +65,13 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
-      - name: Build CSS
+      - name: Build frontend assets
         if: steps.check_files.outputs.py_changed == 'true' || steps.check_files.outputs.assets_changed == 'true'
         run: |
           npm ci
-          npm run build:css
+          npm run build
           test -s ttstats/pingpong/static/pingpong/css/app.css
+          test -s ttstats/pingpong/static/pingpong/js/vendor/htmx.min.js
 
       - name: Set up Python
         if: steps.check_files.outputs.py_changed == 'true'

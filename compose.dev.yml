@@ -25,7 +25,7 @@ services:
   assets:
     image: node:20-alpine
     working_dir: /build
-    command: sh -c "npm ci && npm run watch:css"
+    command: sh -c "npm ci && npm run vendor && npm run watch:css"
     volumes:
       - .:/build
       - node_modules_dev:/build/node_modules

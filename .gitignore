@@ -22,6 +22,8 @@ db.sqlite3
 # builds it in the `assets` stage, compose.dev.yml rebuilds it on the fly)
 node_modules/
 ttstats/pingpong/static/pingpong/css/app.css
+ttstats/pingpong/static/pingpong/js/vendor/
+ttstats/pingpong/static/pingpong/css/vendor/
 
 # Docker
 docker-compose.override.yml

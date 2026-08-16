@@ -54,16 +54,10 @@ CSP_SCRIPT_SRC = (
     # <script> blocks. B.5 moves the rules out of them; the directive can
     # tighten once nothing inline remains.
     "'unsafe-inline'",
-    # Alpine, Chart.js and Tom Select. B.3 vendors these, after which this
-    # host can go too. cdn.tailwindcss.com and unpkg.com are gone -- Tailwind
-    # is compiled now and nothing was ever loaded from unpkg.
-    "https://cdn.jsdelivr.net",
 )
 CSP_STYLE_SRC = (
     "'self'",
     "'unsafe-inline'",
-    # Tom Select's bootstrap5 stylesheet.
-    "https://cdn.jsdelivr.net",
 )
 CSP_IMG_SRC = ("'self'", "data:")
 CSP_FONT_SRC = ("'self'",)

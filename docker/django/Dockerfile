@@ -31,7 +31,7 @@ RUN npm ci
 # both have to be present before the build runs.
 COPY tailwind.config.js postcss.config.js ./
 COPY ttstats/ ./ttstats/
-RUN npm run build:css
+RUN npm run build
 
 # Final stage
 FROM python:3.12-slim
@@ -56,10 +56,12 @@ ENV PATH=/root/.local/bin:$PATH
 # Copy application code from ttstats subdirectory
 COPY ttstats/ .
 
-# Built CSS must land AFTER the source copy above, or it gets overwritten by
-# the (empty) css/ directory that ships in the repo.
-COPY --from=assets /build/ttstats/pingpong/static/pingpong/css/app.css \
-     /app/pingpong/static/pingpong/css/app.css
+# Built CSS and vendored JS must land AFTER the source copy above, or they get
+# overwritten by the (empty) css/ directory that ships in the repo.
+COPY --from=assets /build/ttstats/pingpong/static/pingpong/css/ \
+     /app/pingpong/static/pingpong/css/
+COPY --from=assets /build/ttstats/pingpong/static/pingpong/js/vendor/ \
+     /app/pingpong/static/pingpong/js/vendor/
 
 # Copy and make entrypoint executable
 COPY docker/django/entrypoint.sh /entrypoint.sh

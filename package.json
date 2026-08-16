@@ -4,12 +4,18 @@
   "private": true,
   "description": "Frontend asset build for TTStats (Tailwind CSS + vendored JS).",
   "scripts": {
-    "build:css": "tailwindcss -i ttstats/pingpong/static/pingpong/src/app.css -o ttstats/pingpong/static/pingpong/css/app.css --minify",
-    "watch:css": "tailwindcss -i ttstats/pingpong/static/pingpong/src/app.css -o ttstats/pingpong/static/pingpong/css/app.css --watch"
+    "build": "npm run vendor && npm run build:css",
+    "vendor": "node scripts/vendor_assets.mjs",
+    "build:css": "tailwindcss -i ttstats/pingpong/assets/app.css -o ttstats/pingpong/static/pingpong/css/app.css --minify",
+    "watch:css": "tailwindcss -i ttstats/pingpong/assets/app.css -o ttstats/pingpong/static/pingpong/css/app.css --watch"
   },
   "devDependencies": {
+    "alpinejs": "^3.16.1",
     "autoprefixer": "^10.4.20",
+    "chart.js": "^4.5.1",
+    "htmx.org": "^2.0.10",
     "postcss": "^8.4.49",
-    "tailwindcss": "^3.4.17"
+    "tailwindcss": "^3.4.17",
+    "tom-select": "^2.6.2"
   }
 }

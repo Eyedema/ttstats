@@ -12,10 +12,10 @@
 ## Common Commands
 
 ```bash
-# Frontend assets (Tailwind v3 build -- required for a styled page)
+# Frontend assets (required for a styled, working page)
 npm install                                        # Once, after cloning
-npm run build:css                                  # One-off build
-npm run watch:css                                  # Rebuild on template change
+npm run build                                      # Vendor JS + compile CSS
+npm run watch:css                                  # Rebuild CSS on template change
 
 # Development
 docker compose -f compose.dev.yml up --build       # Start dev environment (includes the assets watcher)
@@ -187,12 +187,19 @@ These are non-obvious behaviors that aren't clear from reading individual source
 - **`generate_schedule()` uses `bulk_create`, which bypasses `post_save`** — it therefore builds `ScheduledMatchParticipant` rows explicitly. Any new bulk path must do the same or the schedule comes out with no participants.
 
 ### Frontend Build
-- Tailwind is **compiled**, not loaded from a CDN. Source `static/pingpong/src/app.css`, output `static/pingpong/css/app.css` (gitignored). Config in `tailwind.config.js` at the repo root.
+- Tailwind is **compiled**, not loaded from a CDN. Source `pingpong/assets/app.css` (kept outside `static/` so collectstatic never copies the raw `@tailwind` source), output `static/pingpong/css/app.css` (gitignored). Config in `tailwind.config.js` at the repo root.
 - **Pinned to Tailwind v3.** The palette is a v3 `theme.extend.colors` object lifted from the old inline `base.html` config; v4's CSS-first config would be a rewrite.
 - **A class Tailwind cannot see is silently dropped.** The `content` globs cover all templates *and* `pingpong/*.py`, because `forms.py` still builds widget class strings in Python. If you move class names into a new Python module, add it to the globs.
 - Tests do not need the CSS to exist; `{% static %}` resolves without it. The browser does -- run `npm run build:css` after cloning.
 - Docker: a `node:20-alpine AS assets` stage builds the CSS, and the `COPY --from=assets` in the final stage must stay **after** `COPY ttstats/ .` or it gets overwritten. `compose.dev.yml` bind-mounts `./ttstats` over `/app`, which shadows the image's CSS -- hence the separate `assets` watcher service.
-- CI builds the CSS when either Python or frontend files change. Before this, a template-only commit got zero CI.
+- CI builds the assets when either Python or frontend files change. Before this, a template-only commit got zero CI.
+
+### Vendored JavaScript
+- htmx, Alpine, Chart.js and Tom Select are **served from `self`**, not a CDN. `npm run vendor` copies their browser builds out of `node_modules` into `static/pingpong/js/vendor/` and `static/pingpong/css/vendor/` (both gitignored). `npm run build` = vendor + CSS.
+- Versions are pinned in `package-lock.json`, not in a URL.
+- **htmx loads before Alpine** in `base.html`, so Alpine's deferred init sees any markup htmx already swapped in.
+- `<body>` carries `hx-headers` with the CSRF token, so every htmx request is authenticated without per-element wiring.
+- `prod.py`'s CSP now allows no external hosts at all. `'unsafe-inline'` is still required for scripts and styles because templates carry inline `<script>` blocks; B.5 is what removes them.
 
 ### Template / Frontend
 - `base.html` unconditionally renders `{% url 'pingpong:player_detail' user.player.pk %}` — every authenticated user **must** have a linked Player profile

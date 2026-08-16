@@ -620,7 +620,7 @@
 {% if elo_chart_data %}
 {{ elo_chart_labels|json_script:"elo-chart-labels" }}
 {{ elo_chart_data|json_script:"elo-chart-data" }}
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="{% static 'pingpong/js/vendor/chart.umd.js' %}"></script>
 <script>
 (function() {
     const labels = JSON.parse(document.getElementById('elo-chart-labels').textContent);

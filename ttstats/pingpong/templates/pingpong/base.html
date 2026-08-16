@@ -9,8 +9,12 @@
 
     <link rel="stylesheet" href="{% static 'pingpong/css/app.css' %}">
 
+    <!-- htmx must load before Alpine: Alpine's defer'd init should see any
+         markup htmx has already swapped in. -->
+    <script src="{% static 'pingpong/js/vendor/htmx.min.js' %}"></script>
+
     <!-- Alpine.js -->
-    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js"></script>
+    <script defer src="{% static 'pingpong/js/vendor/alpine.min.js' %}"></script>
 
     <script>
         // Auto-dismiss flash messages after 5s.
@@ -27,7 +31,8 @@
     {% block extra_css %}{% endblock %}
 </head>
 
-<body class="bg-background text-foreground">
+<body class="bg-background text-foreground"
+      hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
 
     <div class="flex min-h-screen">
         <!-- Sidebar -->
