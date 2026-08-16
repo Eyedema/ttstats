@@ -2,7 +2,8 @@ from django.contrib.auth.models import User
 from django.test import TestCase
 from django.core import mail
 
-from pingpong.models import Player, Match, Game, Team, UserProfile
+from pingpong.models import Player, Match, Game, Side, UserProfile
+from .conftest import create_match
 
 
 class UserProfileSignalTest(TestCase):
@@ -45,21 +46,13 @@ class MatchCompletionSignalTest(TestCase):
         self.player3 = Player.objects.create(user=self.user3, name="Player 3")
         self.player4 = Player.objects.create(user=self.user4, name="Player 4")
 
-        self.team1 = Team.objects.create()
-        self.team1.players.set([self.player1])
-        self.team1.save()
+        self.team1_players = [self.player1]
 
-        self.team2 = Team.objects.create()
-        self.team2.players.set([self.player2])
-        self.team2.save()
+        self.team2_players = [self.player2]
 
-        self.team_double1 = Team.objects.create()
-        self.team_double1.players.set([self.player1, self.player2])
-        self.team_double1.save()
+        self.team_double1_players = [self.player1, self.player2]
 
-        self.team_double2 = Team.objects.create()
-        self.team_double2.players.set([self.player3, self.player4])
-        self.team_double2.save()
+        self.team_double2_players = [self.player3, self.player4]
 
         # Clear any emails from user creation
         mail.outbox = []
@@ -73,9 +66,7 @@ class MatchCompletionSignalTest(TestCase):
         self.user2.profile.save()
 
         # Create match without winner
-        match = Match.objects.create(
-            team1=self.team1, team2=self.team2, best_of=5
-        )
+        match = create_match(self.team1_players, self.team2_players, best_of=5)
 
         # Add games to set winner (triggers signal)
         Game.objects.create(
@@ -110,9 +101,7 @@ class MatchCompletionSignalTest(TestCase):
         self.user4.profile.save()
 
         # Create match without winner
-        match = Match.objects.create(
-            team1=self.team_double1, team2=self.team_double2, best_of=5
-        )
+        match = create_match(self.team_double1_players, self.team_double2_players, best_of=5)
 
         # Add games to set winner (triggers signal)
         Game.objects.create(
@@ -143,9 +132,7 @@ class MatchCompletionSignalTest(TestCase):
         self.user2.profile.save()
 
         # Create match
-        match = Match.objects.create(
-            team1=self.team1, team2=self.team2, best_of=5
-        )
+        match = create_match(self.team1_players, self.team2_players, best_of=5)
 
         # Set winner (triggers signal)
         Game.objects.create(
@@ -184,9 +171,7 @@ class MatchCompletionSignalTest(TestCase):
         self.user4.profile.save()
 
         # Create match
-        match = Match.objects.create(
-            team1=self.team_double1, team2=self.team_double2, best_of=5
-        )
+        match = create_match(self.team_double1_players, self.team_double2_players, best_of=5)
 
         # Set winner (triggers signal)
         Game.objects.create(
@@ -222,9 +207,7 @@ class MatchCompletionSignalTest(TestCase):
         self.user2.profile.email_verified = False
         self.user2.profile.save()
 
-        match = Match.objects.create(
-            team1=self.team1, team2=self.team2, best_of=5
-        )
+        match = create_match(self.team1_players, self.team2_players, best_of=5)
 
         Game.objects.create(
             match=match, game_number=1, team1_score=11, team2_score=5
@@ -254,9 +237,7 @@ class MatchCompletionSignalTest(TestCase):
         self.user4.profile.email_verified = False
         self.user4.profile.save()
 
-        match = Match.objects.create(
-            team1=self.team_double1, team2=self.team_double2, best_of=5
-        )
+        match = create_match(self.team_double1_players, self.team_double2_players, best_of=5)
 
         Game.objects.create(
             match=match, game_number=1, team1_score=11, team2_score=5
@@ -283,9 +264,9 @@ class MatchCompletionSignalTest(TestCase):
         self.user2.profile.email_verified = True
         self.user2.profile.save()
 
-        match = Match.objects.create(
-            team1=self.team1,
-            team2=self.team2,
+        match = create_match(
+            self.team1_players,
+            self.team2_players,
             best_of=5,
         )
 
@@ -301,10 +282,10 @@ class MatchCompletionSignalTest(TestCase):
         self.user2.profile.email_verified = True
         self.user2.profile.save()
 
-        match = Match.objects.create(
-            team1=self.team1,
-            team2=self.team2,
-            winner=self.team1,  # Already has winner
+        match = create_match(
+            self.team1_players,
+            self.team2_players,
+            winner_side=1,  # Already has winner
         )
 
         # Update match without changing winner

@@ -46,7 +46,7 @@ class MatchManager(models.Manager):
             )
             championship_qs = Championship.all_objects.filter(
                 pk=OuterRef('championship_id'),
-                participants__players=user_player,
+                entry_members__player=user_player,
             )
             return qs.filter(mine | Exists(championship_qs))
         except AttributeError:
@@ -212,7 +212,7 @@ class ScheduledMatchManager(models.Manager):
             )
             championship_qs = Championship.all_objects.filter(
                 pk=OuterRef('championship_id'),
-                participants__players=user_player,
+                entry_members__player=user_player,
             )
             return qs.filter(mine | Exists(championship_qs))
         except AttributeError:

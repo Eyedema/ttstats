@@ -37,9 +37,9 @@ from .forms import GameForm, MatchEditForm, MatchForm, PlayerRegistrationForm, S
     ChampionshipCreateForm, ChampionshipEditForm, ScheduledMatchEditForm
 from .achievements import get_achievement_progress
 from .elo import calculate_expected_score, get_win_probability
-from .models import Game, Location, Match, MatchParticipant, Player, UserProfile, MatchConfirmation, ScheduledMatch, ScheduledMatchParticipant, Side, Team, Championship, EloHistory, format_side_label
+from .models import Game, Location, Match, MatchParticipant, Player, UserProfile, MatchConfirmation, ScheduledMatch, ScheduledMatchParticipant, Side, Championship, EloHistory, format_side_label
 from .emails import send_scheduled_match_email, send_passkey_deleted_email
-from .services import resolve_sides
+from .services import set_match_sides, set_scheduled_match_sides
 
 try:
     from django_otp_webauthn.models import WebAuthnCredential
@@ -119,7 +119,7 @@ class MatchListView(LoginRequiredMixin, ListView):
     def get_queryset(self):
         return (
             Match.objects.all()
-            .select_related("team1", "team2", "location", "winner", "championship")
+            .select_related("location", "championship")
             .prefetch_related(
                 participants_prefetch(),
                 "games",
@@ -360,7 +360,7 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
                     streak_type = 'win'
                 win_streak += 1
                 current_streak = win_streak
-            elif match.winner:  # Loss
+            elif match.winner_side:  # Loss
                 if streak_type != 'loss':
                     longest_win = max(longest_win, win_streak)
                     win_streak = loss_streak = 0
@@ -497,9 +497,9 @@ class GameCreateView(LoginRequiredMixin, CreateView):
             raise PermissionDenied
 
         # Check if match is already complete
-        if self.match.winner:
+        if self.match.winner_side:
             messages.warning(
-                request, f"This match is already complete. {self.match.winner} won!"
+                request, f"This match is already complete. {self.match.winner_label} won!"
             )
             return redirect("pingpong:match_detail", pk=self.match.pk)
 
@@ -531,7 +531,7 @@ class GameCreateView(LoginRequiredMixin, CreateView):
         self.match.refresh_from_db()
 
         # Check if match is now complete
-        if self.match.winner:
+        if self.match.winner_side:
             # Check if it was auto-confirmed by signals.py logic
             if self.match.match_confirmed:
                 unverified_players = self.match.get_unverified_players()
@@ -542,7 +542,8 @@ class GameCreateView(LoginRequiredMixin, CreateView):
                     )
             messages.success(
                 self.request,
-                f"🎉 Match Complete! {self.match.winner} wins {self.match.team1_score}-{self.match.team2_score}!", #TODO: "wins", but what if it is a team with 2 names?
+                f"🎉 Match Complete! {self.match.winner_label} wins "
+                f"{self.match.side1_score}-{self.match.side2_score}!",
             )
             # Always go to match detail if match is complete, regardless of button pressed
             return redirect("pingpong:match_detail", pk=self.match.pk)
@@ -692,15 +693,12 @@ class MatchCreateView(LoginRequiredMixin, CreateView):
                 )
                 return self.form_invalid(form)
 
-        # Resolve the two sides to Team objects
+        # Sides are written after the match exists (they need its pk).
         if is_double:
-            team1, team2 = resolve_sides([player1, player2], [player3, player4])
+            self._sides = ([player1, player2], [player3, player4])
         else:
-            team1, team2 = resolve_sides([player1], [player2])
+            self._sides = ([player1], [player2])
 
-        # Assign teams to match instance (don't save yet)
-        form.instance.team1 = team1
-        form.instance.team2 = team2
         form.instance.is_double = is_double
 
         # "Score live" branch — KAN-7. Doubles deferred (KAN-13).
@@ -718,7 +716,10 @@ class MatchCreateView(LoginRequiredMixin, CreateView):
         else:
             messages.success(self.request, "Match created successfully!")
 
-        return super().form_valid(form)
+        response = super().form_valid(form)
+        set_match_sides(self.object, *self._sides)
+        self.object.save()  # recompute now that the sides exist
+        return response
 
 
 class MatchUpdateView(LoginRequiredMixin, UpdateView):
@@ -735,21 +736,21 @@ class MatchUpdateView(LoginRequiredMixin, UpdateView):
 
     def get_form_class(self):
         # If match has a winner, only allow editing location and notes
-        if self.object.winner:
+        if self.object.winner_side:
             return MatchEditForm
         return MatchForm
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["locations"] = Location.objects.all()
-        context["is_complete"] = bool(self.object.winner)
+        context["is_complete"] = bool(self.object.winner_side)
         return context
 
     def get_success_url(self):
         return reverse_lazy("pingpong:match_detail", kwargs={"pk": self.object.pk})
 
     def form_valid(self, form):
-        if self.object.winner:
+        if self.object.winner_side:
             messages.success(self.request, "Match details updated successfully!")
         else:
             messages.success(self.request, "Match updated successfully!")
@@ -1443,16 +1444,10 @@ class ScheduledMatchCreateView(LoginRequiredMixin, CreateView):
                 )
                 return self.form_invalid(form)
 
-        # Scheduled matches are singles-only for now
-        team1, team2 = resolve_sides([player1], [player2])
-
-        # Assign teams to scheduled match
-        form.instance.team1 = team1
-        form.instance.team2 = team2
-
-        # Save the scheduled match
+        # Save first, then attach the sides (they need the pk).
         self.object = form.save()
         scheduled_match = self.object
+        set_scheduled_match_sides(scheduled_match, [player1], [player2])
 
         # Send notification emails to both players
         send_scheduled_match_email(scheduled_match, player1)
@@ -1513,7 +1508,7 @@ class CalendarView(LoginRequiredMixin, TemplateView):
         scheduled_matches = ScheduledMatch.objects.filter(
             scheduled_date__year=year,
             scheduled_date__month=month,
-        ).select_related('match', 'match__team1', 'match__team2').prefetch_related(
+        ).select_related('match').prefetch_related(
             'match__confirmations'
         ).order_by("scheduled_date", "scheduled_time")
 
@@ -1744,20 +1739,19 @@ class ScheduledMatchConvertView(LoginRequiredMixin, CreateView):
                 )
                 return self.form_invalid(form)
 
-        # Resolve the two sides to Team objects. Note the pairing differs from
-        # MatchCreateView: this form lays out side 1 as player1+player3.
+        # Note the pairing differs from MatchCreateView: this form lays out
+        # side 1 as player1+player3.
         if is_double:
-            team1, team2 = resolve_sides([player1, player3], [player2, player4])
+            self._sides = ([player1, player3], [player2, player4])
         else:
-            team1, team2 = resolve_sides([player1], [player2])
+            self._sides = ([player1], [player2])
 
-        # Assign teams to match
-        form.instance.team1 = team1
-        form.instance.team2 = team2
         form.instance.is_double = is_double
 
-        # Save the match
+        # Save the match, then attach its sides (they need the pk)
         response = super().form_valid(form)
+        set_match_sides(self.object, *self._sides)
+        self.object.save()
 
         # Link scheduled match to this match
         self.scheduled_match.match = self.object
@@ -1864,7 +1858,7 @@ class ChampionshipListView(LoginRequiredMixin, ListView):
         queryset = Championship.objects.select_related(
             'created_by', 'location'
         ).prefetch_related(
-            'participants', 'participants__players'
+            'entries__members__player'
         )
 
         # Filter by status (supports tab-based filtering)
@@ -1880,7 +1874,7 @@ class ChampionshipListView(LoginRequiredMixin, ListView):
             # Championships where user is a participant
             try:
                 player = user.player
-                queryset = queryset.filter(participants__players=player)
+                queryset = queryset.filter(entry_members__player=player)
             except (AttributeError, Player.DoesNotExist):
                 queryset = queryset.none()
         elif participation_filter == 'public':
@@ -1908,7 +1902,7 @@ class ChampionshipDetailView(LoginRequiredMixin, DetailView):
         return Championship.objects.select_related(
             'created_by', 'location'
         ).prefetch_related(
-            'participants', 'participants__players'
+            'entries__members__player'
         )
 
     def get_context_data(self, **kwargs):
@@ -1924,9 +1918,9 @@ class ChampionshipDetailView(LoginRequiredMixin, DetailView):
         scheduled_matches = ScheduledMatch.all_objects.filter(
             championship=championship
         ).select_related(
-            'team1', 'team2', 'location', 'match'
+            'location', 'match'
         ).prefetch_related(
-            'team1__players', 'team2__players'
+            participants_prefetch(scheduled=True)
         ).order_by('round_number', 'scheduled_date', 'scheduled_time')
         context['scheduled_matches'] = scheduled_matches
 
@@ -1950,9 +1944,9 @@ class ChampionshipDetailView(LoginRequiredMixin, DetailView):
         completed_matches = Match.all_objects.filter(
             championship=championship
         ).select_related(
-            'team1', 'team2', 'winner', 'location'
+            'location'
         ).prefetch_related(
-            'team1__players', 'team2__players', 'games', 'confirmations'
+            participants_prefetch(), 'games', 'confirmations'
         ).order_by('-date_played')
         context['completed_matches'] = completed_matches
         context['completed_count'] = completed_matches.count()
@@ -1961,7 +1955,7 @@ class ChampionshipDetailView(LoginRequiredMixin, DetailView):
         context['participants_count'] = championship.entries.count()
 
         # Build results matrix for round-robin display
-        # Use winner__isnull=False instead of is_confirmed=True because
+        # Use winner_side__isnull=False instead of is_confirmed=True because
         # championship matches may have winners but not yet be confirmed
         confirmed_champ_matches = Match.all_objects.filter(
             championship=championship, winner_side__isnull=False
@@ -2058,8 +2052,8 @@ class ChampionshipCreateView(LoginRequiredMixin, CreateView):
         # Add participants for private championships
         if not championship.is_public:
             private_participants = form.cleaned_data.get('private_participants')
-            if private_participants:
-                championship.participants.set(private_participants)
+            for player in private_participants or []:
+                championship.register_entry([player])
                 # Change status to scheduled
                 championship.status = Championship.Status.SCHEDULED
                 championship.save()
@@ -2212,11 +2206,6 @@ class ChampionshipUnregisterView(LoginRequiredMixin, View):
             return redirect('pingpong:championship_detail', pk=pk)
 
         label = str(entry)
-        # Keep the legacy M2M in step while it still exists.
-        entry_player_ids = set(entry.members.values_list('player_id', flat=True))
-        for team in championship.participants.prefetch_related('players'):
-            if {p.pk for p in team.players.all()} == entry_player_ids:
-                championship.participants.remove(team)
         entry.delete()
 
         messages.success(

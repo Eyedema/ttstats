@@ -1,28 +1,27 @@
 import pytest
 from datetime import date, timedelta
 
-from pingpong.models import Championship, ScheduledMatch, Match
+from pingpong.models import Championship, ScheduledMatch, Match, Side
 from .conftest import (
     ChampionshipFactory,
     GameFactory,
     LocationFactory,
     MatchFactory,
     PlayerFactory,
-    TeamFactory,
     UserFactory,
     confirm_match,
 )
 
 
 def _singles_team(player):
-    """Create a 1-player team for a player."""
-    return TeamFactory(players=[player])
+    """Entries are per player now; kept so call sites read the same."""
+    return [player]
 
 
 def _make_participants(n=4):
     """Create n players each with a 1-player team. Returns (players, teams)."""
     players = [PlayerFactory(with_user=True) for _ in range(n)]
-    teams = [_singles_team(p) for p in players]
+    teams = [[p] for p in players]
     return players, teams
 
 
@@ -200,18 +199,25 @@ class TestGenerateSchedule:
             assert (dates[i] - dates[i - 1]).days == 7
 
     def test_generate_schedule_home_and_away(self):
-        """Each pair of teams should play once as home and once as away."""
-        _, teams = _make_participants(3)
-        champ = ChampionshipFactory(with_participants=teams)
+        """Each pair of entrants should play once as home and once as away."""
+        players, _ = _make_participants(3)
+        champ = ChampionshipFactory(with_entries=[[p] for p in players])
         champ.generate_schedule()
         matches = ScheduledMatch.all_objects.filter(championship=champ)
 
-        for i, t1 in enumerate(teams):
-            for t2 in teams[i + 1:]:
-                home = matches.filter(team1=t1, team2=t2).count()
-                away = matches.filter(team1=t2, team2=t1).count()
-                assert home == 1, f"{t1} vs {t2} home games should be 1, got {home}"
-                assert away == 1, f"{t2} vs {t1} away games should be 1, got {away}"
+        def _played(home_player, away_player):
+            return matches.filter(
+                participants__player=home_player,
+                participants__side=Side.ONE,
+            ).filter(
+                participants__player=away_player,
+                participants__side=Side.TWO,
+            ).count()
+
+        for i, p1 in enumerate(players):
+            for p2 in players[i + 1:]:
+                assert _played(p1, p2) == 1, f"{p1} vs {p2} home games should be 1"
+                assert _played(p2, p1) == 1, f"{p2} vs {p1} home games should be 1"
 
     def test_generate_schedule_sets_end_date(self):
         _, teams = _make_participants(4)
@@ -257,7 +263,7 @@ class TestGetStandings:
 
         # Create a confirmed match where team1 wins
         match = MatchFactory(
-            team1=teams[0], team2=teams[1],
+            team1_players=[players[0]], team2_players=[players[1]],
             championship=champ, match_type="tournament"
         )
         GameFactory(match=match, game_number=1, team1_score=11, team2_score=5)
@@ -281,7 +287,7 @@ class TestGetStandings:
         champ = ChampionshipFactory(with_participants=teams)
 
         # Team 0 beats Team 1
-        m1 = MatchFactory(team1=teams[0], team2=teams[1], championship=champ)
+        m1 = MatchFactory(team1_players=[players[0]], team2_players=[players[1]], championship=champ)
         GameFactory(match=m1, game_number=1, team1_score=11, team2_score=5)
         GameFactory(match=m1, game_number=2, team1_score=11, team2_score=7)
         GameFactory(match=m1, game_number=3, team1_score=11, team2_score=9)
@@ -289,7 +295,7 @@ class TestGetStandings:
         confirm_match(m1)
 
         # Team 2 beats Team 0
-        m2 = MatchFactory(team1=teams[2], team2=teams[0], championship=champ)
+        m2 = MatchFactory(team1_players=[players[2]], team2_players=[players[0]], championship=champ)
         GameFactory(match=m2, game_number=1, team1_score=11, team2_score=3)
         GameFactory(match=m2, game_number=2, team1_score=11, team2_score=4)
         GameFactory(match=m2, game_number=3, team1_score=11, team2_score=6)
@@ -297,7 +303,7 @@ class TestGetStandings:
         confirm_match(m2)
 
         # Team 2 beats Team 1
-        m3 = MatchFactory(team1=teams[2], team2=teams[1], championship=champ)
+        m3 = MatchFactory(team1_players=[players[2]], team2_players=[players[1]], championship=champ)
         GameFactory(match=m3, game_number=1, team1_score=11, team2_score=2)
         GameFactory(match=m3, game_number=2, team1_score=11, team2_score=3)
         GameFactory(match=m3, game_number=3, team1_score=11, team2_score=1)
@@ -389,7 +395,8 @@ class TestCheckCompletion:
         # Convert and complete all scheduled matches
         for sm in ScheduledMatch.all_objects.filter(championship=champ):
             match = MatchFactory(
-                team1=sm.team1, team2=sm.team2,
+                team1_players=list(sm.side1_players),
+                team2_players=list(sm.side2_players),
                 championship=champ, match_type="tournament"
             )
             GameFactory(match=match, game_number=1, team1_score=11, team2_score=5)

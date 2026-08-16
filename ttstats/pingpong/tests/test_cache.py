@@ -475,7 +475,7 @@ class TestDenormalizedFields:
         GameFactory(match=match, game_number=3, team1_score=11, team2_score=5)
 
         match.refresh_from_db()
-        assert match.winner is not None
+        assert match.winner_side is not None
         assert match.is_confirmed is True
 
     def test_score_cache_matches_property(self):

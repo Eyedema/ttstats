@@ -118,27 +118,6 @@ class SideLabelMixin:
         return self.side_label(Side.TWO)
 
 
-class Team(models.Model):
-    """Concept used for matches to include both singles and doubles score"""
-
-    players = models.ManyToManyField(Player, related_name="teams")
-    name = models.CharField(max_length=100, blank=True)
-
-    def __str__(self):
-        if self.name:
-            return self.name
-
-        # Default: "Player1 and Player2"
-        players_list = self.players.order_by('name').all()
-        if len(players_list) == 1:
-            return str(players_list[0])
-        elif len(players_list) == 2:
-            return f"{players_list[0]} and {players_list[1]}"
-        else:
-            names = [p.name for p in players_list[:2]]
-            return f"{names[0]} and {names[1]} (+{len(players_list) - 2})"
-
-
 class Side(models.IntegerChoices):
     """Which half of a match a player or result belongs to.
 
@@ -155,12 +134,6 @@ class Match(SideLabelMixin, models.Model):
 
     is_double = models.BooleanField(default=False)
 
-    team1 = models.ForeignKey(
-        Team, on_delete=models.CASCADE, related_name="matches_as_team1", null=True
-    )
-    team2 = models.ForeignKey(
-        Team, on_delete=models.CASCADE, related_name="matches_as_team2", null=True
-    )
     championship = models.ForeignKey(
         'Championship',
         on_delete=models.SET_NULL,
@@ -187,13 +160,6 @@ class Match(SideLabelMixin, models.Model):
     # Best of format (best of 3, 5, 7, etc.)
     best_of = models.IntegerField(default=5, help_text="Best of how many games?")
 
-    winner = models.ForeignKey(
-        Team,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-    )
-    # Replacement for the winner FK; both are written during the migration.
     winner_side = models.PositiveSmallIntegerField(
         choices=Side.choices, null=True, blank=True, db_index=True
     )
@@ -243,8 +209,7 @@ class Match(SideLabelMixin, models.Model):
         if user.is_staff or user.is_superuser:
             return True
         try:
-            return (self.team1.players.filter(user_id=user.pk).exists() or
-                    self.team2.players.filter(user_id=user.pk).exists())
+            return self.participants.filter(player__user_id=user.pk).exists()
         except AttributeError:
             return False
 
@@ -259,7 +224,7 @@ class Match(SideLabelMixin, models.Model):
         verbose_name_plural = "matches"
 
     def __str__(self):
-        return f"{self.team1} vs {self.team2} - {self.date_played.date()}"
+        return f"{self.side1_label} vs {self.side2_label} - {self.date_played.date()}"
 
     @property
     def side1_score(self):
@@ -278,15 +243,17 @@ class Match(SideLabelMixin, models.Model):
     def winner_label(self):
         return self.side_label(self.winner_side) if self.winner_side else ""
 
-    def team_for_side(self, side):
-        return self.team1 if side == Side.ONE else self.team2
-
     def players_on(self, side):
         """Players on one side of the match, read from MatchParticipant."""
         return Player.objects.filter(
             match_participations__match_id=self.pk,
             match_participations__side=side,
         )
+
+    @property
+    def all_players(self):
+        """Everyone in the match, both sides."""
+        return Player.objects.filter(match_participations__match_id=self.pk)
 
     @property
     def side1_players(self):
@@ -296,12 +263,12 @@ class Match(SideLabelMixin, models.Model):
     def side2_players(self):
         return self.players_on(Side.TWO)
 
-    def _verified_player_ids(self, team):
-        """Ids of players on ``team`` whose email is verified."""
+    def _verified_player_ids(self, side):
+        """Ids of players on ``side`` whose email is verified."""
         return set(
-            team.players.filter(
-                user__profile__email_verified=True
-            ).values_list("id", flat=True)
+            self.players_on(side)
+            .filter(user__profile__email_verified=True)
+            .values_list("id", flat=True)
         )
 
     def _confirmed_player_ids(self):
@@ -311,37 +278,37 @@ class Match(SideLabelMixin, models.Model):
     def team1_confirmed(self):
         """All verified Team 1 members have confirmed"""
         return match_state.side_confirmed(
-            self._verified_player_ids(self.team1), self._confirmed_player_ids()
+            self._verified_player_ids(Side.ONE), self._confirmed_player_ids()
         )
 
     @property
     def team2_confirmed(self):
         """All verified Team 2 members have confirmed"""
         return match_state.side_confirmed(
-            self._verified_player_ids(self.team2), self._confirmed_player_ids()
+            self._verified_player_ids(Side.TWO), self._confirmed_player_ids()
         )
 
     @property
     def match_confirmed(self):
         """Every verified player on both teams has confirmed."""
         return match_state.confirmation_complete(
-            self._verified_player_ids(self.team1),
-            self._verified_player_ids(self.team2),
+            self._verified_player_ids(Side.ONE),
+            self._verified_player_ids(Side.TWO),
             self._confirmed_player_ids(),
         )
 
     def should_auto_confirm(self):
         return match_state.should_auto_confirm(
-            has_winner=bool(self.winner),
+            has_winner=bool(self.winner_side),
             already_confirmed=self.match_confirmed,
-            side1_has_verified=bool(self._verified_player_ids(self.team1)),
-            side2_has_verified=bool(self._verified_player_ids(self.team2)),
+            side1_has_verified=bool(self._verified_player_ids(Side.ONE)),
+            side2_has_verified=bool(self._verified_player_ids(Side.TWO)),
         )
 
     def get_unverified_players(self):
         unverified = []
 
-        all_players = (self.team1.players.all() | self.team2.players.all())
+        all_players = self.all_players
 
         for player in all_players:
             if not player.user or not player.user.profile.email_verified:
@@ -355,8 +322,8 @@ class Match(SideLabelMixin, models.Model):
         """
         games_qs = Game.all_objects.filter(match_id=self.pk)
         return (
-            games_qs.filter(winner=self.team1).count(),
-            games_qs.filter(winner=self.team2).count(),
+            games_qs.filter(winner_side=Side.ONE).count(),
+            games_qs.filter(winner_side=Side.TWO).count(),
         )
 
     def recompute(self, save=True):
@@ -378,35 +345,20 @@ class Match(SideLabelMixin, models.Model):
             self.team2_score_cache = side2_wins
 
             decided = match_state.winner_side(side1_wins, side2_wins, self.best_of)
-            if decided == match_state.SIDE_1:
-                self.winner = self.team1
-            elif decided == match_state.SIDE_2:
-                self.winner = self.team2
+            if decided is not None:
+                self.winner_side = decided
             # An undecided result deliberately leaves an existing winner in
             # place rather than clearing it, matching long-standing behaviour.
 
-        # Dual-write: keep winner_side derived from the winner FK until the
-        # FK goes away, so the two can never drift apart.
-        self.winner_side = self._winner_side_from_fk()
         self.is_confirmed = self.match_confirmed
 
         if save:
             Match.all_objects.filter(pk=self.pk).update(
                 team1_score_cache=self.team1_score_cache,
                 team2_score_cache=self.team2_score_cache,
-                winner=self.winner,
                 winner_side=self.winner_side,
                 is_confirmed=self.is_confirmed,
             )
-
-    def _winner_side_from_fk(self):
-        if self.winner_id is None:
-            return None
-        if self.winner_id == self.team1_id:
-            return Side.ONE
-        if self.winner_id == self.team2_id:
-            return Side.TWO
-        return None
 
     def save(self, *args, **kwargs):
         if self.pk and not self.is_live:
@@ -457,15 +409,6 @@ class Game(models.Model):
     team1_score = models.IntegerField(default=0)
     team2_score = models.IntegerField(default=0)
 
-    winner = models.ForeignKey(
-        Team,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="games_won", # TODO: before it was won_games, search and replace it!
-    )
-    # Replacement for the winner FK. As an FK it had to equal one of the parent
-    # match's two teams -- an invariant nothing enforced; a side cannot be wrong.
     winner_side = models.PositiveSmallIntegerField(
         choices=Side.choices, null=True, blank=True
     )
@@ -484,12 +427,10 @@ class Game(models.Model):
         return f"Game {self.game_number}: {self.team1_score}-{self.team2_score}"
 
     def save(self, *args, **kwargs):
-        # Auto-determine winner (dual-written as FK and side during migration)
+        # Auto-determine which side won this game
         if self.team1_score > self.team2_score:
-            self.winner = self.match.team1
             self.winner_side = Side.ONE
         elif self.team2_score > self.team1_score:
-            self.winner = self.match.team2
             self.winner_side = Side.TWO
 
         super().save(*args, **kwargs)
@@ -540,12 +481,6 @@ class UserProfile(models.Model):
 class ScheduledMatch(SideLabelMixin, models.Model):
     """A match scheduled for the future"""
 
-    team1 = models.ForeignKey(
-        Team, on_delete=models.CASCADE, related_name="scheduled_matches_as_team1"
-    )
-    team2 = models.ForeignKey(
-        Team, on_delete=models.CASCADE, related_name="scheduled_matches_as_team2"
-    )
     championship = models.ForeignKey(
         'Championship',
         on_delete=models.CASCADE,
@@ -610,7 +545,7 @@ class ScheduledMatch(SideLabelMixin, models.Model):
         verbose_name_plural = "Scheduled Matches"
 
     def __str__(self):
-        return f"{self.team1} vs {self.team2} - {self.scheduled_date} at {self.scheduled_time}"
+        return f"{self.side1_label} vs {self.side2_label} - {self.scheduled_date} at {self.scheduled_time}"
 
     @property
     def scheduled_datetime(self):
@@ -626,7 +561,7 @@ class ScheduledMatch(SideLabelMixin, models.Model):
             return True
         try:
             user_player = user.player
-            return user_player in (self.team1.players.all() | self.team2.players.all())
+            return self.participants.filter(player=user_player).exists()
         except (AttributeError, Player.DoesNotExist):
             return False
 
@@ -813,13 +748,6 @@ class Championship(models.Model):
         default=Status.REGISTRATION
     )
 
-    # Participants (Teams - can be single player or doubles team)
-    participants = models.ManyToManyField(
-        Team,
-        related_name='championships',
-        blank=True,
-        help_text="Registered teams/players"
-    )
 
     # Matches
     # Note: matches are linked via ForeignKey in Match model
@@ -921,7 +849,6 @@ class Championship(models.Model):
         from datetime import timedelta, time
 
         from .championship_scheduling import round_robin_double_rounds
-        from .services import resolve_team
 
         entries = list(self.entries.prefetch_related("members__player"))
         if len(entries) < 2:
@@ -938,8 +865,6 @@ class Championship(models.Model):
             for entry1, entry2 in pairings:
                 to_create.append(ScheduledMatch(
                     championship=self,
-                    team1=resolve_team([m.player for m in entry1.members.all()]),
-                    team2=resolve_team([m.player for m in entry2.members.all()]),
                     side1_entry=entry1,
                     side2_entry=entry2,
                     scheduled_date=round_date,

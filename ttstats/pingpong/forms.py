@@ -2,7 +2,7 @@ from django import forms
 from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.models import User
 
-from .models import Game, Match, Player, ScheduledMatch, Team, Championship
+from .models import Game, Match, Player, ScheduledMatch, Championship
 
 INPUT_CSS = 'flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm'
 INPUT_CSS_FOCUS = f'{INPUT_CSS} focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2'
@@ -271,11 +271,11 @@ class MatchConvertForm(forms.ModelForm):
             from datetime import datetime
             from django.utils import timezone
 
-            # Get players from teams
-            team1_players = list(scheduled_match.team1.players.all())
-            team2_players = list(scheduled_match.team2.players.all())
+            # Get players from each side
+            team1_players = list(scheduled_match.side1_players)
+            team2_players = list(scheduled_match.side2_players)
 
-            # Set is_double based on team sizes
+            # Set is_double based on side sizes
             is_double = len(team1_players) == 2 and len(team2_players) == 2
             self.initial['is_double'] = is_double
 
@@ -341,10 +341,10 @@ class ChampionshipCreateForm(forms.ModelForm):
 
     # For private championships, allow selecting participants upfront
     private_participants = forms.ModelMultipleChoiceField(
-        queryset=Team.objects.none(),  # Will be set in __init__
+        queryset=Player.objects.none(),  # Will be set in __init__
         required=False,
         widget=forms.CheckboxSelectMultiple,
-        help_text="Select participants for private championship"
+        help_text="Select players to enter into this private championship"
     )
 
     class Meta:
@@ -402,21 +402,17 @@ class ChampionshipCreateForm(forms.ModelForm):
 
         from django.db.models import Count
 
-        # Determine the required team size based on tournament type
-        required_size = 1 if championship_type == Championship.ChampionshipType.SINGLES else 2
-
-        # Get eligible teams:
-        # 1. Annotate all teams with player count
-        # 2. Filter by required size
-        # 3. Filter by user membership
-        # 4. Exclude already registered teams
-        eligible_teams = Team.objects.annotate(
-            player_count=Count('players', distinct=True)
-        ).filter(
-            player_count=required_size
-        ).distinct().order_by('name')
-
-        self.fields['private_participants'].queryset = eligible_teams
+        # Entries are created per player. Doubles entries need a partner, so
+        # they are formed by registering rather than pre-selected here.
+        if championship_type == Championship.ChampionshipType.SINGLES:
+            self.fields['private_participants'].queryset = (
+                Player.objects.all().order_by('name')
+            )
+        else:
+            self.fields['private_participants'].queryset = Player.objects.none()
+            self.fields['private_participants'].help_text = (
+                "Doubles entries are created when players register with a partner"
+            )
 
         # Make registration_deadline required only for public championships
         if self.instance and not self.instance.is_public:
@@ -486,47 +482,6 @@ class ChampionshipEditForm(forms.ModelForm):
                 'class': INPUT_CSS_FOCUS
             }),
         }
-
-
-class ChampionshipRegistrationForm(forms.Form):
-    """Form for registering a team to a public championship"""
-
-    team = forms.ModelChoiceField(
-        queryset=Team.objects.none(),
-        required=True,
-        widget=forms.Select(attrs={
-            'class': INPUT_CSS_FOCUS
-        }),
-        help_text="Select your team to register"
-    )
-
-    def __init__(self, *args, **kwargs):
-        championship = kwargs.pop('championship', None)
-        user = kwargs.pop('user', None)
-        super().__init__(*args, **kwargs)
-
-        if championship and user:
-            from django.db.models import Count
-
-            # Determine the required team size based on tournament type
-            required_size = 1 if championship.championship_type == Championship.ChampionshipType.SINGLES else 2
-
-            # Get eligible teams:
-            # 1. Annotate all teams with player count
-            # 2. Filter by required size
-            # 3. Filter by user membership
-            # 4. Exclude already registered teams
-            eligible_teams = Team.objects.annotate(
-                player_count=Count('players', distinct=True)
-            ).filter(
-                player_count=required_size
-            ).filter(
-                players__user=user
-            ).exclude(
-                pk__in=championship.participants.values_list('pk', flat=True)
-            ).distinct().order_by('name')
-
-            self.fields['team'].queryset = eligible_teams
 
 
 class ScheduledMatchEditForm(forms.ModelForm):

@@ -3,7 +3,8 @@ from django.test import TestCase
 from django.utils import timezone
 from datetime import timedelta, datetime
 
-from pingpong.models import Location, Player, Match, Game, UserProfile, Team, MatchConfirmation
+from pingpong.models import Location, Player, Match, Game, Side, UserProfile, MatchConfirmation, format_side_label
+from .conftest import create_match
 
 
 class LocationModelTest(TestCase):
@@ -109,32 +110,31 @@ class PlayerModelTest(TestCase):
         self.assertEqual(players[2].name, "Z")
 
 
-class TeamModelTest(TestCase):
-    """Tests for the Team model"""
+class SideLabelTest(TestCase):
+    """format_side_label took over what Team.__str__ used to do."""
+
     def setUp(self):
-        self.user1 = User.objects.create_user(username="player1", password="pass")
-        self.user2 = User.objects.create_user(username="player2", password="pass")
-        self.user3 = User.objects.create_user(username="player3", password="pass")
-        self.user4 = User.objects.create_user(username="player4", password="pass")
+        self.p1 = Player.objects.create(name="Player One")
+        self.p2 = Player.objects.create(name="Player Two")
+        self.p3 = Player.objects.create(name="Player Three")
+        self.p4 = Player.objects.create(name="Player Four")
 
-        self.player1 = Player.objects.create(user=self.user1, name="Player One")
-        self.player2 = Player.objects.create(user=self.user2, name="Player Two")
-        self.player3 = Player.objects.create(user=self.user3, name="Player Three")
-        self.player4 = Player.objects.create(user=self.user4, name="Player Four")
+    def test_empty(self):
+        self.assertEqual(format_side_label([]), "")
 
-        self.team1 = Team.objects.create(name="The chopper")
-        self.team1.players.set([self.player1])
-        self.team2 = Team.objects.create(name="The blocker")
-        self.team2.players.set([self.player2])
-        self.team3 = Team.objects.create()
-        self.team3.players.set([self.player1, self.player2, self.player3, self.player4])
+    def test_single_player(self):
+        self.assertEqual(format_side_label([self.p1]), "Player One")
 
-    def test_teams_custom_names(self):
-        self.assertEqual(f"{self.team1}", "The chopper")
-        self.assertEqual(f"{self.team2}", "The blocker")
+    def test_pair(self):
+        self.assertEqual(
+            format_side_label([self.p1, self.p2]), "Player One and Player Two"
+        )
 
-    def test_teams_name_with_more_than_two_players(self):
-        self.assertEqual(f"{self.team3}", "Player Four and Player One (+2)")
+    def test_more_than_two(self):
+        self.assertEqual(
+            format_side_label([self.p1, self.p2, self.p3, self.p4]),
+            "Player One and Player Two (+2)",
+        )
 
 
 class MatchModelTest(TestCase):
@@ -154,21 +154,13 @@ class MatchModelTest(TestCase):
 
         self.location = Location.objects.create(name="location1")
 
-        self.team1 = Team.objects.create()
-        self.team1.players.set([self.player1])
-        self.team1.save()
+        self.team1_players = [self.player1]
 
-        self.team2 = Team.objects.create()
-        self.team2.players.set([self.player2])
-        self.team2.save()
+        self.team2_players = [self.player2]
 
-        self.team_double1 = Team.objects.create()
-        self.team_double1.players.set([self.player1, self.player2])
-        self.team_double1.save()
+        self.team_double1_players = [self.player1, self.player2]
 
-        self.team_double2 = Team.objects.create()
-        self.team_double2.players.set([self.player3, self.player4])
-        self.team_double2.save()
+        self.team_double2_players = [self.player3, self.player4]
     
     def test_singles_match_creation(self):
         """Test creating a match"""
@@ -182,10 +174,10 @@ class MatchModelTest(TestCase):
         self.user4.profile.save()
 
         date_played = timezone.now() - timedelta(days=1)
-        match = Match.objects.create(
+        match = create_match(
+            self.team1_players,
+            self.team2_players,
             is_double=False,
-            team1=self.team1,
-            team2=self.team2,
             date_played=date_played,
             match_type="casual",
             best_of=5,
@@ -193,14 +185,14 @@ class MatchModelTest(TestCase):
             notes="note"
         )
         self.assertEqual(match.is_double, False)
-        self.assertEqual(match.team1, self.team1)
-        self.assertEqual(match.team2, self.team2)
+        self.assertEqual(set(match.side1_players), set(self.team1_players))
+        self.assertEqual(set(match.side2_players), set(self.team2_players))
         self.assertEqual(match.best_of, 5)
         self.assertEqual(match.location, self.location)
         self.assertEqual(match.match_type, "casual")
         self.assertEqual(match.notes, "note")
         self.assertEqual(match.date_played, date_played)
-        self.assertIsNone(match.winner)
+        self.assertIsNone(match.winner_side)
         self.assertFalse(match.team1_confirmed)
         self.assertFalse(match.team2_confirmed)
 
@@ -216,10 +208,10 @@ class MatchModelTest(TestCase):
         self.user4.profile.save()
 
         date_played = timezone.now() - timedelta(days=1)
-        match = Match.objects.create(
+        match = create_match(
+            self.team_double1_players,
+            self.team_double2_players,
             is_double=True,
-            team1=self.team_double1,
-            team2=self.team_double2,
             date_played=date_played,
             match_type="casual",
             best_of=5,
@@ -227,23 +219,23 @@ class MatchModelTest(TestCase):
             notes="note"
         )
         self.assertEqual(match.is_double, True)
-        self.assertEqual(match.team1, self.team_double1)
-        self.assertEqual(match.team2, self.team_double2)
+        self.assertEqual(set(match.side1_players), set(self.team_double1_players))
+        self.assertEqual(set(match.side2_players), set(self.team_double2_players))
         self.assertEqual(match.best_of, 5)
         self.assertEqual(match.location, self.location)
         self.assertEqual(match.match_type, "casual")
         self.assertEqual(match.notes, "note")
         self.assertEqual(match.date_played, date_played)
-        self.assertIsNone(match.winner)
+        self.assertIsNone(match.winner_side)
         self.assertFalse(match.team1_confirmed)
         self.assertFalse(match.team2_confirmed)
 
     def test_singles_match_str_representation(self):
         """Test match string representation"""
-        match = Match.objects.create(
+        match = create_match(
+            self.team1_players,
+            self.team2_players,
             is_double=False,
-            team1=self.team1,
-            team2=self.team2,
             date_played=timezone.now()
         )
         expected = f"{self.player1} vs {self.player2} - {match.date_played.date()}"
@@ -251,10 +243,10 @@ class MatchModelTest(TestCase):
 
     def test_doubles_match_str_representation(self):
         """Test match string representation"""
-        match = Match.objects.create(
+        match = create_match(
+            self.team_double1_players,
+            self.team_double2_players,
             is_double=True,
-            team1=self.team_double1,
-            team2=self.team_double2,
             date_played=timezone.now()
         )
         # Below 3 and 4 are inverted because of the alphabetical order ("Player Four and Player Three")
@@ -270,10 +262,7 @@ class MatchModelTest(TestCase):
         self.user2.profile.email_verified = True
         self.user2.profile.save()
 
-        match = Match.objects.create(
-            team1=self.team1,
-            team2=self.team2
-        )
+        match = create_match(self.team1_players, self.team2_players)
         # Initially not confirmed
         self.assertFalse(match.match_confirmed)
         
@@ -297,10 +286,7 @@ class MatchModelTest(TestCase):
         self.user4.profile.email_verified = True
         self.user4.profile.save()
 
-        match = Match.objects.create(
-            team1=self.team_double1,
-            team2=self.team_double2
-        )
+        match = create_match(self.team_double1_players, self.team_double2_players)
         # Initially not confirmed
         self.assertFalse(match.match_confirmed)
 
@@ -335,10 +321,7 @@ class MatchModelTest(TestCase):
         self.user4.profile.email_verified = False
         self.user4.profile.save()
 
-        match = Match.objects.create(
-            team1=self.team_double1,
-            team2=self.team_double2
-        )
+        match = create_match(self.team_double1_players, self.team_double2_players)
         # Initially not confirmed
         self.assertFalse(match.match_confirmed)
 
@@ -357,18 +340,15 @@ class MatchModelTest(TestCase):
     
     def test_player_scores_empty_match(self):
         """Test player scores for match with no games"""
-        match = Match.objects.create(
-            team1=self.team1,
-            team2=self.team2
-        )
+        match = create_match(self.team1_players, self.team2_players)
         self.assertEqual(match.team1_score, 0)
         self.assertEqual(match.team2_score, 0)
     
     def test_player_scores_with_games(self):
         """Test player scores calculated from games"""
-        match = Match.objects.create(
-            team1=self.team1,
-            team2=self.team2,
+        match = create_match(
+            self.team1_players,
+            self.team2_players,
             best_of=5
         )
         # Player 1 wins 2 games
@@ -383,9 +363,9 @@ class MatchModelTest(TestCase):
     
     def test_singles_auto_determine_winner(self):
         """Test winner is automatically determined when enough games are won"""
-        match = Match.objects.create(
-            team1=self.team1,
-            team2=self.team2,
+        match = create_match(
+            self.team1_players,
+            self.team2_players,
             best_of=5
         )
         
@@ -395,12 +375,12 @@ class MatchModelTest(TestCase):
         Game.objects.create(match=match, game_number=3, team1_score=11, team2_score=7)
         
         match.refresh_from_db()
-        self.assertEqual(match.winner, self.team1)
+        self.assertEqual(match.winner_side, 1)
 
 
-        match = Match.objects.create(
-            team1=self.team1,
-            team2=self.team2,
+        match = create_match(
+            self.team1_players,
+            self.team2_players,
             best_of=5
         )
         
@@ -410,13 +390,13 @@ class MatchModelTest(TestCase):
         Game.objects.create(match=match, game_number=3, team1_score=0, team2_score=11)
         
         match.refresh_from_db()
-        self.assertEqual(match.winner, self.team2)
+        self.assertEqual(match.winner_side, 2)
 
     def test_doubles_auto_determine_winner(self):
         """Test winner is automatically determined when enough games are won"""
-        match = Match.objects.create(
-            team1=self.team_double1,
-            team2=self.team_double2,
+        match = create_match(
+            self.team_double1_players,
+            self.team_double2_players,
             best_of=5
         )
 
@@ -426,11 +406,11 @@ class MatchModelTest(TestCase):
         Game.objects.create(match=match, game_number=3, team1_score=11, team2_score=7)
 
         match.refresh_from_db()
-        self.assertEqual(match.winner, self.team_double1)
+        self.assertEqual(match.winner_side, 1)
 
-        match = Match.objects.create(
-            team1=self.team_double1,
-            team2=self.team_double2,
+        match = create_match(
+            self.team_double1_players,
+            self.team_double2_players,
             best_of=5
         )
 
@@ -440,7 +420,7 @@ class MatchModelTest(TestCase):
         Game.objects.create(match=match, game_number=3, team1_score=0, team2_score=11)
 
         match.refresh_from_db()
-        self.assertEqual(match.winner, self.team_double2)
+        self.assertEqual(match.winner_side, 2)
     
     def test_should_auto_confirm_singles_unverified_players(self):
         """Test match auto-confirms when players have unverified emails"""
@@ -450,10 +430,10 @@ class MatchModelTest(TestCase):
         self.user2.profile.email_verified = True
         self.user2.profile.save()
         
-        match = Match.objects.create(
-            team1=self.team1,
-            team2=self.team2,
-            winner=self.team1
+        match = create_match(
+            self.team1_players,
+            self.team2_players,
+            winner_side=1
         )
         
         self.assertTrue(match.should_auto_confirm())
@@ -465,10 +445,10 @@ class MatchModelTest(TestCase):
         self.user2.profile.email_verified = True
         self.user2.profile.save()
 
-        match = Match.objects.create(
-            team1=self.team1,
-            team2=self.team2,
-            winner=self.team1
+        match = create_match(
+            self.team1_players,
+            self.team2_players,
+            winner_side=1
         )
         
         self.assertFalse(match.should_auto_confirm())
@@ -485,10 +465,10 @@ class MatchModelTest(TestCase):
         self.user4.profile.email_verified = False
         self.user4.profile.save()
 
-        match = Match.objects.create(
-            team1=self.team_double1,
-            team2=self.team_double2,
-            winner=self.team_double1
+        match = create_match(
+            self.team_double1_players,
+            self.team_double2_players,
+            winner_side=1
         )
 
         self.assertTrue(match.should_auto_confirm())
@@ -504,10 +484,10 @@ class MatchModelTest(TestCase):
         self.user4.profile.email_verified = True
         self.user4.profile.save()
 
-        match = Match.objects.create(
-            team1=self.team_double1,
-            team2=self.team_double2,
-            winner=self.team_double1
+        match = create_match(
+            self.team_double1_players,
+            self.team_double2_players,
+            winner_side=1
         )
 
         self.assertFalse(match.should_auto_confirm())
@@ -519,10 +499,7 @@ class MatchModelTest(TestCase):
         self.user2.profile.email_verified = True
         self.user2.profile.save()
         
-        match = Match.objects.create(
-            team1=self.team1,
-            team2=self.team2
-        )
+        match = create_match(self.team1_players, self.team2_players)
         
         unverified = match.get_unverified_players()
         self.assertEqual(len(unverified), 1)
@@ -536,10 +513,7 @@ class MatchModelTest(TestCase):
         self.user2.profile.email_verified = False
         self.user2.profile.save()
         
-        match = Match.objects.create(
-            team1=self.team1,
-            team2=self.team2
-        )
+        match = create_match(self.team1_players, self.team2_players)
         
         unverified = match.get_unverified_players()
         self.assertEqual(len(unverified), 2)
@@ -556,10 +530,7 @@ class MatchModelTest(TestCase):
         self.user4.profile.email_verified = False
         self.user4.profile.save()
 
-        match = Match.objects.create(
-            team1=self.team_double1,
-            team2=self.team_double2
-        )
+        match = create_match(self.team_double1_players, self.team_double2_players)
 
         unverified = match.get_unverified_players()
         self.assertEqual(len(unverified), 2)
@@ -573,10 +544,7 @@ class MatchModelTest(TestCase):
         self.user2.profile.email_verified = True
         self.user2.profile.save()
         
-        match = Match.objects.create(
-            team1=self.team1,
-            team2=self.team2
-        )
+        match = create_match(self.team1_players, self.team2_players)
         
         unverified = match.get_unverified_players()
         self.assertEqual(len(unverified), 0)
@@ -592,29 +560,20 @@ class MatchModelTest(TestCase):
         self.user4.profile.email_verified = True
         self.user4.profile.save()
 
-        match = Match.objects.create(
-            team1=self.team_double1,
-            team2=self.team_double2
-        )
+        match = create_match(self.team_double1_players, self.team_double2_players)
 
         unverified = match.get_unverified_players()
         self.assertEqual(len(unverified), 0)
     
     def test_user_can_edit_own_singles_match(self):
         """Test user can edit matches they participate in"""
-        match = Match.objects.create(
-            team1=self.team1,
-            team2=self.team2
-        )
+        match = create_match(self.team1_players, self.team2_players)
         self.assertTrue(match.user_can_edit(self.user1))
         self.assertTrue(match.user_can_edit(self.user2))
 
     def test_user_can_edit_own_doubles_match(self):
         """Test user can edit matches they participate in"""
-        match = Match.objects.create(
-            team1=self.team_double1,
-            team2=self.team_double2
-        )
+        match = create_match(self.team_double1_players, self.team_double2_players)
         self.assertTrue(match.user_can_edit(self.user1))
         self.assertTrue(match.user_can_edit(self.user2))
         self.assertTrue(match.user_can_edit(self.user3))
@@ -630,10 +589,7 @@ class MatchModelTest(TestCase):
 
     def test_user_can_view_singles_match(self):
         """Test user_can_view delegation to edit permissions"""
-        match = Match.objects.create(
-            team1=self.team1,
-            team2=self.team2
-        )
+        match = create_match(self.team1_players, self.team2_players)
         
         self.assertTrue(match.user_can_view(self.user1))
         self.assertTrue(match.user_can_view(self.user2))
@@ -652,10 +608,7 @@ class MatchModelTest(TestCase):
 
     def test_user_can_view_doubles_match(self):
         """Test user_can_view delegation to edit permissions"""
-        match = Match.objects.create(
-            team1=self.team_double1,
-            team2=self.team_double2
-        )
+        match = create_match(self.team_double1_players, self.team_double2_players)
 
         self.assertTrue(match.user_can_view(self.user1))
         self.assertTrue(match.user_can_view(self.user2))
@@ -677,35 +630,26 @@ class MatchModelTest(TestCase):
     def test_user_cannot_edit_other_match(self):
         """Test user cannot edit matches they don't participate in"""
         other_user = User.objects.create_user(username="other", password="pass")
-        match = Match.objects.create(
-            team1=self.team1,
-            team2=self.team2
-        )
+        match = create_match(self.team1_players, self.team2_players)
         self.assertFalse(match.user_can_edit(other_user))
     
     def test_staff_can_edit_any_match(self):
         """Test staff can edit any match"""
         staff = User.objects.create_user(username="staff", password="pass", is_staff=True)
-        match = Match.objects.create(
-            team1=self.team1,
-            team2=self.team2
-        )
+        match = create_match(self.team1_players, self.team2_players)
         self.assertTrue(match.user_can_edit(staff))
     
     def test_unauthenticated_cannot_edit(self):
         """Test None/anonymous user cannot edit"""
-        match = Match.objects.create(
-            team1=self.team1,
-            team2=self.team2
-        )
+        match = create_match(self.team1_players, self.team2_players)
         self.assertFalse(match.user_can_edit(None))
     
     def test_should_not_confirm_already_confirmed_singles_match(self):
         """Test should_auto_confirm returns False for already confirmed match"""
-        match = Match.objects.create(
-            team1=self.team1,
-            team2=self.team2,
-            winner=self.team1
+        match = create_match(
+            self.team1_players,
+            self.team2_players,
+            winner_side=1
         )
 
         match.confirmations.set([self.player1, self.player2])
@@ -715,10 +659,10 @@ class MatchModelTest(TestCase):
 
     def test_should_not_confirm_already_confirmed_doubles_match(self):
         """Test should_auto_confirm returns False for already confirmed match"""
-        match = Match.objects.create(
-            team1=self.team_double1,
-            team2=self.team_double2,
-            winner=self.team_double1
+        match = create_match(
+            self.team_double1_players,
+            self.team_double2_players,
+            winner_side=1
         )
 
         match.confirmations.set([self.player1, self.player2, self.player3, self.player4])
@@ -728,18 +672,12 @@ class MatchModelTest(TestCase):
     
     def test_should_not_confirm_singles_match_without_winner(self):
         """Test should_auto_confirm returns False for match without winner"""
-        match = Match.objects.create(
-            team1=self.team1,
-            team2=self.team2
-        )
+        match = create_match(self.team1_players, self.team2_players)
         self.assertFalse(match.should_auto_confirm())
 
     def test_should_not_confirm_doubles_match_without_winner(self):
         """Test should_auto_confirm returns False for match without winner"""
-        match = Match.objects.create(
-            team1=self.team_double1,
-            team2=self.team_double2
-        )
+        match = create_match(self.team_double1_players, self.team_double2_players)
         self.assertFalse(match.should_auto_confirm())
 
 class GameModelTest(TestCase):
@@ -751,13 +689,11 @@ class GameModelTest(TestCase):
         self.user2 = User.objects.create_user(username="p2", password="pass")
         self.player1 = Player.objects.create(user=self.user1, name="P1")
         self.player2 = Player.objects.create(user=self.user2, name="P2")
-        self.team1 = Team.objects.create()
-        self.team1.players.set([self.player1])
-        self.team2 = Team.objects.create()
-        self.team2.players.set([self.player2])
-        self.match = Match.objects.create(
-            team1=self.team1,
-            team2=self.team2,
+        self.team1_players = [self.player1]
+        self.team2_players = [self.player2]
+        self.match = create_match(
+            self.team1_players,
+            self.team2_players,
             best_of=5
         )
     
@@ -782,7 +718,7 @@ class GameModelTest(TestCase):
             team1_score=11,
             team2_score=5
         )
-        self.assertEqual(game.winner, self.team1)
+        self.assertEqual(game.winner_side, 1)
         
         game2 = Game.objects.create(
             match=self.match,
@@ -790,7 +726,7 @@ class GameModelTest(TestCase):
             team1_score=9,
             team2_score=11
         )
-        self.assertEqual(game2.winner, self.team2)
+        self.assertEqual(game2.winner_side, 2)
     
     def test_game_str_representation(self):
         """Test game string representation"""
@@ -828,7 +764,7 @@ class GameModelTest(TestCase):
         Game.objects.create(match=self.match, game_number=3, team1_score=11, team2_score=7)
         
         self.match.refresh_from_db()
-        self.assertEqual(self.match.winner, self.team1)
+        self.assertEqual(self.match.winner_side, Side.ONE)
 
 
 class UserProfileModelTest(TestCase):
@@ -960,19 +896,19 @@ class TestMatchRecompute:
 
     def test_sets_winner_and_score_caches(self):
         m = self._finished_match()
-        assert m.winner == m.team1
+        assert m.winner_side == 1
         assert m.team1_score_cache == 3
         assert m.team2_score_cache == 0
 
     def test_is_idempotent(self):
         m = self._finished_match()
-        before = (m.winner_id, m.team1_score_cache, m.team2_score_cache, m.is_confirmed)
+        before = (m.winner_side, m.team1_score_cache, m.team2_score_cache, m.is_confirmed)
 
         m.recompute()
         m.recompute()
         m.refresh_from_db()
 
-        after = (m.winner_id, m.team1_score_cache, m.team2_score_cache, m.is_confirmed)
+        after = (m.winner_side, m.team1_score_cache, m.team2_score_cache, m.is_confirmed)
         assert before == after
 
     def test_persists_without_calling_save(self):
@@ -1022,7 +958,7 @@ class TestMatchRecompute:
         GameFactory(match=m, game_number=1, team1_score=11, team2_score=4)
         m.refresh_from_db()
 
-        assert m.winner is None
+        assert m.winner_side is None
         assert m.team1_score_cache == 1
 
     def test_confirmation_status_is_recomputed(self):
@@ -1082,14 +1018,15 @@ class TestMatchParticipant:
         m.save()
         assert m.participants.count() == 2
 
-    def test_sync_follows_a_team_membership_change(self):
+    def test_set_match_sides_replaces_an_existing_side(self):
         from pingpong.models import Side
+        from pingpong.services import set_match_sides
 
         a, b = PlayerFactory(with_user=True), PlayerFactory(with_user=True)
         replacement = PlayerFactory(with_user=True)
         m = MatchFactory(player1=a, player2=b)
 
-        m.team1.players.set([replacement])
+        set_match_sides(m, [replacement], [b])
         m.save()
 
         assert set(

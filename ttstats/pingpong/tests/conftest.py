@@ -6,8 +6,8 @@ from django.core.cache import cache as django_cache
 from django.test import Client
 from factory.django import DjangoModelFactory
 
-from pingpong.models import Championship, ChampionshipEntry, ChampionshipEntryMember, Game, Location, Match, MatchConfirmation, Player, ScheduledMatch, Team
-from pingpong.services import resolve_team
+from pingpong.models import Championship, ChampionshipEntry, ChampionshipEntryMember, Game, Location, Match, MatchConfirmation, Player, ScheduledMatch, Side
+from pingpong.services import set_match_sides, set_scheduled_match_sides
 
 
 # ---------------------------------------------------------------------------
@@ -51,31 +51,6 @@ class PlayerFactory(DjangoModelFactory):
         )
 
 
-class TeamFactory(DjangoModelFactory):
-    """Factory for creating Team instances.
-
-    Usage:
-        # Create an empty team (you'll set players after)
-        team = TeamFactory()
-        team.players.set([player1, player2])
-
-        # Create a team with players via trait
-        team = TeamFactory(players=[player1, player2])
-    """
-    class Meta:
-        model = Team
-
-    name = ""
-
-    @classmethod
-    def _create(cls, model_class, *args, **kwargs):
-        players = kwargs.pop('players', None)
-        team = super()._create(model_class, *args, **kwargs)
-        if players:
-            team.players.set(players)
-        return team
-
-
 class MatchFactory(DjangoModelFactory):
     """Factory for Match. Supports backwards-compatible player1/player2 kwargs.
 
@@ -84,7 +59,7 @@ class MatchFactory(DjangoModelFactory):
         match = MatchFactory(player1=p1, player2=p2)
 
         # Team style:
-        match = MatchFactory(team1=team1, team2=team2)
+        match = MatchFactory(team1_players=[p1], team2_players=[p2])
 
         # With confirmation:
         match = MatchFactory(player1=p1, player2=p2, confirmed=True)
@@ -107,8 +82,6 @@ class MatchFactory(DjangoModelFactory):
         # Extract special kwargs
         player1 = kwargs.pop('player1', None)
         player2 = kwargs.pop('player2', None)
-        team1 = kwargs.pop('team1', None)
-        team2 = kwargs.pop('team2', None)
         team1_players = kwargs.pop('team1_players', None)
         team2_players = kwargs.pop('team2_players', None)
         confirmed = kwargs.pop('confirmed', False)
@@ -117,25 +90,13 @@ class MatchFactory(DjangoModelFactory):
         kwargs.pop('player1_confirmed', None)
         kwargs.pop('player2_confirmed', None)
 
-        # Resolve teams through the same service the views use, so tests get
-        # production's team-reuse semantics rather than throwaway teams.
-        if team1 is None:
-            team1 = resolve_team(
-                team1_players or [player1 or PlayerFactory(with_user=True)]
-            )
+        side1 = team1_players or [player1 or PlayerFactory(with_user=True)]
+        side2 = team2_players or [player2 or PlayerFactory(with_user=True)]
 
-        if team2 is None:
-            team2 = resolve_team(
-                team2_players or [player2 or PlayerFactory(with_user=True)]
-            )
-
-        kwargs['team1'] = team1
-        kwargs['team2'] = team2
-
-        # Create the match
         match = super()._create(model_class, *args, **kwargs)
+        set_match_sides(match, side1, side2)
+        match.save()  # recompute now that the sides exist
 
-        # Handle confirmations if requested
         if confirmed:
             confirm_match(match)
 
@@ -160,7 +121,7 @@ class ScheduledMatchFactory(DjangoModelFactory):
         sm = ScheduledMatchFactory(player1=p1, player2=p2)
 
         # Team style:
-        sm = ScheduledMatchFactory(team1=team1, team2=team2)
+        sm = ScheduledMatchFactory(team1_players=[p1], team2_players=[p2])
     """
     class Meta:
         model = ScheduledMatch
@@ -173,26 +134,16 @@ class ScheduledMatchFactory(DjangoModelFactory):
         # Extract special kwargs
         player1 = kwargs.pop('player1', None)
         player2 = kwargs.pop('player2', None)
-        team1 = kwargs.pop('team1', None)
-        team2 = kwargs.pop('team2', None)
         team1_players = kwargs.pop('team1_players', None)
         team2_players = kwargs.pop('team2_players', None)
 
-        # Same reuse semantics as MatchFactory / the views.
-        if team1 is None:
-            team1 = resolve_team(
-                team1_players or [player1 or PlayerFactory(with_user=True)]
-            )
+        side1 = team1_players or [player1 or PlayerFactory(with_user=True)]
+        side2 = team2_players or [player2 or PlayerFactory(with_user=True)]
 
-        if team2 is None:
-            team2 = resolve_team(
-                team2_players or [player2 or PlayerFactory(with_user=True)]
-            )
-
-        kwargs['team1'] = team1
-        kwargs['team2'] = team2
-
-        return super()._create(model_class, *args, **kwargs)
+        scheduled = super()._create(model_class, *args, **kwargs)
+        set_scheduled_match_sides(scheduled, side1, side2)
+        scheduled.save()
+        return scheduled
 
 
 class ChampionshipFactory(DjangoModelFactory):
@@ -230,12 +181,10 @@ class ChampionshipFactory(DjangoModelFactory):
 
         championship = super()._create(model_class, *args, **kwargs)
 
-        # with_participants takes Teams (legacy), with_entries takes lists of
-        # players. Both end up as ChampionshipEntry rows; Teams are still set
-        # too while the M2M exists.
+        # with_participants took Teams; it now takes lists of players, same as
+        # with_entries.
         if participants:
-            championship.participants.set(participants)
-            entries = entries or [list(t.players.all()) for t in participants]
+            entries = entries or list(participants)
 
         for players in entries or []:
             entry = ChampionshipEntry.objects.create(championship=championship)
@@ -253,13 +202,21 @@ class ChampionshipFactory(DjangoModelFactory):
 # Helper functions
 # ---------------------------------------------------------------------------
 
+def create_match(side1_players, side2_players, **kwargs):
+    """Create a Match with the given sides. For raw-ORM style tests."""
+    match = Match.objects.create(**kwargs)
+    set_match_sides(match, side1_players, side2_players)
+    match.save()
+    return match
+
+
 def get_match_players(match):
     """Get (player1, player2) tuple for singles matches.
 
     Returns the first player from each team.
     For doubles, returns (team1 first player, team2 first player).
     """
-    return match.team1.players.first(), match.team2.players.first()
+    return match.side1_players.first(), match.side2_players.first()
 
 
 def confirm_match(match, players=None):
@@ -274,7 +231,7 @@ def confirm_match(match, players=None):
         List of created MatchConfirmation records
     """
     if players is None:
-        players = list(match.team1.players.all()) + list(match.team2.players.all())
+        players = list(match.all_players)
 
     confirmations = []
     for player in players:
@@ -303,7 +260,7 @@ def confirm_match_silent(match, players=None):
         List of created MatchConfirmation records
     """
     if players is None:
-        players = list(match.team1.players.all()) + list(match.team2.players.all())
+        players = list(match.all_players)
 
     confirmations = [
         MatchConfirmation(match=match, player=player)
@@ -322,8 +279,8 @@ def confirm_team(match, team_num):
     Returns:
         List of created MatchConfirmation records
     """
-    team = match.team1 if team_num == 1 else match.team2
-    return confirm_match(match, players=list(team.players.all()))
+    side = Side.ONE if team_num == 1 else Side.TWO
+    return confirm_match(match, players=list(match.players_on(side)))
 
 
 # ---------------------------------------------------------------------------

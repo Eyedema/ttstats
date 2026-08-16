@@ -22,9 +22,9 @@ def pingpong_context(request):
 
     # Cache miss - use denormalized is_confirmed field for DB-level filtering
     pending_matches_count = Match.objects.filter(
-        models.Q(team1__players=player) | models.Q(team2__players=player),
+        participants__player=player,
         is_confirmed=False,
-        winner__isnull=False,
+        winner_side__isnull=False,
     ).distinct().count()
 
     # Cache for 5 minutes

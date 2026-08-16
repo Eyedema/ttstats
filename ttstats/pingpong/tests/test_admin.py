@@ -87,7 +87,6 @@ class TestOtherAdminChangelists:
         "url_name",
         [
             "admin:pingpong_player_changelist",
-            "admin:pingpong_team_changelist",
             "admin:pingpong_game_changelist",
             "admin:pingpong_scheduledmatch_changelist",
             "admin:pingpong_location_changelist",

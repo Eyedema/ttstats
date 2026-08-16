@@ -32,8 +32,8 @@ class Command(BaseCommand):
         # Note: Don't prefetch players here - we reset Elo ratings before processing,
         # and prefetched data would contain stale values
         all_matches = Match.objects.filter(
-            winner__isnull=False,
-        ).select_related('team1', 'team2', 'winner').prefetch_related(
+            winner_side__isnull=False,
+        ).prefetch_related(
             'confirmations'
         ).order_by('date_played', 'created_at')
 

@@ -5,7 +5,7 @@ import pytest
 from django.urls import reverse
 
 from pingpong import live_scoring as ls
-from pingpong.models import Game, Match
+from pingpong.models import Game, Match, Side
 from .conftest import (
     GameFactory,
     MatchFactory,
@@ -85,11 +85,11 @@ class TestLiveMatchExclusion:
         p2 = PlayerFactory(with_user=True)
 
         live = MatchFactory(player1=p1, player2=p2, is_live=True)
-        live.winner = live.team1
+        live.winner_side = Side.ONE
         live.save()
 
         assert (
-            Match.objects.filter(winner__players=p1).count() == 0
+            Match.objects.filter(winner_side__isnull=False).count() == 0
         ), "live match must not count as a confirmed win"
 
     def test_live_match_excluded_from_head_to_head(self):
@@ -99,9 +99,9 @@ class TestLiveMatchExclusion:
 
         live = MatchFactory(player1=p1, player2=p2, is_live=True)
 
-        h2h_qs = Match.objects.filter(
-            team1__players=p1, team2__players=p2
-        ) | Match.objects.filter(team1__players=p2, team2__players=p1)
+        h2h_qs = Match.objects.filter(participants__player=p1).filter(
+            participants__player=p2
+        )
 
         assert live.pk not in set(h2h_qs.values_list("pk", flat=True))
 
@@ -147,7 +147,7 @@ class TestLiveMatchExclusion:
         GameFactory(match=match, game_number=2, team1_score=11, team2_score=7)
 
         match.refresh_from_db()
-        assert match.winner is None
+        assert match.winner_side is None
         assert Match.objects.filter(pk=match.pk).count() == 0  # hidden while live
 
         # Mimic the match-end handoff: flip is_live first, then save again so
@@ -157,7 +157,7 @@ class TestLiveMatchExclusion:
         match.save()
         match.refresh_from_db()
 
-        assert match.winner == match.team1
+        assert match.winner_side == 1
         assert Match.objects.filter(pk=match.pk).count() == 1
 
         confirm_match(match)
@@ -442,7 +442,7 @@ class TestLivePointEndpoint:
         assert match.is_live is False
         assert match.live_state is None
         # Winner was set via Game.save() → Match.save() pipeline
-        assert match.winner_id == match.team1_id
+        assert match.winner_side == Side.ONE
         # 2 Game rows persisted
         assert Game.all_objects.filter(match=match).count() == 2
 
@@ -929,7 +929,7 @@ class TestDashboardResumeBanner:
         assert b"live-resume-banner" in resp.content
         assert b"Resume" in resp.content
         # opponent name appears
-        opp_name = match.team2.players.first().name.encode()
+        opp_name = match.side2_players.first().name.encode()
         assert opp_name in resp.content
 
     def test_no_banner_when_no_live_matches(self, auth_client):
@@ -999,7 +999,7 @@ class TestMatchConfirmHandoff:
         _score_via_scoreboard(client, match, ["team1", "team1"])
 
         match.refresh_from_db()
-        assert match.winner_id == match.team1_id
+        assert match.winner_side == Side.ONE
         # One confirmation email goes to the other verified player (p2)
         recipients = [addr for m in mailoutbox for addr in m.to]
         assert p2.user.email in recipients
@@ -1062,8 +1062,8 @@ class TestMatchConfirmHandoff:
         assert match_live.is_confirmed == match_manual.is_confirmed
         assert match_live.team1_score_cache == match_manual.team1_score_cache  # 3
         assert match_live.team2_score_cache == match_manual.team2_score_cache  # 0
-        assert match_live.winner_id == match_live.team1_id
-        assert match_manual.winner_id == match_manual.team1_id
+        assert match_live.winner_side == Side.ONE
+        assert match_manual.winner_side == Side.ONE
         assert match_live.best_of == match_manual.best_of
 
         # Parity on game-level fields

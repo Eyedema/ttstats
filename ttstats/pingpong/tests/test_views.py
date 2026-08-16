@@ -286,14 +286,14 @@ class TestMatchDetailWinnerDisplay:
 
     def test_badge_renders_when_side1_wins(self):
         u, m = self._finished_singles(1)
-        assert m.winner == m.team1
+        assert m.winner_side == 1
         resp = _login_client(u).get(reverse("pingpong:match_detail", args=[m.pk]))
         assert resp.status_code == 200
         assert resp.content.decode().count("WINNER") == 1
 
     def test_badge_renders_when_side2_wins(self):
         u, m = self._finished_singles(2)
-        assert m.winner == m.team2
+        assert m.winner_side == 2
         resp = _login_client(u).get(reverse("pingpong:match_detail", args=[m.pk]))
         assert resp.status_code == 200
         assert resp.content.decode().count("WINNER") == 1
@@ -304,7 +304,7 @@ class TestMatchDetailWinnerDisplay:
         m = MatchFactory(player1=p, player2=other, best_of=5)
         GameFactory(match=m, game_number=1, team1_score=11, team2_score=5)
         m.refresh_from_db()
-        assert m.winner is None
+        assert m.winner_side is None
         resp = _login_client(u).get(reverse("pingpong:match_detail", args=[m.pk]))
         assert resp.content.decode().count("WINNER") == 0
 
@@ -344,7 +344,11 @@ class TestMatchCreateView:
         })
         assert resp.status_code == 302
         # Check that a match exists where player p is in team1
-        match = Match.objects.filter(team1__players=p, team2__players=other).first()
+        match = (
+            Match.objects.filter(participants__player=p)
+            .filter(participants__player=other)
+            .first()
+        )
         assert match is not None
 
     def test_same_player_rejection(self):
@@ -384,7 +388,7 @@ class TestMatchUpdateView:
         GameFactory(match=m, game_number=1, team1_score=11, team2_score=5)
         GameFactory(match=m, game_number=2, team1_score=11, team2_score=9)
         m.refresh_from_db()
-        assert m.winner is not None
+        assert m.winner_side is not None
 
         c = _login_client(u)
         resp = c.get(reverse("pingpong:match_edit", args=[m.pk]))
@@ -413,15 +417,15 @@ class TestMatchUpdateView:
 
     def test_championship_spectator_cannot_edit_other_match(self):
         """Championship participants must not be able to edit matches between *other* players in the same championship."""
-        from .conftest import ChampionshipFactory, TeamFactory
+        from .conftest import ChampionshipFactory
 
         spectator, sp_player = _verified_user_with_player()
         p1 = PlayerFactory(with_user=True)
         p2 = PlayerFactory(with_user=True)
 
-        sp_team = TeamFactory(players=[sp_player])
-        t1 = TeamFactory(players=[p1])
-        t2 = TeamFactory(players=[p2])
+        sp_team = [sp_player]
+        t1 = [p1]
+        t2 = [p2]
 
         champ = ChampionshipFactory(with_participants=[sp_team, t1, t2])
         m = MatchFactory(player1=p1, player2=p2)
@@ -503,21 +507,20 @@ class TestGameCreateView:
         assert resp.status_code == 302
         assert f"/matches/{m.pk}/" in resp.url
         m.refresh_from_db()
-        # Winner is now a Team, and p is in team1
-        assert m.winner == m.team1
-        assert p in m.winner.players.all()
+        assert m.winner_side == 1
+        assert p in m.players_on(1)
 
     def test_championship_spectator_cannot_add_game_to_other_match(self):
         """Championship spectators must not add games to matches between other players."""
-        from .conftest import ChampionshipFactory, TeamFactory
+        from .conftest import ChampionshipFactory
 
         spectator, sp_player = _verified_user_with_player()
         p1 = PlayerFactory(with_user=True)
         p2 = PlayerFactory(with_user=True)
 
-        sp_team = TeamFactory(players=[sp_player])
-        t1 = TeamFactory(players=[p1])
-        t2 = TeamFactory(players=[p2])
+        sp_team = [sp_player]
+        t1 = [p1]
+        t2 = [p2]
 
         champ = ChampionshipFactory(with_participants=[sp_team, t1, t2])
         m = MatchFactory(player1=p1, player2=p2)
@@ -1018,8 +1021,8 @@ class TestMatchConfirmEloUpdate:
         match.refresh_from_db()
 
         # Verify winner is set but not confirmed
-        assert match.winner == match.team1
-        assert player1 in match.winner.players.all()
+        assert match.winner_side == 1
+        assert player1 in match.players_on(1)
         assert not match.team1_confirmed
         assert not match.team2_confirmed
         assert EloHistory.objects.count() == 0

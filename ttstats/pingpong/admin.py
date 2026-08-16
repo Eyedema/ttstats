@@ -22,7 +22,6 @@ from .models import (
     Player,
     PlayerAchievement,
     ScheduledMatch,
-    Team,
     UserProfile,
 )
 
@@ -62,8 +61,8 @@ class MatchInline(admin.TabularInline):
 
     model = Match
     fk_name = "location"
-    fields = ("date_played", "team1", "team2", "winner", "match_type")
-    readonly_fields = ("winner",)
+    fields = ("date_played", "match_type")
+    readonly_fields = ("match_type",)
     extra = 0
     show_change_link = True
     can_delete = False
@@ -77,7 +76,7 @@ class ScheduledMatchInline(admin.TabularInline):
 
     model = ScheduledMatch
     fk_name = "location"
-    fields = ("scheduled_date", "scheduled_time", "team1", "team2", "notification_sent")
+    fields = ("scheduled_date", "scheduled_time", "notification_sent")
     extra = 0
     show_change_link = True
     can_delete = False
@@ -86,19 +85,12 @@ class ScheduledMatchInline(admin.TabularInline):
         return False
 
 
-class TeamPlayerInline(admin.TabularInline):
-    """Show players in a team"""
-
-    model = Team.players.through
-    extra = 0
-
-
 class GameInline(admin.TabularInline):
     """Show games in a match"""
 
     model = Game
-    fields = ("game_number", "team1_score", "team2_score", "winner", "duration_minutes")
-    readonly_fields = ("winner",)
+    fields = ("game_number", "team1_score", "team2_score", "winner_side", "duration_minutes")
+    readonly_fields = ("winner_side",)
     extra = 1
     ordering = ("game_number",)
 
@@ -377,79 +369,6 @@ class PlayerAdmin(admin.ModelAdmin):
     )
 
 
-@admin.register(Team)
-class TeamAdmin(admin.ModelAdmin):
-    """Team admin with player and match statistics"""
-
-    list_display = (
-        "__str__",
-        "name",
-        "player_count",
-        "matches_played",
-        "matches_won",
-        "win_rate",
-    )
-    list_filter = ("players",)
-    search_fields = ("name", "players__name", "players__nickname")
-    readonly_fields = ("matches_played", "matches_won", "win_rate")
-    inlines = [TeamPlayerInline]
-
-    fieldsets = (
-        ("Basic Info", {"fields": ("name",)}),
-        (
-            "Statistics",
-            {
-                "fields": ("matches_played", "matches_won", "win_rate"),
-                "classes": ("collapse",),
-            },
-        ),
-    )
-
-    def player_count(self, obj):
-        """Count players in team"""
-        try:
-            return obj.players.count()
-        except (AttributeError, TypeError):
-            return 0
-
-    player_count.short_description = "Players"
-    player_count.admin_order_field = None  # Not sortable (aggregated)
-
-    def matches_played(self, obj):
-        """Count total matches"""
-        try:
-            return obj.matches_as_team1.count() + obj.matches_as_team2.count()
-        except (AttributeError, TypeError):
-            return 0
-
-    matches_played.short_description = "Matches Played"
-    matches_played.admin_order_field = None  # Not sortable (aggregated)
-
-    def matches_won(self, obj):
-        """Count matches won"""
-        try:
-            return Match.objects.filter(winner=obj).count()
-        except (AttributeError, TypeError):
-            return 0
-
-    matches_won.short_description = "Matches Won"
-    matches_won.admin_order_field = None  # Not sortable (aggregated)
-
-    def win_rate(self, obj):
-        """Calculate win rate percentage"""
-        try:
-            total = self.matches_played(obj)
-            if total == 0:
-                return "0%"
-            won = self.matches_won(obj)
-            return f"{(won / total * 100):.1f}%"
-        except (AttributeError, TypeError, ZeroDivisionError):
-            return "0%"
-
-    win_rate.short_description = "Win Rate"
-    win_rate.admin_order_field = None  # Not sortable (calculated)
-
-
 @admin.register(Location)
 class LocationAdmin(admin.ModelAdmin):
     """Location admin with match statistics"""
@@ -541,7 +460,7 @@ class MatchAdmin(admin.ModelAdmin):
         "id",
     )
     readonly_fields = (
-        "winner",
+        "winner_side",
         "created_at",
         "updated_at",
         "match_confirmed",
@@ -552,7 +471,7 @@ class MatchAdmin(admin.ModelAdmin):
     inlines = [GameInline, MatchConfirmationInline, EloHistoryInline]
 
     fieldsets = (
-        ("Teams", {"fields": ("is_double", "team1", "team2")}),
+        ("Format", {"fields": ("is_double",)}),
         (
             "Match Details",
             {"fields": ("date_played", "location", "match_type", "best_of", "notes")},
@@ -560,7 +479,7 @@ class MatchAdmin(admin.ModelAdmin):
         (
             "Result",
             {
-                "fields": ("winner", "team1_score", "team2_score", "match_confirmed"),
+                "fields": ("winner_side", "team1_score", "team2_score", "match_confirmed"),
                 "classes": ("collapse",),
             },
         ),
@@ -573,7 +492,7 @@ class MatchAdmin(admin.ModelAdmin):
     def get_queryset(self, request):
         """Optimize query with select_related and prefetch_related"""
         qs = super().get_queryset(request)
-        return qs.select_related("team1", "team2", "winner", "location").prefetch_related(
+        return qs.select_related("location").prefetch_related(
             "participants__player", "games"
         )
 
@@ -582,7 +501,7 @@ class MatchAdmin(admin.ModelAdmin):
         return f"{obj.side1_label} vs {obj.side2_label}"
 
     teams_display.short_description = "Matchup"
-    teams_display.admin_order_field = "team1"
+    teams_display.admin_order_field = None
 
     def match_score(self, obj):
         """Show match score"""
@@ -604,7 +523,7 @@ class MatchAdmin(admin.ModelAdmin):
         return mark_safe('<span style="color: orange;">In Progress</span>')
 
     winner_display.short_description = "Winner"
-    winner_display.admin_order_field = "winner"
+    winner_display.admin_order_field = "winner_side"
 
     def confirmation_status(self, obj):
         """Show confirmation status with icon"""
@@ -628,7 +547,7 @@ class GameAdmin(admin.ModelAdmin):
         "match_link",
         "game_number",
         "score_display",
-        "winner",
+        "winner_side",
         "duration_minutes",
         "match_date",
     )
@@ -643,20 +562,20 @@ class GameAdmin(admin.ModelAdmin):
         "match__participants__player__name",
         "match__id",
     )
-    readonly_fields = ("winner", "match_date", "match_link")
+    readonly_fields = ("winner_side", "match_date", "match_link")
 
     fieldsets = (
         ("Match Info", {"fields": ("match", "match_link", "match_date", "game_number")}),
         (
             "Score",
-            {"fields": ("team1_score", "team2_score", "winner", "duration_minutes")},
+            {"fields": ("team1_score", "team2_score", "winner_side", "duration_minutes")},
         ),
     )
 
     def get_queryset(self, request):
         """Optimize query with select_related"""
         qs = super().get_queryset(request)
-        return qs.select_related("match", "match__team1", "match__team2", "winner")
+        return qs.select_related("match")
 
     def match_link(self, obj):
         """Clickable link to parent match"""
@@ -727,7 +646,7 @@ class MatchConfirmationAdmin(admin.ModelAdmin):
     def get_queryset(self, request):
         """Optimize query with select_related"""
         qs = super().get_queryset(request)
-        return qs.select_related("match", "match__team1", "match__team2", "match__winner", "player")
+        return qs.select_related("match", "player")
 
     def match_link(self, obj):
         """Clickable link to match"""
@@ -759,8 +678,8 @@ class MatchConfirmationAdmin(admin.ModelAdmin):
         if not obj.match:
             return "N/A"
         try:
-            if obj.match.winner:
-                return obj.match.winner
+            if obj.match.winner_side:
+                return obj.match.winner_label
         except (AttributeError, TypeError):
             pass
         return "In Progress"
@@ -802,7 +721,7 @@ class ScheduledMatchAdmin(admin.ModelAdmin):
     actions = ["mark_notifications_sent", "mark_notifications_not_sent"]
 
     fieldsets = (
-        ("Teams", {"fields": ("team1", "team2")}),
+
         (
             "Schedule",
             {
@@ -828,18 +747,16 @@ class ScheduledMatchAdmin(admin.ModelAdmin):
     def get_queryset(self, request):
         """Optimize query with select_related and prefetch_related"""
         qs = super().get_queryset(request)
-        return qs.select_related("team1", "team2", "location", "created_by").prefetch_related(
+        return qs.select_related("location", "created_by").prefetch_related(
             "participants__player"
         )
 
     def teams_display(self, obj):
         """Show team matchup"""
-        team1 = obj.team1 if obj.team1 else "N/A"
-        team2 = obj.team2 if obj.team2 else "N/A"
-        return f"{team1} vs {team2}"
+        return f"{obj.side1_label} vs {obj.side2_label}"
 
     teams_display.short_description = "Matchup"
-    teams_display.admin_order_field = "team1"
+    teams_display.admin_order_field = None
 
     def notification_sent_icon(self, obj):
         """Show notification status with icon"""
@@ -906,19 +823,18 @@ class ChampionshipAdmin(admin.ModelAdmin):
     list_filter = ("status", "championship_type", "is_public", "start_date")
     search_fields = ("name", "description", "created_by__name")
     readonly_fields = ("created_at", "updated_at", "participant_count")
-    filter_horizontal = ("participants",)
 
     fieldsets = (
         ("Basic Info", {"fields": ("name", "description", "championship_type", "is_public")}),
         ("Settings", {"fields": ("max_participants", "start_date", "end_date", "registration_deadline", "location")}),
-        ("Status", {"fields": ("status", "participants", "created_by")}),
+        ("Status", {"fields": ("status", "created_by")}),
         ("Metadata", {"fields": ("created_at", "updated_at"), "classes": ("collapse",)}),
     )
 
     def get_queryset(self, request):
         from django.db.models import Count
         qs = super().get_queryset(request)
-        return qs.annotate(_participant_count=Count('participants', distinct=True))
+        return qs.annotate(_participant_count=Count('entries', distinct=True))
 
     def participant_count(self, obj):
         return obj._participant_count

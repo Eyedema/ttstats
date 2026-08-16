@@ -1,89 +1,83 @@
 import pytest
 
-from pingpong.models import Team
-from pingpong.services import resolve_sides, resolve_team
-from .conftest import PlayerFactory, TeamFactory
+from pingpong.models import MatchParticipant, ScheduledMatchParticipant, Side
+from pingpong.services import set_match_sides, set_scheduled_match_sides
+from .conftest import MatchFactory, PlayerFactory, ScheduledMatchFactory
 
 
 @pytest.mark.django_db
-class TestResolveTeam:
-    def test_creates_a_singleton_team_when_none_exists(self):
-        p = PlayerFactory()
-        team = resolve_team([p])
-        assert list(team.players.all()) == [p]
+class TestSetMatchSides:
+    def test_writes_one_participant_per_player(self):
+        a, b = PlayerFactory(), PlayerFactory()
+        match = MatchFactory()
 
-    def test_reuses_the_existing_singleton_team(self):
-        p = PlayerFactory()
-        first = resolve_team([p])
-        second = resolve_team([p])
-        assert first.pk == second.pk
-        assert Team.objects.count() == 1
+        set_match_sides(match, [a], [b])
 
-    def test_reuses_a_doubles_team_regardless_of_order(self):
-        a = PlayerFactory()
-        b = PlayerFactory()
-        first = resolve_team([a, b])
-        second = resolve_team([b, a])
-        assert first.pk == second.pk
-        assert Team.objects.count() == 1
-
-    def test_does_not_reuse_a_larger_team_that_contains_the_pair(self):
-        """MatchCreateView's doubles branch used to match on membership alone,
-        so a three-player team containing both players would be reused.
-        """
-        a = PlayerFactory()
-        b = PlayerFactory()
-        c = PlayerFactory()
-        oversized = TeamFactory(players=[a, b, c])
-
-        team = resolve_team([a, b])
-
-        assert team.pk != oversized.pk
-        assert set(team.players.all()) == {a, b}
-
-    def test_does_not_reuse_a_singleton_team_for_a_pair(self):
-        a = PlayerFactory()
-        b = PlayerFactory()
-        singleton = resolve_team([a])
-
-        pair = resolve_team([a, b])
-
-        assert pair.pk != singleton.pk
-
-    def test_does_not_reuse_a_pair_team_for_a_singleton(self):
-        a = PlayerFactory()
-        b = PlayerFactory()
-        pair = resolve_team([a, b])
-
-        singleton = resolve_team([a])
-
-        assert singleton.pk != pair.pk
-        assert list(singleton.players.all()) == [a]
-
-    def test_empty_player_list_is_rejected(self):
-        with pytest.raises(ValueError):
-            resolve_team([])
-
-
-@pytest.mark.django_db
-class TestResolveSides:
-    def test_returns_a_team_per_side(self):
-        a = PlayerFactory()
-        b = PlayerFactory()
-        team1, team2 = resolve_sides([a], [b])
-        assert list(team1.players.all()) == [a]
-        assert list(team2.players.all()) == [b]
-        assert team1.pk != team2.pk
+        assert list(match.players_on(Side.ONE)) == [a]
+        assert list(match.players_on(Side.TWO)) == [b]
+        assert match.participants.count() == 2
 
     def test_doubles_sides(self):
         players = [PlayerFactory() for _ in range(4)]
-        team1, team2 = resolve_sides(players[:2], players[2:])
-        assert set(team1.players.all()) == set(players[:2])
-        assert set(team2.players.all()) == set(players[2:])
+        match = MatchFactory()
 
-    def test_repeat_calls_do_not_multiply_teams(self):
-        a = PlayerFactory()
-        b = PlayerFactory()
-        resolve_sides([a], [b])
-        resolve_sides([a], [b])
-        assert Team.objects.count() == 2
+        set_match_sides(match, players[:2], players[2:])
+
+        assert set(match.players_on(Side.ONE)) == set(players[:2])
+        assert set(match.players_on(Side.TWO)) == set(players[2:])
+
+    def test_replaces_previous_sides(self):
+        old_a, old_b = PlayerFactory(), PlayerFactory()
+        new_a, new_b = PlayerFactory(), PlayerFactory()
+        match = MatchFactory()
+
+        set_match_sides(match, [old_a], [old_b])
+        set_match_sides(match, [new_a], [new_b])
+
+        assert match.participants.count() == 2
+        assert list(match.players_on(Side.ONE)) == [new_a]
+        assert list(match.players_on(Side.TWO)) == [new_b]
+
+    def test_is_scoped_to_one_match(self):
+        a, b = PlayerFactory(), PlayerFactory()
+        mine = MatchFactory()
+        other = MatchFactory()
+        other_participants = set(
+            other.participants.values_list("player_id", flat=True)
+        )
+
+        set_match_sides(mine, [a], [b])
+
+        assert (
+            set(other.participants.values_list("player_id", flat=True))
+            == other_participants
+        )
+
+    def test_empty_sides_are_allowed(self):
+        match = MatchFactory()
+        set_match_sides(match, [], [])
+        assert match.participants.count() == 0
+
+
+@pytest.mark.django_db
+class TestSetScheduledMatchSides:
+    def test_writes_participants(self):
+        a, b = PlayerFactory(), PlayerFactory()
+        scheduled = ScheduledMatchFactory()
+
+        set_scheduled_match_sides(scheduled, [a], [b])
+
+        assert list(scheduled.players_on(Side.ONE)) == [a]
+        assert list(scheduled.players_on(Side.TWO)) == [b]
+
+    def test_does_not_touch_match_participants(self):
+        a, b = PlayerFactory(), PlayerFactory()
+        scheduled = ScheduledMatchFactory()
+        before = MatchParticipant.objects.count()
+
+        set_scheduled_match_sides(scheduled, [a], [b])
+
+        assert MatchParticipant.objects.count() == before
+        assert ScheduledMatchParticipant.objects.filter(
+            scheduled_match=scheduled
+        ).count() == 2

@@ -11,7 +11,6 @@ from .conftest import (
     LocationFactory,
     MatchFactory,
     PlayerFactory,
-    TeamFactory,
     UserFactory,
     confirm_match,
 )
@@ -33,12 +32,12 @@ def _auth_client(user):
 
 
 def _singles_team(player):
-    return TeamFactory(players=[player])
+    return [player]
 
 
 def _make_participants(n=4):
     players = [_player_with_verified_user() for _ in range(n)]
-    teams = [_singles_team(p) for p in players]
+    teams = [[p] for p in players]
     return players, teams
 
 
@@ -139,7 +138,7 @@ class TestChampionshipResultsMatrix:
         """Championship detail includes matrix_rows when matches are confirmed."""
         players, teams = _make_participants(3)
         champ = ChampionshipFactory(with_participants=teams)
-        m = MatchFactory(team1=teams[0], team2=teams[1], championship=champ)
+        m = MatchFactory(team1_players=[players[0]], team2_players=[players[1]], championship=champ)
         GameFactory(match=m, game_number=1, team1_score=11, team2_score=5)
         GameFactory(match=m, game_number=2, team1_score=11, team2_score=7)
         GameFactory(match=m, game_number=3, team1_score=11, team2_score=9)
@@ -166,7 +165,7 @@ class TestChampionshipResultsMatrix:
         """Matrix shows correct game score from row team's perspective."""
         players, teams = _make_participants(2)
         champ = ChampionshipFactory(with_participants=teams)
-        m = MatchFactory(team1=teams[0], team2=teams[1], championship=champ)
+        m = MatchFactory(team1_players=[players[0]], team2_players=[players[1]], championship=champ)
         GameFactory(match=m, game_number=1, team1_score=11, team2_score=5)
         GameFactory(match=m, game_number=2, team1_score=11, team2_score=7)
         GameFactory(match=m, game_number=3, team1_score=11, team2_score=9)
@@ -298,30 +297,28 @@ class TestChampionshipRegistration:
         assert champ.entries.count() == 1
         assert set(champ.entries.first().players) == {player, partner}
 
-    def test_unregister_team(self):
+    def test_unregister_entry(self):
         player = _player_with_verified_user()
-        team = _singles_team(player)
-        champ = ChampionshipFactory(with_participants=[team])
+        champ = ChampionshipFactory(with_entries=[[player]])
         client = _auth_client(player.user)
         resp = client.post(
-            reverse("pingpong:championship_unregister", args=[champ.pk]),
-            {"team": team.pk},
+            reverse("pingpong:championship_unregister", args=[champ.pk])
         )
         assert resp.status_code == 302
-        assert not champ.participants.filter(pk=team.pk).exists()
+        assert not champ.entries.filter(members__player=player).exists()
 
     def test_unregister_blocked_after_registration_phase(self):
         player = _player_with_verified_user()
-        team = _singles_team(player)
-        champ = ChampionshipFactory(status=Championship.Status.SCHEDULED, with_participants=[team])
+        champ = ChampionshipFactory(
+            status=Championship.Status.SCHEDULED, with_entries=[[player]]
+        )
         client = _auth_client(player.user)
         resp = client.post(
-            reverse("pingpong:championship_unregister", args=[champ.pk]),
-            {"team": team.pk},
+            reverse("pingpong:championship_unregister", args=[champ.pk])
         )
         assert resp.status_code == 302
-        # Team should still be registered
-        assert champ.participants.filter(pk=team.pk).exists()
+        # Entry should still be registered
+        assert champ.entries.filter(members__player=player).exists()
 
 
 # ---------------------------------------------------------------------------
@@ -433,8 +430,8 @@ class TestChampionshipMatchLifecycle:
             reverse("pingpong:scheduled_match_convert", args=[sm.pk]),
             {
                 "is_double": False,
-                "player1": sm.team1.players.first().pk,
-                "player2": sm.team2.players.first().pk,
+                "player1": sm.side1_players.first().pk,
+                "player2": sm.side2_players.first().pk,
                 "date_played": date.today().isoformat(),
                 "match_type": "casual",
                 "best_of": 5,
@@ -465,8 +462,8 @@ class TestChampionshipMatchLifecycle:
             reverse("pingpong:scheduled_match_convert", args=[sm.pk]),
             {
                 "is_double": False,
-                "player1": sm.team1.players.first().pk,
-                "player2": sm.team2.players.first().pk,
+                "player1": sm.side1_players.first().pk,
+                "player2": sm.side2_players.first().pk,
                 "date_played": date.today().isoformat(),
                 "match_type": "casual",
                 "best_of": 5,

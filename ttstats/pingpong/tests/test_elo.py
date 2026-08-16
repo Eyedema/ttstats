@@ -6,8 +6,8 @@ import pytest
 from django.contrib.auth.models import User
 
 from ..elo import calculate_k_factor, calculate_expected_score, get_win_probability, update_player_elo
-from ..models import Player, Match, Game, EloHistory
-from .conftest import PlayerFactory, MatchFactory, GameFactory, TeamFactory, UserFactory, confirm_match, confirm_match_silent
+from ..models import Player, Match, Game, EloHistory, Side
+from .conftest import PlayerFactory, MatchFactory, GameFactory, UserFactory, confirm_match, confirm_match_silent
 
 
 @pytest.mark.django_db
@@ -97,7 +97,7 @@ class TestEloUpdate:
         match = MatchFactory(confirmed=True)
         # No games, so no winner
 
-        player1, player2 = match.team1.players.first(), match.team2.players.first()
+        player1, player2 = match.side1_players.first(), match.side2_players.first()
         old_elo_1 = player1.elo_rating
         old_elo_2 = player2.elo_rating
 
@@ -357,9 +357,7 @@ class TestGetWinProbability:
     def test_uses_pre_match_elo_when_history_exists(self):
         p1 = PlayerFactory(elo_rating=1600)
         p2 = PlayerFactory(elo_rating=1400)
-        t1 = TeamFactory(players=[p1])
-        t2 = TeamFactory(players=[p2])
-        m = MatchFactory(team1=t1, team2=t2)
+        m = MatchFactory(player1=p1, player2=p2)
         GameFactory(match=m, game_number=1, team1_score=11, team2_score=5)
         GameFactory(match=m, game_number=2, team1_score=11, team2_score=5)
         GameFactory(match=m, game_number=3, team1_score=11, team2_score=5)
@@ -403,7 +401,7 @@ class TestEloEmptySideGuard:
         confirm_match_silent(m)
 
         EloHistory.objects.filter(match=m).delete()
-        m.team1.players.clear()
+        m.participants.filter(side=Side.ONE).delete()
         m.save()
         m.refresh_from_db()
         assert list(m.side1_players) == []

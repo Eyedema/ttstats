@@ -8,11 +8,7 @@ from .cache_utils import invalidate_match_caches, invalidate_player_caches
 from .emails import send_match_confirmation_email, send_passkey_registered_email
 from .models import Game, Match, MatchConfirmation, Player, ScheduledMatch, UserProfile
 from .elo import update_player_elo
-from .services import (
-    link_championship_entries,
-    sync_match_participants,
-    sync_scheduled_match_participants,
-)
+from .services import link_championship_entries
 
 
 @receiver(post_save, sender=User)
@@ -31,19 +27,13 @@ def create_user_profile(sender, instance, created, **kwargs):
 
 
 @receiver(post_save, sender=Match)
-def sync_participants_on_match_save(sender, instance, **kwargs):
-    """Keep MatchParticipant in step with the Team FKs during the migration.
-
-    Hooking the save covers every creation path -- views, factories, admin,
-    shell -- instead of each one remembering to write participant rows.
-    """
-    sync_match_participants(instance)
+def link_entries_on_match_save(sender, instance, **kwargs):
+    """Attach championship entries to whichever sides match their members."""
     link_championship_entries(instance)
 
 
 @receiver(post_save, sender=ScheduledMatch)
-def sync_participants_on_scheduled_match_save(sender, instance, **kwargs):
-    sync_scheduled_match_participants(instance)
+def link_entries_on_scheduled_match_save(sender, instance, **kwargs):
     link_championship_entries(instance)
 
 
@@ -56,7 +46,7 @@ def track_match_winner_change(sender, instance, **kwargs):
 
     try:
         old_match = sender.objects.get(pk=instance.pk)
-        instance._winner_just_set = (old_match.winner_id is None)
+        instance._winner_just_set = (old_match.winner_side is None)
     except sender.DoesNotExist:
         instance._winner_just_set = False
 
@@ -65,7 +55,7 @@ def track_match_winner_change(sender, instance, **kwargs):
 def handle_match_completion(sender, instance, created, **kwargs):
     """Handle match completion tasks"""
     # Only process if winner was just set
-    if not getattr(instance, "_winner_just_set", False) or not instance.winner:
+    if not getattr(instance, "_winner_just_set", False) or not instance.winner_side:
         return
 
     # Live matches are mid-flight — the scoreboard endpoint flips is_live=False
@@ -76,7 +66,7 @@ def handle_match_completion(sender, instance, created, **kwargs):
 
     # 1. Auto-confirm if needed
     if instance.should_auto_confirm():
-        all_players = (instance.team1.players.all() | instance.team2.players.all())
+        all_players = instance.all_players
         MatchConfirmation.objects.bulk_create(
             [MatchConfirmation(match=instance, player=player) for player in all_players],
             ignore_conflicts=True
@@ -85,7 +75,7 @@ def handle_match_completion(sender, instance, created, **kwargs):
         instance.refresh_from_db()
     else:
         # 2. Send confirmation emails (only to verified users who need to confirm)
-        for player in (instance.team1.players.all() | instance.team2.players.all()):
+        for player in instance.all_players:
             if (
                     player.user
                     and player.user.email
@@ -103,8 +93,8 @@ def handle_match_completion(sender, instance, created, **kwargs):
     update_player_elo(instance)
 
     # 5. Check achievements (after Elo is updated)
-    if instance.is_confirmed and instance.winner:
-        all_players = list(instance.team1.players.all()) + list(instance.team2.players.all())
+    if instance.is_confirmed and instance.winner_side:
+        all_players = list(instance.all_players)
         for p in all_players:
             check_achievements_for_player(p, instance)
 
@@ -145,8 +135,8 @@ def update_elo_on_match_confirmation(sender, instance, created, **kwargs):
         update_player_elo(match)
 
         # Check achievements (after Elo is updated)
-        if match.is_confirmed and match.winner:
-            all_players = list(match.team1.players.all()) + list(match.team2.players.all())
+        if match.is_confirmed and match.winner_side:
+            all_players = list(match.all_players)
             for p in all_players:
                 check_achievements_for_player(p, match)
 

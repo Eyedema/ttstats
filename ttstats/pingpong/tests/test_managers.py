@@ -9,7 +9,6 @@ from .conftest import (
     MatchFactory,
     PlayerFactory,
     ScheduledMatchFactory,
-    TeamFactory,
     UserFactory,
 )
 
@@ -108,7 +107,7 @@ class TestMatchManager:
         not only their own -- the Exists(championship_qs) branch.
         """
         u, p = _user_with_player()
-        champ = ChampionshipFactory(with_participants=[TeamFactory(players=[p])])
+        champ = ChampionshipFactory(with_entries=[[p]])
 
         others = [PlayerFactory(with_user=True) for _ in range(2)]
         champ_match = MatchFactory(
@@ -270,7 +269,7 @@ class TestScheduledMatchManager:
 
     def test_championship_participant_sees_scheduled_matches_they_are_not_in(self):
         u, p = _user_with_player()
-        champ = ChampionshipFactory(with_participants=[TeamFactory(players=[p])])
+        champ = ChampionshipFactory(with_entries=[[p]])
 
         others = [PlayerFactory(with_user=True) for _ in range(2)]
         champ_sm = ScheduledMatchFactory(
@@ -320,7 +319,7 @@ class TestChampionshipManager:
     def test_regular_user_sees_private_championship_they_entered(self):
         u, p = _user_with_player()
         private = ChampionshipFactory(
-            is_public=False, with_participants=[TeamFactory(players=[p])]
+            is_public=False, with_participants=[[p]]
         )
 
         _set_current_user(u)
