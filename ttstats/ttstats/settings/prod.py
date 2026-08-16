@@ -50,14 +50,19 @@ MIDDLEWARE.insert(1, 'csp.middleware.CSPMiddleware')
 CSP_DEFAULT_SRC = ("'self'",)
 CSP_SCRIPT_SRC = (
     "'self'",
+    # Still needed: base.html and several page templates carry inline
+    # <script> blocks. B.5 moves the rules out of them; the directive can
+    # tighten once nothing inline remains.
     "'unsafe-inline'",
-    "https://cdn.tailwindcss.com",
+    # Alpine, Chart.js and Tom Select. B.3 vendors these, after which this
+    # host can go too. cdn.tailwindcss.com and unpkg.com are gone -- Tailwind
+    # is compiled now and nothing was ever loaded from unpkg.
     "https://cdn.jsdelivr.net",
-    "https://unpkg.com",
 )
 CSP_STYLE_SRC = (
     "'self'",
     "'unsafe-inline'",
+    # Tom Select's bootstrap5 stylesheet.
     "https://cdn.jsdelivr.net",
 )
 CSP_IMG_SRC = ("'self'", "data:")
