@@ -25,6 +25,8 @@ urlpatterns = [
     # Matches
     path("matches/", views.MatchListView.as_view(), name="match_list"),
     path("matches/add/", views.MatchCreateView.as_view(), name="match_add"),
+    # htmx: live validation of the match form, saving nothing.
+    path("matches/validate/", views.MatchValidateView.as_view(), name="match_validate"),
     path("matches/<int:pk>/", views.MatchDetailView.as_view(), name="match_detail"),
     path("matches/<int:pk>/edit/", views.MatchUpdateView.as_view(), name="match_edit"),
     path(

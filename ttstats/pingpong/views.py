@@ -2046,6 +2046,36 @@ class ChampionshipDetailView(LoginRequiredMixin, DetailView):
         return context
 
 
+class MatchValidateView(LoginRequiredMixin, View):
+    """Validate a partially-filled match form without saving anything.
+
+    match_form.html used to re-implement MatchForm.clean() in JavaScript:
+    it rebuilt every player dropdown on each change to remove already-picked
+    players, and toggled `required` on player3/player4 by hand. Two copies of
+    the same rules, and only the Python one actually decides whether a match
+    can be created.
+    """
+
+    def post(self, request, *args, **kwargs):
+        form = MatchForm(request.POST)
+        form.is_valid()
+
+        # Drop only Django's own "this field is required" errors: the user is
+        # still filling the form in, and nagging about fields they have not
+        # reached yet is noise. Match on the error *code*, not the message --
+        # "Four players are required for a doubles match!" is a rule
+        # violation that happens to contain the word "required".
+        errors = [
+            error.message % (error.params or {}) if error.params else error.message
+            for field_errors in form.errors.as_data().values()
+            for error in field_errors
+            if error.code != "required"
+        ]
+        return render(
+            request, "pingpong/_form_errors.html", {"errors": errors}
+        )
+
+
 class ChampionshipParticipantsFragmentView(LoginRequiredMixin, TemplateView):
     """The participant picker, re-rendered for a given championship type.
 

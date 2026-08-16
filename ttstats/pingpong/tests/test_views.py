@@ -527,6 +527,66 @@ class TestLeaderboardHtmxFragment:
         assert b"Aurelio Ranked" not in resp.content
 
 
+@pytest.mark.django_db
+class TestMatchValidateView:
+    """Live validation, replacing the JS copy of MatchForm.clean().
+
+    match_form.html used to rebuild every player dropdown on each change to
+    remove already-picked players, and toggle `required` on player3/player4
+    by hand -- two statements of rules that only Python actually enforces.
+    """
+
+    def _post(self, data):
+        staff, p = _staff_with_player()
+        other = PlayerFactory(with_user=True)
+        payload = {"player1": p.pk, "player2": other.pk}
+        payload.update({k: (p.pk if v == "SELF" else v) for k, v in data.items()})
+        resp = _login_client(staff).post(reverse("pingpong:match_validate"), payload)
+        assert resp.status_code == 200
+        return resp.content.decode()
+
+    def test_reports_duplicate_players(self):
+        body = self._post({"player2": "SELF", "is_double": "False"})
+        assert "All players must be different!" in body
+
+    def test_reports_incomplete_doubles(self):
+        """The rule the JS expressed by toggling `required` attributes."""
+        body = self._post({"is_double": "True"})
+        assert "Four players are required for a doubles match!" in body
+
+    def test_silent_on_a_valid_partial_form(self):
+        body = self._post(
+            {
+                "is_double": "False",
+                "date_played": "2026-02-02T10:00",
+                "match_type": "casual",
+                "best_of": "5",
+            }
+        )
+        assert 'role="alert"' not in body
+
+    def test_does_not_nag_about_unfilled_fields(self):
+        """An empty form is not yet wrong, just unfinished.
+
+        Filtering has to key on Django's `required` error *code*: the message
+        for incomplete doubles also contains the word "required".
+        """
+        staff, _ = _staff_with_player()
+        resp = _login_client(staff).post(reverse("pingpong:match_validate"), {})
+        assert resp.status_code == 200
+        assert 'role="alert"' not in resp.content.decode()
+
+    def test_saves_nothing(self):
+        before = Match.all_objects.count()
+        self._post({"is_double": "False", "date_played": "2026-02-02T10:00",
+                    "match_type": "casual", "best_of": "5"})
+        assert Match.all_objects.count() == before
+
+    def test_requires_login(self):
+        resp = Client().post(reverse("pingpong:match_validate"), {})
+        assert resp.status_code == 302
+
+
 # ===========================================================================
 # MatchCreateView
 # ===========================================================================

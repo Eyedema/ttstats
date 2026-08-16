@@ -260,8 +260,15 @@
 
 
             <!-- Form -->
-            <form method="post" class="space-y-6">
+            <form method="post" class="space-y-6"
+                  hx-post="{% url 'pingpong:match_validate' %}"
+                  hx-trigger="change"
+                  hx-target="#form-errors"
+                  hx-swap="outerHTML">
                 {% csrf_token %}
+
+                {# Live validation feedback, from MatchForm.clean() itself. #}
+                {% include 'pingpong/_form_errors.html' %}
                 {% if not is_complete %}
                 <!-- Match type section -->
                 {% include 'pingpong/_field.html' with field=form.is_double label="Single/Double match" %}
@@ -452,164 +459,51 @@
 <script src="{% static 'pingpong/js/vendor/tom-select.complete.min.js' %}"></script>
 
 <script>
-    document.addEventListener('DOMContentLoaded', function() {
+    // Presentation only. Every rule about who may play whom lives in
+    // MatchForm.clean(); the server reports on it through the hx-post above.
+    document.addEventListener('DOMContentLoaded', function () {
         const isDoubleSelect = document.getElementById('id_is_double');
         const singlesFields = document.querySelectorAll('.singles-only');
         const doublesFields = document.querySelectorAll('.doubles-only');
         const doublesRequired = document.querySelectorAll('.doubles-required');
-        const player3Select = document.getElementById('id_player3');
-        const player4Select = document.getElementById('id_player4');
 
-        // Store all available players (get from first select)
-        const allPlayers = [];
-        const firstSelect = document.getElementById('id_player1');
-        if (firstSelect) {
-            Array.from(firstSelect.querySelectorAll('option')).forEach(option => {
-                if (option.value) {  // Skip empty option
-                    allPlayers.push({
-                        value: option.value,
-                        text: option.textContent.trim()
-                    });
+        // Tom Select is a widget enhancement -- search and keyboard support
+        // over the same <select> Django rendered. It no longer rewrites the
+        // option lists to enforce distinct players.
+        document.querySelectorAll('.player-select').forEach(function (select) {
+            if (select.disabled) return;
+            new TomSelect(select, {
+                placeholder: select.querySelector('option[value=""]')?.textContent
+                    || 'Select a player...',
+                maxOptions: null,
+                searchField: ['text'],
+                sortField: { field: 'text', direction: 'asc' },
+                render: {
+                    no_results: function (data, escape) {
+                        return '<div class="no-results">No players found matching "'
+                            + escape(data.input) + '"</div>';
+                    }
+                },
+                onChange: function () {
+                    // Let the form's hx-trigger see it, so the server
+                    // re-validates. Tom Select hides the real <select>, so
+                    // its own change event does not bubble on its own.
+                    select.dispatchEvent(new Event('change', { bubbles: true }));
                 }
             });
-        }
-
-        // Initialize Tom Select on all player select fields
-        const playerSelects = {};
-        const playerSelectElements = document.querySelectorAll('.player-select');
-
-        playerSelectElements.forEach(select => {
-            if (!select.disabled) {
-                const selectId = select.id;
-
-                playerSelects[selectId] = new TomSelect(select, {
-                    placeholder: select.querySelector('option[value=""]')?.textContent || 'Select a player...',
-                    maxOptions: null,
-                    searchField: ['text'],
-                    sortField: {
-                        field: 'text',
-                        direction: 'asc'
-                    },
-                    render: {
-                        no_results: function(data, escape) {
-                            return '<div class="no-results">No players found matching "' + escape(data.input) + '"</div>';
-                        }
-                    },
-                    onChange: function(value) {
-                        // Update all other dropdowns when this one changes
-                        updatePlayerOptions();
-                    }
-                });
-            }
         });
-
-        // Function to update available options in all dropdowns
-        function updatePlayerOptions() {
-            // Get currently selected players
-            const selectedPlayers = {
-                player1: playerSelects['id_player1']?.getValue() || '',
-                player2: playerSelects['id_player2']?.getValue() || '',
-                player3: playerSelects['id_player3']?.getValue() || '',
-                player4: playerSelects['id_player4']?.getValue() || ''
-            };
-
-            // Update each dropdown
-            Object.keys(playerSelects).forEach(selectId => {
-                const tomSelect = playerSelects[selectId];
-                if (!tomSelect) return;
-
-                // Get current value to preserve it
-                const currentValue = tomSelect.getValue();
-
-                // Determine which players to exclude (all selected except this dropdown's value)
-                const excludeValues = Object.entries(selectedPlayers)
-                    .filter(([key, value]) => {
-                        // Don't exclude if it's this dropdown or if value is empty
-                        return key !== selectId.replace('id_', '') && value !== '';
-                    })
-                    .map(([key, value]) => value);
-
-                // Clear and rebuild options
-                tomSelect.clearOptions();
-
-                // Add all players that aren't selected elsewhere
-                allPlayers.forEach(player => {
-                    if (!excludeValues.includes(player.value)) {
-                        tomSelect.addOption({
-                            value: player.value,
-                            text: player.text
-                        });
-                    }
-                });
-
-                // Restore the current value if it's still valid
-                if (currentValue && !excludeValues.includes(currentValue)) {
-                    tomSelect.setValue(currentValue, true);  // true = silent (no onChange trigger)
-                } else if (currentValue && excludeValues.includes(currentValue)) {
-                    // If current value is now excluded, clear it
-                    tomSelect.clear(true);
-                }
-
-                // Refresh the dropdown
-                tomSelect.refreshOptions(false);
-            });
-        }
 
         function toggleDoublesMode() {
             const isDouble = isDoubleSelect.value === 'True';
-
-            singlesFields.forEach(field => {
-                if (!isDouble) {
-                    field.classList.remove('hidden');
-                } else {
-                    field.classList.add('hidden');
-                }
-            });
-
-            doublesFields.forEach(field => {
-                if (isDouble) {
-                    field.classList.remove('hidden');
-                } else {
-                    field.classList.add('hidden');
-                }
-            });
-
-            doublesRequired.forEach(req => {
-                if (isDouble) {
-                    req.classList.remove('hidden');
-                } else {
-                    req.classList.add('hidden');
-                }
-            });
-
-            // Toggle required attribute
-            if (player3Select) {
-                player3Select.required = isDouble;
-                if (!isDouble && playerSelects['id_player3']) {
-                    playerSelects['id_player3'].clear();
-                }
-            }
-            if (player4Select) {
-                player4Select.required = isDouble;
-                if (!isDouble && playerSelects['id_player4']) {
-                    playerSelects['id_player4'].clear();
-                }
-            }
-
-            // Update options after toggling mode
-            updatePlayerOptions();
+            singlesFields.forEach(f => f.classList.toggle('hidden', isDouble));
+            doublesFields.forEach(f => f.classList.toggle('hidden', !isDouble));
+            doublesRequired.forEach(r => r.classList.toggle('hidden', !isDouble));
         }
 
         if (isDoubleSelect) {
             isDoubleSelect.addEventListener('change', toggleDoublesMode);
-
             toggleDoublesMode();
         }
-
-        // Initial update to filter options based on pre-selected values (for edit mode)
-        setTimeout(() => {
-            updatePlayerOptions();
-        }, 100);
     });
 </script>
 
