@@ -323,3 +323,67 @@ class TestFormsShowEveryError:
         assert "too short" in body
         assert "too common" in body
         assert "entirely numeric" in body
+
+
+@pytest.mark.django_db
+class TestPagesSurviveADeletedPlayer:
+    """MatchParticipant.player cascades on delete.
+
+    So removing a player strips their participant rows and leaves their old
+    matches with an empty side. Templates then asked for
+    {% url 'player_detail' <empty> %}, which raises NoReverseMatch -- a 500
+    on the match list for every user, permanently, caused by an ordinary
+    admin deletion. Reproduced live before fixing.
+    """
+
+    def _match_then_delete_one_player(self):
+        keeper = _player("Aurelio Keeper", username="keeper")
+        doomed = _player("Bartholomew Doomed", username="doomed")
+        client = _login(keeper.user)
+
+        client.post(
+            reverse("pingpong:match_add"),
+            {
+                "player1": keeper.pk,
+                "player2": doomed.pk,
+                "is_double": "False",
+                "date_played": "2026-02-02T14:30",
+                "match_type": "casual",
+                "best_of": "5",
+                "notes": "",
+            },
+        )
+        match = Match.all_objects.latest("id")
+        for number, (a, b) in enumerate([(11, 5), (11, 7), (11, 9)], start=1):
+            client.post(
+                reverse("pingpong:game_add", kwargs={"match_pk": match.pk}),
+                {"game_number": number, "team1_score": a, "team2_score": b},
+            )
+
+        doomed.delete()
+        match.refresh_from_db()
+        assert list(match.side2_players) == [], "cascade should empty the side"
+        return client, match
+
+    def test_match_list_still_renders(self):
+        client, _ = self._match_then_delete_one_player()
+        resp = client.get(reverse("pingpong:match_list"))
+        assert resp.status_code == 200
+
+    def test_match_detail_still_renders(self):
+        client, match = self._match_then_delete_one_player()
+        resp = client.get(reverse("pingpong:match_detail", args=[match.pk]))
+        assert resp.status_code == 200
+
+    def test_player_detail_still_renders(self):
+        client, _ = self._match_then_delete_one_player()
+        keeper = Player.objects.get(name="Aurelio Keeper")
+        resp = client.get(reverse("pingpong:player_detail", args=[keeper.pk]))
+        assert resp.status_code == 200
+
+    def test_the_surviving_player_is_still_linked(self):
+        """Degrading must not cost the players who are still there."""
+        client, _ = self._match_then_delete_one_player()
+        keeper = Player.objects.get(name="Aurelio Keeper")
+        body = client.get(reverse("pingpong:match_list")).content.decode()
+        assert reverse("pingpong:player_detail", args=[keeper.pk]) in body

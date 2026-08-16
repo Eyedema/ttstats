@@ -1,5 +1,6 @@
 {% extends "pingpong/base.html" %}
 {% load static %}
+{% load player_tags %}
 
 {% block title %}{% if match.is_double %}{{ match.side1_label }} vs {{ match.side2_label }}{% else %}{{ match.side1_label }} vs {{ match.side2_label }}{% endif %} - Table Tennis Tracker{% endblock %}
 
@@ -155,9 +156,7 @@
                     <h3 class="text-lg font-bold mb-2">{{ match.side1_label }}</h3>
                     <div class="space-y-1">
                         {% for player in match.side1_players %}
-                        <a href="{% url 'pingpong:player_detail' player.pk %}" class="block text-sm hover:underline">
-                            {{ player.name }}
-                        </a>
+                        {% player_link player css="block text-sm hover:underline" label=player.name %}
                         {% endfor %}
                     </div>
                 </div>
@@ -177,9 +176,7 @@
                     <h3 class="text-lg font-bold mb-2">{{ match.side2_label }}</h3>
                     <div class="space-y-1">
                         {% for player in match.side2_players %}
-                        <a href="{% url 'pingpong:player_detail' player.pk %}" class="block text-sm hover:underline">
-                            {{ player.name }}
-                        </a>
+                        {% player_link player css="block text-sm hover:underline" label=player.name %}
                         {% endfor %}
                     </div>
                 </div>
@@ -211,9 +208,7 @@
                         {{ match.side1_players.0.name|slice:":1"|upper }}
                     </div>
                     <div>
-                        <a href="{% url 'pingpong:player_detail' match.side1_players.0.pk %}" class="font-semibold hover:underline">
-                            {{ match.side1_label }}
-                        </a>
+                        {% player_link match.side1_players.0 css="font-semibold hover:underline" label=match.side1_label %}
                         {% if match.winner_side == 1 %}
                         <div class="flex items-center gap-1 text-xs text-success">
                             <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-3 h-3" alt="">
@@ -255,9 +250,7 @@
                         {{ match.side2_players.0.name|slice:":1"|upper }}
                     </div>
                     <div>
-                        <a href="{% url 'pingpong:player_detail' match.side2_players.0.pk %}" class="font-semibold hover:underline">
-                            {{ match.side2_label }}
-                        </a>
+                        {% player_link match.side2_players.0 css="font-semibold hover:underline" label=match.side2_label %}
                         {% if match.winner_side == 2 %}
                         <div class="flex items-center gap-1 text-xs text-success">
                             <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-3 h-3" alt="">
@@ -288,9 +281,7 @@
                         <div class="font-bold mb-1">{{ match.side1_label }}</div>
                         <div class="space-y-0.5">
                             {% for player in match.side1_players %}
-                            <a href="{% url 'pingpong:player_detail' player.pk %}" class="block text-sm hover:underline">
-                                {{ player.name }}
-                            </a>
+                            {% player_link player css="block text-sm hover:underline" label=player.name %}
                             {% endfor %}
                         </div>
                         {% if match.winner_side == 1 %}
@@ -313,9 +304,7 @@
                         <div class="font-bold mb-1">{{ match.side2_label }}</div>
                         <div class="space-y-0.5">
                             {% for player in match.side2_players %}
-                            <a href="{% url 'pingpong:player_detail' player.pk %}" class="block text-sm hover:underline">
-                                {{ player.name }}
-                            </a>
+                            {% player_link player css="block text-sm hover:underline" label=player.name %}
                             {% endfor %}
                         </div>
                         {% if match.winner_side == 2 %}
@@ -339,9 +328,7 @@
                             {{ match.side1_players.0.name|slice:":1"|upper }}
                         </div>
                         <div>
-                            <a href="{% url 'pingpong:player_detail' match.side1_players.0.pk %}" class="font-semibold hover:underline">
-                                {{ match.side1_label }}
-                            </a>
+                            {% player_link match.side1_players.0 css="font-semibold hover:underline" label=match.side1_label %}
                             {% if match.winner_side == 1 %}
                             <div class="flex items-center gap-1 text-xs text-success font-bold">
                                 <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-3 h-3" alt="">
@@ -387,9 +374,7 @@
                             {{ match.side2_players.0.name|slice:":1"|upper }}
                         </div>
                         <div>
-                            <a href="{% url 'pingpong:player_detail' match.side2_players.0.pk %}" class="font-semibold hover:underline">
-                                {{ match.side2_label }}
-                            </a>
+                            {% player_link match.side2_players.0 css="font-semibold hover:underline" label=match.side2_label %}
                             {% if match.winner_side == 2 %}
                             <div class="flex items-center gap-1 text-xs text-success font-bold">
                                 <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-3 h-3" alt="">

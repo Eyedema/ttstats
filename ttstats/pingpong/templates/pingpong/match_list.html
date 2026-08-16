@@ -1,5 +1,6 @@
 {% extends "pingpong/base.html" %}
 {% load static %}
+{% load player_tags %}
 
 {% block title %}Matches - Table Tennis Tracker{% endblock %}
 
@@ -128,18 +129,14 @@
                             {% else %}
                             <div class="space-y-1">
                                 <div class="flex items-center gap-2">
-                                    <a href="{% url 'pingpong:player_detail' match.cached_player1.pk %}" class="text-sm font-medium hover:underline">
-                                        {{ match.cached_player1 }}
-                                    </a>
+                                    {% player_link match.cached_player1 css="text-sm font-medium hover:underline" %}
                                     {% if match.winner_side == 1 %}
                                     <img src="{% static 'pingpong/icons/check.svg' %}" class="w-4 h-4 text-success" alt="">
                                     {% endif %}
                                 </div>
                                 <div class="text-xs text-muted-foreground">vs</div>
                                 <div class="flex items-center gap-2">
-                                    <a href="{% url 'pingpong:player_detail' match.cached_player2.pk %}" class="text-sm font-medium hover:underline">
-                                        {{ match.cached_player2 }}
-                                    </a>
+                                    {% player_link match.cached_player2 css="text-sm font-medium hover:underline" %}
                                     {% if match.winner_side == 2 %}
                                     <img src="{% static 'pingpong/icons/check.svg' %}" class="w-4 h-4 text-success" alt="">
                                     {% endif %}
@@ -175,9 +172,7 @@
                                 {% if match.is_double %}
                                     <span class="text-sm font-medium">{{ match.cached_winner_label }}</span>
                                 {% else %}
-                                    <a href="{% url 'pingpong:player_detail' match.cached_winner_players.0.pk %}" class="text-sm font-medium hover:underline">
-                                        {{ match.cached_winner_label }}
-                                    </a>
+                                    {% player_link match.cached_winner_players.0 css="text-sm font-medium hover:underline" label=match.cached_winner_label %}
                                 {% endif %}
                             </div>
                             {% else %}
@@ -320,23 +315,27 @@
                 {% else %}
                 <div class="space-y-2 mb-3">
                     <div class="flex items-center justify-between">
-                        <a href="{% url 'pingpong:player_detail' match.cached_player1.pk %}" class="font-medium text-sm hover:underline flex items-center gap-2 {% if match.winner_side != 1 %}text-muted-foreground{% endif %}">
-                            {{ match.cached_player1 }}
+                        <div class="flex items-center gap-2">
                             {% if match.winner_side == 1 %}
+                            {% player_link match.cached_player1 css="font-medium text-sm hover:underline" %}
                             <img src="{% static 'pingpong/icons/check.svg' %}" class="w-4 h-4 text-success" alt="Winner">
+                            {% else %}
+                            {% player_link match.cached_player1 css="font-medium text-sm hover:underline text-muted-foreground" %}
                             {% endif %}
-                        </a>
+                        </div>
                         <span class="inline-flex items-center justify-center rounded-md px-3 py-1 text-base font-bold min-w-[44px] {% if match.winner_side == 1 %}bg-success/10 text-success{% else %}bg-muted{% endif %}">
                             {{ match.cached_team1_score }}
                         </span>
                     </div>
                     <div class="flex items-center justify-between">
-                        <a href="{% url 'pingpong:player_detail' match.cached_player2.pk %}" class="font-medium text-sm hover:underline flex items-center gap-2 {% if match.winner_side != 2 %}text-muted-foreground{% endif %}">
-                            {{ match.cached_player2 }}
+                        <div class="flex items-center gap-2">
                             {% if match.winner_side == 2 %}
+                            {% player_link match.cached_player2 css="font-medium text-sm hover:underline" %}
                             <img src="{% static 'pingpong/icons/check.svg' %}" class="w-4 h-4 text-success" alt="Winner">
+                            {% else %}
+                            {% player_link match.cached_player2 css="font-medium text-sm hover:underline text-muted-foreground" %}
                             {% endif %}
-                        </a>
+                        </div>
                         <span class="inline-flex items-center justify-center rounded-md px-3 py-1 text-base font-bold min-w-[44px] {% if match.winner_side == 2 %}bg-success/10 text-success{% else %}bg-muted{% endif %}">
                             {{ match.cached_team2_score }}
                         </span>

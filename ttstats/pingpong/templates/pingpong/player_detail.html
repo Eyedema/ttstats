@@ -1,5 +1,6 @@
 {% extends "pingpong/base.html" %}
 {% load static %}
+{% load player_tags %}
 
 {% block title %}{{ player }} - Table Tennis Tracker{% endblock %}
 
@@ -348,14 +349,14 @@
                                     <span class="font-medium">vs {{ match.side2_label }}</span>
                                     <div class="text-xs text-muted-foreground mt-1">
                                         {% for opponent in match.side2_players %}
-                                            <a href="{% url 'pingpong:player_detail' opponent.pk %}" class="hover:underline">{{ opponent.name }}</a>{% if not forloop.last %}, {% endif %}
+                                            {% player_link opponent css="hover:underline" label=opponent.name %}{% if not forloop.last %}, {% endif %}
                                         {% endfor %}
                                     </div>
                                     <div class="text-xs text-muted-foreground mt-1">
                                         Partner:
                                         {% for teammate in match.side1_players %}
                                             {% if teammate != player %}
-                                                <a href="{% url 'pingpong:player_detail' teammate.pk %}" class="hover:underline">{{ teammate.name }}</a>
+                                                {% player_link teammate css="hover:underline" label=teammate.name %}
                                             {% endif %}
                                         {% endfor %}
                                     </div>
@@ -365,14 +366,14 @@
                                     <span class="font-medium">vs {{ match.side1_label }}</span>
                                     <div class="text-xs text-muted-foreground mt-1">
                                         {% for opponent in match.side1_players %}
-                                            <a href="{% url 'pingpong:player_detail' opponent.pk %}" class="hover:underline">{{ opponent.name }}</a>{% if not forloop.last %}, {% endif %}
+                                            {% player_link opponent css="hover:underline" label=opponent.name %}{% if not forloop.last %}, {% endif %}
                                         {% endfor %}
                                     </div>
                                     <div class="text-xs text-muted-foreground mt-1">
                                         Partner:
                                         {% for teammate in match.side2_players %}
                                             {% if teammate != player %}
-                                                <a href="{% url 'pingpong:player_detail' teammate.pk %}" class="hover:underline">{{ teammate.name }}</a>
+                                                {% player_link teammate css="hover:underline" label=teammate.name %}
                                             {% endif %}
                                         {% endfor %}
                                     </div>
@@ -382,9 +383,9 @@
                             <div class="flex items-center gap-2 text-sm">
                                 <span class="font-medium">vs</span>
                                 {% if match.player1 == player %}
-                                <a href="{% url 'pingpong:player_detail' match.side2_players.0.pk %}" class="font-medium hover:underline">{{ match.side2_label }}</a>
+                                {% player_link match.side2_players.0 css="font-medium hover:underline" label=match.side2_label %}
                                 {% else %}
-                                <a href="{% url 'pingpong:player_detail' match.side1_players.0.pk %}" class="font-medium hover:underline">{{ match.side1_label }}</a>
+                                {% player_link match.side1_players.0 css="font-medium hover:underline" label=match.side1_label %}
                                 {% endif %}
                             </div>
                             {% endif %}
@@ -513,9 +514,9 @@
                     <div>
                         <div class="text-xs text-muted-foreground mb-1">vs</div>
                         {% if match.player1 == player %}
-                        <a href="{% url 'pingpong:player_detail' match.side2_players.0.pk %}" class="font-semibold hover:underline">{{ match.side2_label }}</a>
+                        {% player_link match.side2_players.0 css="font-semibold hover:underline" label=match.side2_label %}
                         {% else %}
-                        <a href="{% url 'pingpong:player_detail' match.side1_players.0.pk %}" class="font-semibold hover:underline">{{ match.side1_label }}</a>
+                        {% player_link match.side1_players.0 css="font-semibold hover:underline" label=match.side1_label %}
                         {% endif %}
                     </div>
                     {% endif %}
