@@ -426,6 +426,13 @@ class Game(models.Model):
     def __str__(self):
         return f"Game {self.game_number}: {self.team1_score}-{self.team2_score}"
 
+    @property
+    def winner_label(self):
+        """Name of the side that won this game, resolved via the parent match."""
+        if not self.winner_side:
+            return ""
+        return self.match.side_label(self.winner_side)
+
     def save(self, *args, **kwargs):
         # Auto-determine which side won this game
         if self.team1_score > self.team2_score:

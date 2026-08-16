@@ -309,6 +309,81 @@ class TestMatchDetailWinnerDisplay:
         assert resp.content.decode().count("WINNER") == 0
 
 
+@pytest.mark.django_db
+class TestTemplatesRenderParticipantNames:
+    """Templates that still dereferenced the removed Team fields.
+
+    Django resolves a missing attribute to the empty string instead of
+    raising, so these rendered blank and the whole suite stayed green.
+    Worse, `game.winner == match.team1` became `'' == ''` -- always true --
+    so every game was highlighted as a side-1 win, including the ones side 2
+    won. Assertions here are on the exact fragments that were empty.
+    """
+
+    def _match_with_split_games(self):
+        """Side 2 wins game 1; side 1 wins games 2 and 3."""
+        u = UserFactory()
+        p = PlayerFactory(user=u, name="Aurelio Home")
+        u.profile.email_verified = True
+        u.profile.save()
+        other = PlayerFactory(with_user=True, name="Bartholomew Away")
+        m = MatchFactory(player1=p, player2=other, best_of=5)
+        GameFactory(match=m, game_number=1, team1_score=5, team2_score=11)
+        GameFactory(match=m, game_number=2, team1_score=11, team2_score=5)
+        GameFactory(match=m, game_number=3, team1_score=11, team2_score=7)
+        m.refresh_from_db()
+        return u, m
+
+    def test_each_game_names_the_side_that_actually_won_it(self):
+        u, m = self._match_with_split_games()
+        assert [g.winner_side for g in m.games.order_by("game_number")] == [2, 1, 1]
+
+        body = _login_client(u).get(
+            reverse("pingpong:match_detail", args=[m.pk])
+        ).content.decode()
+
+        # Game 1 went to side 2; games 2 and 3 to side 1. Before the fix every
+        # per-game winner slot rendered a placeholder dash instead of a name.
+        assert '<span class="font-medium">Bartholomew Away</span>' in body
+        assert '<span class="font-medium">Aurelio Home</span>' in body
+
+    def test_scheduled_match_detail_title_names_both_sides(self):
+        u = UserFactory()
+        p = PlayerFactory(user=u, name="Aurelio Home")
+        u.profile.email_verified = True
+        u.profile.save()
+        other = PlayerFactory(with_user=True, name="Bartholomew Away")
+        sm = ScheduledMatchFactory(player1=p, player2=other)
+
+        body = _login_client(u).get(
+            reverse("pingpong:scheduled_match_detail", args=[sm.pk])
+        ).content.decode()
+
+        # Rendered as "<title> vs  - Scheduled Match</title>" before the fix.
+        assert "<title>Aurelio Home vs Bartholomew Away - Scheduled Match</title>" in body
+        assert "<title> vs " not in body
+
+    def test_scheduled_match_convert_title_names_both_sides(self):
+        u = UserFactory()
+        p = PlayerFactory(user=u, name="Aurelio Home")
+        u.profile.email_verified = True
+        u.profile.save()
+        other = PlayerFactory(with_user=True, name="Bartholomew Away")
+        sm = ScheduledMatchFactory(player1=p, player2=other)
+
+        body = _login_client(u).get(
+            reverse(
+                "pingpong:scheduled_match_convert",
+                kwargs={"scheduled_match_pk": sm.pk},
+            )
+        ).content.decode()
+
+        assert (
+            "<title>Record Match Results - Aurelio Home vs Bartholomew Away</title>"
+            in body
+        )
+
+
 # ===========================================================================
 # MatchCreateView
 # ===========================================================================
