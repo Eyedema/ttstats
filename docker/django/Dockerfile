@@ -8,15 +8,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Install system dependencies for building Python packages
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy and install Python dependencies
+# No compiler here on purpose. Every pinned dependency ships a manylinux wheel
+# (psycopg2-binary, cryptography, cffi included), so build-essential and
+# libpq-dev bought nothing but ~6 minutes of apt and a memory spike big enough
+# to OOM the 3.7GB VPS this used to build on.
+#
+# --only-binary=:all: keeps it that way: adding a package that needs compiling
+# fails here, loudly, instead of silently reintroducing the toolchain.
 COPY requirements.txt .
-RUN pip install --user --no-warn-script-location -r requirements.txt
+RUN pip install --user --no-warn-script-location --only-binary=:all: -r requirements.txt
 
 # Asset stage: compile Tailwind. Kept separate from the Python builder so a
 # template-only change does not reinstall pip packages, and vice versa.

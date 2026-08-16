@@ -20,6 +20,13 @@ services:
       - pingpong_network
 
   web:
+    # CI builds this and pushes it to GHCR; the deploy pulls it. The VPS has
+    # 3.7GB of RAM and building here used to reach the OOM killer. WEB_IMAGE is
+    # pinned to a commit SHA by the deploy job -- the :latest default is only
+    # for running compose by hand on the box.
+    image: ${WEB_IMAGE:-ghcr.io/eyedema/ttstats-web:latest}
+    # Retained so `docker compose build` still works locally; normal deploys
+    # never reach it, because they pull first.
     build:
       context: .
       dockerfile: docker/django/Dockerfile
