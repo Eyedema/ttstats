@@ -472,3 +472,55 @@ class TestChampionshipMatchLifecycle:
 
         champ.refresh_from_db()
         assert champ.status == Championship.Status.IN_PROGRESS
+
+
+@pytest.mark.django_db
+class TestChampionshipParticipantsFragment:
+    """The participant picker, swapped in by htmx on a type change.
+
+    Before this the page rebuilt its own URL and reloaded, throwing away
+    everything already entered in the form.
+    """
+
+    def _get(self, **params):
+        player = _player_with_verified_user()
+        PlayerFactory(with_user=True)
+        client = _auth_client(player.user)
+        return client.get(
+            reverse("pingpong:championship_participants_fragment"), params
+        )
+
+    def test_singles_offers_the_players(self):
+        resp = self._get(championship_type=Championship.ChampionshipType.SINGLES)
+        assert resp.status_code == 200
+        assert resp.content.decode().count('type="checkbox"') == 2
+
+    def test_doubles_offers_none(self):
+        """Doubles entries are formed by registering with a partner, so there
+        is nothing to pre-select."""
+        resp = self._get(championship_type=Championship.ChampionshipType.DOUBLES)
+        assert resp.status_code == 200
+        assert 'type="checkbox"' not in resp.content.decode()
+
+    def test_public_championships_keep_the_block_hidden(self):
+        """is_public rides along via hx-include so the swap preserves the
+        current visibility instead of resetting it."""
+        resp = self._get(
+            championship_type=Championship.ChampionshipType.SINGLES, is_public="on"
+        )
+        assert "display: none" in resp.content.decode()
+
+    def test_requires_login(self):
+        resp = Client().get(
+            reverse("pingpong:championship_participants_fragment")
+        )
+        assert resp.status_code == 302
+
+    def test_create_page_renders_the_section_exactly_once(self):
+        """First paint includes the same partial the fragment view returns,
+        so the markup exists in one place."""
+        player = _player_with_verified_user()
+        body = _auth_client(player.user).get(
+            reverse("pingpong:championship_create")
+        ).content.decode()
+        assert body.count('id="private-participants-section"') == 1

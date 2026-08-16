@@ -2034,6 +2034,29 @@ class ChampionshipDetailView(LoginRequiredMixin, DetailView):
         return context
 
 
+class ChampionshipParticipantsFragmentView(LoginRequiredMixin, TemplateView):
+    """The participant picker, re-rendered for a given championship type.
+
+    The create form used to respond to a type change by rewriting the URL and
+    reloading the whole page, discarding anything already typed in. htmx
+    swaps just this fragment instead.
+    """
+
+    template_name = "pingpong/_championship_participants.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        championship_type = self.request.GET.get(
+            "championship_type", Championship.ChampionshipType.SINGLES
+        )
+        context["form"] = ChampionshipCreateForm(championship_type=championship_type)
+        # Private championships are the ones that pick participants up front;
+        # is_public arrives via hx-include so the swap keeps the current
+        # visibility rather than resetting it.
+        context["show_participants"] = self.request.GET.get("is_public") != "on"
+        return context
+
+
 class ChampionshipCreateView(LoginRequiredMixin, CreateView):
     """View to create a new championship"""
 

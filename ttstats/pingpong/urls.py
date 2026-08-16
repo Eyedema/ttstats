@@ -51,6 +51,12 @@ urlpatterns = [
 
     path('championships/', views.ChampionshipListView.as_view(), name='championship_list'),
     path('championships/create/', views.ChampionshipCreateView.as_view(), name='championship_create'),
+    # htmx fragment: the participant picker, re-rendered when the type changes.
+    path(
+        'championships/participants-fragment/',
+        views.ChampionshipParticipantsFragmentView.as_view(),
+        name='championship_participants_fragment',
+    ),
     path('championships/<int:pk>/', views.ChampionshipDetailView.as_view(), name='championship_detail'),
     path('championships/<int:pk>/edit/', views.ChampionshipEditView.as_view(), name='championship_edit'),
     path('championships/<int:pk>/register/', views.ChampionshipRegisterView.as_view(), name='championship_register'),

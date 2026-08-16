@@ -88,7 +88,13 @@
                         <label class="text-sm font-medium leading-none" for="id_championship_type">
                             Championship Type <span class="text-destructive">*</span>
                         </label>
-                        {{ form.championship_type }}
+                        <div hx-get="{% url 'pingpong:championship_participants_fragment' %}"
+                             hx-trigger="change from:#id_championship_type"
+                             hx-target="#private-participants-section"
+                             hx-swap="outerHTML"
+                             hx-include="#id_championship_type, #id_is_public">
+                            {{ form.championship_type }}
+                        </div>
                         {% if form.championship_type.errors %}
                         <p class="text-sm text-destructive">{{ form.championship_type.errors.0 }}</p>
                         {% endif %}
@@ -184,30 +190,7 @@
                 {% endif %}
 
                 {% if not object and form.private_participants %}
-                <!-- Private Participants (only for private championships) -->
-                <div class="border-t pt-6" id="private-participants-section" style="display: none;">
-                    <h3 class="text-base md:text-lg font-semibold mb-4">Select Participants</h3>
-                    <div class="space-y-2">
-                        <label class="text-sm font-medium leading-none">
-                            Participants <span class="text-destructive">*</span>
-                        </label>
-                        <div class="max-h-64 overflow-y-auto border rounded-md p-3 space-y-2">
-                            {% for choice in form.private_participants %}
-                            <div class="flex items-center gap-2">
-                                {{ choice.tag }}
-                                <label for="{{ choice.id_for_label }}" class="text-sm cursor-pointer">
-                                    {{ choice.choice_label }}
-                                </label>
-                            </div>
-                            {% endfor %}
-                        </div>
-                        {% if form.private_participants.errors %}
-                        <p class="text-sm text-destructive">{{ form.private_participants.errors.0 }}</p>
-                        {% else %}
-                        <p class="text-sm text-muted-foreground">Select teams/players for this private championship</p>
-                        {% endif %}
-                    </div>
-                </div>
+                {% include 'pingpong/_championship_participants.html' %}
                 {% endif %}
 
                 <!-- Form Actions -->
@@ -256,32 +239,28 @@
     document.addEventListener('DOMContentLoaded', function() {
         const isPublicCheckbox = document.getElementById('id_is_public');
         const registrationDeadlineField = document.getElementById('registration-deadline-field');
-        const privateParticipantsSection = document.getElementById('private-participants-section');
-        const championshipTypeSelect = document.getElementById('id_championship_type');
 
-        if (isPublicCheckbox && registrationDeadlineField && privateParticipantsSection) {
-            function toggleFields() {
-                if (isPublicCheckbox.checked) {
-                    registrationDeadlineField.style.display = 'block';
-                    privateParticipantsSection.style.display = 'none';
-                } else {
-                    registrationDeadlineField.style.display = 'none';
-                    privateParticipantsSection.style.display = 'block';
-                }
+        // Purely visual: which of the two mutually exclusive blocks is on
+        // screen. The *rule* about which participants exist for a given
+        // championship type lives on the server and arrives via htmx.
+        function toggleFields() {
+            if (!isPublicCheckbox || !registrationDeadlineField) return;
+            // Re-query: htmx replaces this element outright when the
+            // championship type changes, so a cached reference goes stale.
+            const participants = document.getElementById('private-participants-section');
+            const isPublic = isPublicCheckbox.checked;
+            registrationDeadlineField.style.display = isPublic ? 'block' : 'none';
+            if (participants) {
+                participants.style.display = isPublic ? 'none' : 'block';
             }
+        }
 
+        if (isPublicCheckbox) {
             isPublicCheckbox.addEventListener('change', toggleFields);
             toggleFields(); // Initial state
         }
-
-        // Reload page when championship type changes to update participant list
-        if (championshipTypeSelect) {
-            championshipTypeSelect.addEventListener('change', function() {
-                const currentUrl = new URL(window.location.href);
-                currentUrl.searchParams.set('type', this.value);
-                window.location.href = currentUrl.toString();
-            });
-        }
+        // Re-apply after an htmx swap brings in a fresh participants block.
+        document.body.addEventListener('htmx:afterSwap', toggleFields);
     });
 </script>
 
