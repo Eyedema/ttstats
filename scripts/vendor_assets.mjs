@@ -13,15 +13,29 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const vendorJs = join(root, 'ttstats/pingpong/static/pingpong/js/vendor');
 const vendorCss = join(root, 'ttstats/pingpong/static/pingpong/css/vendor');
 
+// Source maps are not optional extras here. WhiteNoise's manifest storage
+// resolves every sourceMappingURL a vendored file declares, and hard-fails
+// collectstatic -- and therefore the deploy -- if the target is missing.
 const assets = [
   ['htmx.org/dist/htmx.min.js', vendorJs, 'htmx.min.js'],
   ['alpinejs/dist/cdn.min.js', vendorJs, 'alpine.min.js'],
   ['chart.js/dist/chart.umd.js', vendorJs, 'chart.umd.js'],
+  ['chart.js/dist/chart.umd.js.map', vendorJs, 'chart.umd.js.map'],
   ['tom-select/dist/js/tom-select.complete.min.js', vendorJs, 'tom-select.complete.min.js'],
+  [
+    'tom-select/dist/js/tom-select.complete.min.js.map',
+    vendorJs,
+    'tom-select.complete.min.js.map',
+  ],
   [
     'tom-select/dist/css/tom-select.bootstrap5.min.css',
     vendorCss,
     'tom-select.bootstrap5.min.css',
+  ],
+  [
+    'tom-select/dist/css/tom-select.bootstrap5.min.css.map',
+    vendorCss,
+    'tom-select.bootstrap5.min.css.map',
   ],
 ];
 

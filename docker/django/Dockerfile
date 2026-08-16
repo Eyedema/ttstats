@@ -30,6 +30,8 @@ RUN npm ci
 # Tailwind scans templates and forms.py to decide which classes to emit, so
 # both have to be present before the build runs.
 COPY tailwind.config.js postcss.config.js ./
+# scripts/ carries vendor_assets.mjs, which `npm run build` invokes.
+COPY scripts/ ./scripts/
 COPY ttstats/ ./ttstats/
 RUN npm run build
 

@@ -1,0 +1,40 @@
+{% comment %}
+The participant picker, whose contents depend on championship_type.
+
+Swapped in by htmx when the type <select> changes. The page used to rebuild
+the whole URL and reload itself to get this, throwing away everything the
+user had already typed into the form.
+
+Rendered by ChampionshipParticipantsFragmentView, and included directly on
+first paint so the markup only exists in one place.
+{% endcomment %}
+<div id="private-participants-section" class="border-t pt-6"
+     {% if not show_participants %}style="display: none;"{% endif %}>
+    <h3 class="text-base md:text-lg font-semibold mb-4">Select Participants</h3>
+    <div class="space-y-2">
+        <label class="text-sm font-medium leading-none">
+            Participants <span class="text-destructive">*</span>
+        </label>
+
+        {% if form.private_participants.field.queryset %}
+        <div class="max-h-64 overflow-y-auto border rounded-md p-3 space-y-2">
+            {% for choice in form.private_participants %}
+            <div class="flex items-center gap-2">
+                {{ choice.tag }}
+                <label for="{{ choice.id_for_label }}" class="text-sm cursor-pointer">
+                    {{ choice.choice_label }}
+                </label>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        {% for error in form.private_participants.errors %}
+        <p class="text-sm text-destructive">{{ error }}</p>
+        {% empty %}
+        <p class="text-sm text-muted-foreground">
+            {% firstof form.private_participants.help_text "Select players for this private championship" %}
+        </p>
+        {% endfor %}
+    </div>
+</div>

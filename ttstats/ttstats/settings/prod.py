@@ -68,6 +68,15 @@ CSP_FORM_ACTION = ("'self'",)
 # Static files
 STATIC_ROOT = '/app/static/'
 
+# Hash every static file's name and pre-compress it. Requires collectstatic
+# to have run, which entrypoint.sh does before starting Gunicorn.
+STORAGES = {
+    **STORAGES,
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+    },
+}
+
 # Logging
 LOGGING = {
     'version': 1,

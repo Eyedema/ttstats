@@ -192,6 +192,8 @@ These are non-obvious behaviors that aren't clear from reading individual source
 - **A class Tailwind cannot see is silently dropped.** The `content` globs cover all templates *and* `pingpong/*.py`, because `forms.py` still builds widget class strings in Python. If you move class names into a new Python module, add it to the globs.
 - Tests do not need the CSS to exist; `{% static %}` resolves without it. The browser does -- run `npm run build:css` after cloning.
 - Docker: a `node:20-alpine AS assets` stage builds the CSS, and the `COPY --from=assets` in the final stage must stay **after** `COPY ttstats/ .` or it gets overwritten. `compose.dev.yml` bind-mounts `./ttstats` over `/app`, which shadows the image's CSS -- hence the separate `assets` watcher service.
+- **Static storage is `STORAGES`, not `STATICFILES_STORAGE`** (Django 5.1 removed the latter). Only `prod.py` uses WhiteNoise's hashing manifest storage; dev and tests use plain storage, because manifest storage refuses to resolve any file absent from a collectstatic-built manifest.
+- **Vendored files must ship their `.map` siblings.** Manifest storage resolves every `sourceMappingURL` and hard-fails `collectstatic` if the target is missing -- and `entrypoint.sh` runs `collectstatic` under `set -e`, so a missing map breaks the deploy, not just the page.
 - CI builds the assets when either Python or frontend files change. Before this, a template-only commit got zero CI.
 
 ### Vendored JavaScript
