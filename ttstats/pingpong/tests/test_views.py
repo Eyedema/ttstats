@@ -1,3 +1,5 @@
+import re
+
 import pytest
 from datetime import date, timedelta, time
 from django.core import mail
@@ -382,6 +384,99 @@ class TestTemplatesRenderParticipantNames:
             "<title>Record Match Results - Aurelio Home vs Bartholomew Away</title>"
             in body
         )
+
+
+@pytest.mark.django_db
+class TestMatchFormRepopulatesOnError:
+    """The match form used to hand-write its <option> loops.
+
+    Those loops compared `form.f.value` against a literal -- but on a bound
+    form the value is the raw POST *string*, so `"7" == 7` was false and the
+    user's choice vanished when validation failed. Django's own widget
+    rendering gets this right; these tests pin that it stays that way.
+    """
+
+    def _post_invalid(self, **overrides):
+        """Same player on both sides -- fails MatchForm.clean()."""
+        staff, p = _staff_with_player()
+        data = {
+            "player1": p.pk,
+            "player2": p.pk,  # invalid: must be different
+            "date_played": "2026-02-02T14:30",
+            "match_type": "tournament",
+            "best_of": "7",
+            "is_double": "False",
+        }
+        data.update(overrides)
+        resp = _login_client(staff).post(reverse("pingpong:match_add"), data)
+        assert resp.status_code == 200, "form should redisplay, not redirect"
+        return p, resp.content.decode()
+
+    def _selected(self, body, name):
+        block = re.search(rf'<select[^>]*name="{name}".*?</select>', body, re.S)
+        assert block, f"no <select name={name}> in the response"
+        return re.findall(r'<option value="([^"]*)"[^>]*selected', block.group(0))
+
+    def test_best_of_keeps_the_submitted_value(self):
+        """The regression: best_of came back with nothing selected at all."""
+        _, body = self._post_invalid()
+        assert self._selected(body, "best_of") == ["7"]
+
+    def test_match_type_keeps_the_submitted_value(self):
+        _, body = self._post_invalid()
+        assert self._selected(body, "match_type") == ["tournament"]
+
+    def test_player_choice_keeps_the_submitted_value(self):
+        """Same int-vs-string comparison, on a ModelChoiceField."""
+        p, body = self._post_invalid()
+        assert self._selected(body, "player1") == [str(p.pk)]
+
+    def test_date_played_keeps_the_submitted_value(self):
+        _, body = self._post_invalid()
+        field = re.search(r'<input[^>]*name="date_played"[^>]*>', body)
+        assert field and 'value="2026-02-02T14:30"' in field.group(0)
+
+    def test_locked_player1_keeps_the_shared_control_styling(self):
+        """The non-staff path adds `bg-muted cursor-not-allowed` to player1.
+
+        Doing that with attrs.update({"class": ...}) replaces the attribute
+        outright and drops `field-input`, leaving the locked control
+        unstyled. It only became visible once the widget -- rather than a
+        hand-written <select> -- started rendering.
+        """
+        u = UserFactory()
+        p = PlayerFactory(user=u)
+        u.profile.email_verified = True
+        u.profile.save()
+        PlayerFactory(with_user=True)
+
+        body = _login_client(u).get(reverse("pingpong:match_add")).content.decode()
+        tag = re.search(r'<select[^>]*name="player1"[^>]*>', body).group(0)
+
+        assert "field-input" in tag
+        assert "bg-muted" in tag
+        assert "disabled" in tag
+
+    def test_every_error_is_shown_not_just_the_first(self):
+        """_field.html loops over field.errors; templates used to print
+        .errors.0 and silently drop the rest."""
+        staff, p = _staff_with_player()
+        other = PlayerFactory(with_user=True)
+        resp = _login_client(staff).post(
+            reverse("pingpong:match_add"),
+            {
+                "player1": p.pk,
+                "player2": other.pk,
+                "date_played": "not a date",
+                "match_type": "tournament",
+                "best_of": "999",  # not one of BEST_OF_CHOICES
+                "is_double": "False",
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.content.decode()
+        assert "Enter a valid date/time" in body
+        assert "Select a valid choice" in body
 
 
 # ===========================================================================

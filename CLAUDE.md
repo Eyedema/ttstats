@@ -201,6 +201,13 @@ These are non-obvious behaviors that aren't clear from reading individual source
 - `<body>` carries `hx-headers` with the CSRF token, so every htmx request is authenticated without per-element wiring.
 - `prod.py`'s CSP now allows no external hosts at all. `'unsafe-inline'` is still required for scripts and styles because templates carry inline `<script>` blocks; B.5 is what removes them.
 
+### Forms
+- **Never hand-write `<option>` loops.** Render the widget (`{{ form.field }}`) or include `pingpong/_field.html`. A hand-written loop comparing `form.f.value` to a literal is wrong on a bound form: the POST value is a *string*, so `"7" == 7` is false and the user's choice disappears when validation fails.
+- `_field.html` renders label, widget, help text and **every** error (templates used to print `.errors.0` and drop the rest). Optional context: `label`, `help`, `badge`, `wrapper_class`.
+- `StyledFormMixin` (forms.py) puts `.field-input` on every widget and sets `error_css_class`. Add it to any new form; do not paste Tailwind strings into Python.
+- **Adding classes in a view:** use `append_widget_class(field, css)`. `widget.attrs.update({"class": ...})` replaces the attribute and silently drops `field-input`.
+- Choice lists belong in forms.py (`BEST_OF_CHOICES`), not in template markup.
+
 ### Template / Frontend
 - `base.html` unconditionally renders `{% url 'pingpong:player_detail' user.player.pk %}` — every authenticated user **must** have a linked Player profile
 - Use `json_script` template tag for passing data to JavaScript, NOT `escapejs` (causes double-serialization)

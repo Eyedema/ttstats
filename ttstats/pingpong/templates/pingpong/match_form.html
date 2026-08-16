@@ -264,16 +264,7 @@
                 {% csrf_token %}
                 {% if not is_complete %}
                 <!-- Match type section -->
-                <div class="space-y-2">
-                    <label for="id_is_double" class="text-sm font-medium leading-none">
-                        Single/Double match
-                    </label>
-                    <select id="id_is_double" name="is_double"
-                            class="flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2">
-                        <option value="False" {% if not form.instance.is_double %}selected{% endif %}>Single</option>
-                        <option value="True" {% if form.instance.is_double %}selected{% endif %}>Double</option>
-                    </select>
-                </div>
+                {% include 'pingpong/_field.html' with field=form.is_double label="Single/Double match" %}
 
                 <!-- Players Section -->
                 <div class="space-y-4">
@@ -295,19 +286,10 @@
                                     <span class="text-muted-foreground text-xs doubles-only hidden">(Team 1)</span>
                                     <span class="text-destructive">*</span>
                                 </label>
-                                <select name="player1" id="id_player1"
-                                        class="player-select flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.player1.errors %}border-destructive{% endif %} "
-                                        required {% if form.player1.field.disabled %}disabled{% endif %}>
-                                    <option value="">Select Player 1...</option>
-                                    {% for player in form.player1.field.queryset %}
-                                    <option value="{{ player.pk }}" {% if form.player1.value == player.pk %}selected{% endif %}>
-                                        {{ player.nickname|default:player.name }}
-                                    </option>
-                                    {% endfor %}
-                                </select>
-                                {% if form.player1.errors %}
-                                <p class="text-xs text-destructive">{{ form.player1.errors.0 }}</p>
-                                {% endif %}
+                                {{ form.player1 }}
+                                {% for error in form.player1.errors %}
+                                <p class="text-xs md:text-sm text-destructive">{{ error }}</p>
+                                {% endfor %}
                             </div>
 
                             <!-- Player 2 Field -->
@@ -318,19 +300,10 @@
                                     <span class="text-muted-foreground text-xs doubles-only hidden">(Team 1)</span>
                                     <span class="text-destructive">*</span>
                                 </label>
-                                <select name="player2" id="id_player2"
-                                        class="player-select flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.player2.errors %}border-destructive{% endif %}"
-                                        required>
-                                    <option value="">Select Player 2...</option>
-                                    {% for player in form.player2.field.queryset %}
-                                    <option value="{{ player.pk }}" {% if form.player2.value == player.pk %}selected{% endif %}>
-                                        {{ player.nickname|default:player.name }}
-                                    </option>
-                                    {% endfor %}
-                                </select>
-                                {% if form.player2.errors %}
-                                <p class="text-xs md:text-sm text-destructive">{{ form.player2.errors.0 }}</p>
-                                {% endif %}
+                                {{ form.player2 }}
+                                {% for error in form.player2.errors %}
+                                <p class="text-xs md:text-sm text-destructive">{{ error }}</p>
+                                {% endfor %}
                             </div>
                         </div>
                     </div>
@@ -346,18 +319,10 @@
                                     {% if not is_staff %}<span class="text-muted-foreground text-xs">(Opponent)</span>{% endif %}
                                     <span class="text-destructive doubles-required hidden">*</span>
                                 </label>
-                                <select name="player3" id="id_player3"
-                                        class="player-select flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.player3.errors %}border-destructive{% endif %}">
-                                    <option value="">Select Player 3...</option>
-                                    {% for player in form.player3.field.queryset %}
-                                    <option value="{{ player.pk }}" {% if form.player3.value == player.pk %}selected{% endif %}>
-                                        {{ player.nickname|default:player.name }}
-                                    </option>
-                                    {% endfor %}
-                                </select>
-                                {% if form.player3.errors %}
-                                <p class="text-xs md:text-sm text-destructive">{{ form.player3.errors.0 }}</p>
-                                {% endif %}
+                                {{ form.player3 }}
+                                {% for error in form.player3.errors %}
+                                <p class="text-xs md:text-sm text-destructive">{{ error }}</p>
+                                {% endfor %}
                             </div>
 
                             <!-- Player 4 Field -->
@@ -367,18 +332,10 @@
                                     {% if not is_staff %}<span class="text-muted-foreground text-xs">(Opponent)</span>{% endif %}
                                     <span class="text-destructive doubles-required hidden">*</span>
                                 </label>
-                                <select name="player4" id="id_player4"
-                                        class="player-select flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.player4.errors %}border-destructive{% endif %}">
-                                    <option value="">Select Player 4...</option>
-                                    {% for player in form.player4.field.queryset %}
-                                    <option value="{{ player.pk }}" {% if form.player4.value == player.pk %}selected{% endif %}>
-                                        {{ player.nickname|default:player.name }}
-                                    </option>
-                                    {% endfor %}
-                                </select>
-                                {% if form.player4.errors %}
-                                <p class="text-xs md:text-sm text-destructive">{{ form.player4.errors.0 }}</p>
-                                {% endif %}
+                                {{ form.player4 }}
+                                {% for error in form.player4.errors %}
+                                <p class="text-xs md:text-sm text-destructive">{{ error }}</p>
+                                {% endfor %}
                             </div>
                         </div>
                     </div>
@@ -396,77 +353,16 @@
 
 
                     <!-- Date Played Field -->
-                    <div class="space-y-2">
-                        <label class="text-sm font-medium leading-none" for="id_date_played">
-                            Date & Time <span class="text-destructive">*</span>
-                        </label>
-                        <input 
-                            type="datetime-local" 
-                            name="date_played" 
-                            id="id_date_played"
-                            value="{% if form.date_played.value %}{{ form.date_played.value|date:'Y-m-d\TH:i' }}{% endif %}"
-                            class="flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.date_played.errors %}border-destructive{% endif %}" 
-                            required
-                        />
-                        {% if form.date_played.errors %}
-                        <p class="text-xs md:text-sm text-destructive">{{ form.date_played.errors.0 }}</p>
-                        {% else %}
-                        <p class="text-xs md:text-sm text-muted-foreground">When the match was played</p>
-                        {% endif %}
-                    </div>
+                    {% include 'pingpong/_field.html' with field=form.date_played %}
 
 
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <!-- Match Type Field -->
-                        <div class="space-y-2">
-                            <label class="text-sm font-medium leading-none" for="id_match_type">
-                                Match Type <span class="text-destructive">*</span>
-                            </label>
-                            <select 
-                                name="match_type" 
-                                id="id_match_type"
-                                class="flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.match_type.errors %}border-destructive{% endif %}"
-                            >
-                                <option value="casual" {% if form.match_type.value == 'casual' or not form.match_type.value %}selected{% endif %}>
-                                    Casual
-                                </option>
-                                <option value="practice" {% if form.match_type.value == 'practice' %}selected{% endif %}>
-                                    Practice
-                                </option>
-                                <option value="tournament" {% if form.match_type.value == 'tournament' %}selected{% endif %}>
-                                    Tournament
-                                </option>
-                            </select>
-                            {% if form.match_type.errors %}
-                            <p class="text-xs md:text-sm text-destructive">{{ form.match_type.errors.0 }}</p>
-                            {% else %}
-                            <p class="text-xs md:text-sm text-muted-foreground">Type of match</p>
-                            {% endif %}
-                        </div>
+                        {% include 'pingpong/_field.html' with field=form.match_type %}
 
 
                         <!-- Best Of Field -->
-                        <div class="space-y-2">
-                            <label class="text-sm font-medium leading-none" for="id_best_of">
-                                Best Of <span class="text-destructive">*</span>
-                            </label>
-                            <select 
-                                name="best_of" 
-                                id="id_best_of"
-                                class="flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.best_of.errors %}border-destructive{% endif %}"
-                            >
-                                <option value="1" {% if form.best_of.value == 1 %}selected{% endif %}>Best of 1</option>
-                                <option value="3" {% if form.best_of.value == 3 or not form.best_of.value %}selected{% endif %}>Best of 3</option>
-                                <option value="5" {% if form.best_of.value == 5 %}selected{% endif %}>Best of 5</option>
-                                <option value="7" {% if form.best_of.value == 7 %}selected{% endif %}>Best of 7</option>
-                                <option value="9" {% if form.best_of.value == 9 %}selected{% endif %}>Best of 9</option>
-                            </select>
-                            {% if form.best_of.errors %}
-                            <p class="text-xs md:text-sm text-destructive">{{ form.best_of.errors.0 }}</p>
-                            {% else %}
-                            <p class="text-xs md:text-sm text-muted-foreground">Number of games to play</p>
-                            {% endif %}
-                        </div>
+                        {% include 'pingpong/_field.html' with field=form.best_of %}
                     </div>
                 </div>
 
@@ -491,50 +387,11 @@
 
 
                     <!-- Location Field -->
-                    <div class="space-y-2">
-                        <div class="flex items-center justify-between">
-                            <label class="text-sm font-medium leading-none" for="id_location">Location</label>
-                            <span class="text-xs text-muted-foreground">Optional</span>
-                        </div>
-                        <select 
-                            name="location" 
-                            id="id_location"
-                            class="flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.location.errors %}border-destructive{% endif %}"
-                        >
-                            <option value="">No location specified</option>
-                            {% for location in locations %}
-                            <option value="{{ location.pk }}" {% if form.location.value == location.pk or form.location.value|stringformat:"s" == location.pk|stringformat:"s" %}selected{% endif %}>
-                                {{ location.name }}{% if location.address %} - {{ location.address|truncatewords:5 }}{% endif %}
-                            </option>
-                            {% endfor %}
-                        </select>
-                        {% if form.location.errors %}
-                        <p class="text-xs md:text-sm text-destructive">{{ form.location.errors.0 }}</p>
-                        {% else %}
-                        <p class="text-xs md:text-sm text-muted-foreground">Where the match took place</p>
-                        {% endif %}
-                    </div>
+                    {% include 'pingpong/_field.html' with field=form.location badge="Optional" %}
 
 
                     <!-- Notes Field -->
-                    <div class="space-y-2">
-                        <div class="flex items-center justify-between">
-                            <label class="text-sm font-medium leading-none" for="id_notes">Notes</label>
-                            <span class="text-xs text-muted-foreground">Optional</span>
-                        </div>
-                        <textarea 
-                            name="notes" 
-                            id="id_notes"
-                            rows="3"
-                            class="flex w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.notes.errors %}border-destructive{% endif %}" 
-                            placeholder="Any notes about this match..."
-                        >{{ form.notes.value|default:'' }}</textarea>
-                        {% if form.notes.errors %}
-                        <p class="text-xs md:text-sm text-destructive">{{ form.notes.errors.0 }}</p>
-                        {% else %}
-                        <p class="text-xs md:text-sm text-muted-foreground">Additional observations or comments</p>
-                        {% endif %}
-                    </div>
+                    {% include 'pingpong/_field.html' with field=form.notes badge="Optional" %}
                 </div>
 
 

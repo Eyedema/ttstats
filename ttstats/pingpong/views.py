@@ -47,6 +47,17 @@ except ImportError:
     WebAuthnCredential = None
 
 
+def append_widget_class(field, css):
+    """Add classes to a field's widget without discarding what is there.
+
+    `widget.attrs.update({"class": ...})` replaces the attribute outright,
+    which silently drops the shared `field-input` styling that
+    StyledFormMixin applied.
+    """
+    existing = field.widget.attrs.get("class", "")
+    field.widget.attrs["class"] = f"{existing} {css}".strip()
+
+
 def participants_prefetch(lookup="participants", scheduled=False):
     """Prefetch participants with their player/user/profile in one go.
 
@@ -601,8 +612,8 @@ class MatchCreateView(LoginRequiredMixin, CreateView):
                 # Pre-select and lock user as player1
                 form.fields["player1"].initial = user_player
                 form.fields["player1"].disabled = True
-                form.fields["player1"].widget.attrs.update(
-                    {"class": "bg-muted cursor-not-allowed"}
+                append_widget_class(
+                    form.fields["player1"], "bg-muted cursor-not-allowed"
                 )
                 form.fields[
                     "player1"
@@ -1386,8 +1397,8 @@ class ScheduledMatchCreateView(LoginRequiredMixin, CreateView):
                 # Pre-select and lock user as player1
                 form.fields["player1"].initial = user_player
                 form.fields["player1"].disabled = True
-                form.fields["player1"].widget.attrs.update(
-                    {"class": "bg-muted cursor-not-allowed"}
+                append_widget_class(
+                    form.fields["player1"], "bg-muted cursor-not-allowed"
                 )
                 form.fields["player1"].help_text = "You are automatically set as Player 1"
 
