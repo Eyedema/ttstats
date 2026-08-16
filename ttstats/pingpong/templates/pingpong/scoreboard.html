@@ -126,8 +126,26 @@ function scoreboardApp() {
       this.csrfToken = csrfInput ? csrfInput.value : '';
       this.acquireWakeLock();
       document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'visible') this.acquireWakeLock();
+        if (document.visibilityState !== 'visible') return;
+        this.acquireWakeLock();
+        // Re-read the canonical state. A phone that slept, or a match
+        // finished from another device, would otherwise leave this page
+        // showing a score the server no longer agrees with. Cheaper and
+        // quieter than polling: nothing happens while the tab is hidden.
+        this.refreshState();
       });
+    },
+
+    async refreshState() {
+      const url = this.$root.dataset.stateUrl;
+      if (!url) return;
+      try {
+        const resp = await fetch(url, { credentials: 'same-origin' });
+        if (!resp.ok) return;
+        this.applyPayload(await resp.json());
+      } catch (err) {
+        // Offline or mid-navigation: keep showing what we have.
+      }
     },
 
     async acquireWakeLock() {

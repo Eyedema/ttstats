@@ -511,6 +511,23 @@ class TestLiveStartEndpoint:
 
 @pytest.mark.django_db
 class TestLiveStateEndpoint:
+    """Resync endpoint, called on visibilitychange by scoreboard.html.
+
+    It was fully wired -- view, URL, context var, data-state-url attribute
+    and these tests -- but had no caller until B.5e.
+    """
+
+    def test_page_exposes_the_url_to_the_client(self, auth_client):
+        match, p1, _ = _make_live_match()
+        resp = auth_client(p1.user).get(
+            reverse("pingpong:live_scoreboard", args=[match.pk])
+        )
+        body = resp.content.decode()
+        assert reverse("pingpong:live_state", args=[match.pk]) in body
+        # The handler that consumes it must exist, or the attribute is inert
+        # again -- which is exactly the state this endpoint was in.
+        assert "refreshState" in body
+
     def test_returns_canonical_state(self, auth_client):
         match, p1, _ = _make_live_match()
         state = ls.set_initial_server(match.live_state, "team1")

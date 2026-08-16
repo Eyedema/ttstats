@@ -2512,7 +2512,13 @@ class LivePointView(LoginRequiredMixin, View):
 
 
 class LiveStateView(LoginRequiredMixin, View):
-    """GET the canonical state — used by the client to rehydrate on reload."""
+    """GET the canonical state, for the scoreboard to resync against.
+
+    The page calls this when the tab becomes visible again: a phone that
+    slept, or a match finished from another device, would otherwise leave
+    the scoreboard showing a score the server no longer agrees with.
+    Restricted to the scorekeeper (and staff), like the write endpoints.
+    """
 
     def get(self, request, pk):
         # all_objects so we can return a completed match's redirect too
