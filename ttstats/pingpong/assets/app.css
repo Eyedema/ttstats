@@ -21,6 +21,13 @@
   textarea {
     font-size: 16px;
   }
+
+  /* Alpine is deferred, so anything driven by x-show is briefly visible
+     before it initialises. Global, not per-template: scoreboard.html used to
+     carry its own copy of this rule in an inline <style>. */
+  [x-cloak] {
+    display: none !important;
+  }
 }
 
 @layer components {
@@ -81,6 +88,60 @@
       color: theme('colors.muted.foreground');
     }
   }
+
+  /* --- Translucent chrome -------------------------------------------------
+     Nav surfaces are a floating layer with content passing underneath, not an
+     opaque strip that owns its slice of the viewport. */
+  .chrome-blur {
+    background: rgb(255 255 255 / 0.72);
+    backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+  }
+
+  /* Where floating chrome overlaps scrolling content, fade the boundary
+     instead of ruling a 1px line across it. Lives on the fixed element, so
+     the pseudo-element hangs just below its own bottom edge. */
+  .chrome-edge-bottom::after {
+    content: '';
+    position: absolute;
+    inset-inline: 0;
+    top: 100%;
+    height: 1.25rem;
+    background: linear-gradient(to bottom, rgb(15 23 42 / 0.07), transparent);
+    pointer-events: none;
+  }
+
+  /* --- Live scoreboard tap zones ------------------------------------------
+     The press is acknowledged on pointer-down, not when the POST comes back.
+     `filter` is compositor-friendly and, unlike a transform, does not nudge
+     the giant numeral around. */
+  .tap-zone {
+    transition: filter 90ms ease-out;
+  }
+
+  .tap-zone:active {
+    filter: brightness(1.18);
+  }
+
+  /* Retriggered from JS on every point so the number itself confirms the tap.
+     Slightly under-damped: a point is a momentum-carrying, physical action. */
+  .score-bump {
+    animation: score-bump 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  @keyframes score-bump {
+    0% {
+      transform: scale(1);
+    }
+
+    35% {
+      transform: scale(1.07);
+    }
+
+    100% {
+      transform: scale(1);
+    }
+  }
 }
 
 @layer utilities {
@@ -91,5 +152,44 @@
 
   .htmx-request .htmx-indicator {
     display: inline;
+  }
+}
+
+/* Outside every @layer: these are user preferences and must win over both
+   component classes and Tailwind utilities. */
+
+/* Reduced motion is not "no feedback" -- colour and opacity changes carry
+   meaning and stay. What goes is anything that travels through space, plus
+   the indefinite loops (animate-pulse, spinners), which settle on their
+   final frame instead of oscillating. Narrowing transition-property rather
+   than zeroing the duration means elements that never declared a transition
+   do not suddenly acquire one. */
+@media (prefers-reduced-motion: reduce) {
+
+  *,
+  *::before,
+  *::after {
+    transition-property: opacity, color, background-color, border-color, fill,
+      stroke !important;
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+  }
+
+  html {
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Frosted surfaces go solid rather than merely less blurry -- a half-measure
+   is the worst case for legibility. */
+@media (prefers-reduced-transparency: reduce) {
+  .chrome-blur {
+    background: white;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  .chrome-edge-bottom::after {
+    display: none;
   }
 }

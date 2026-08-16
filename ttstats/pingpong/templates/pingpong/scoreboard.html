@@ -47,12 +47,12 @@
     class="grid grid-cols-2 h-full w-full"
     :class="{ 'flex-row-reverse': state.side_switched }"
   >
-    <!-- Team 1 tap zone -->
+    <!-- Team 1 tap zone. Note there is no :disabled -- a tap is never dropped
+         because a previous POST is still in flight; see addPoint(). -->
     <button
       type="button"
       @click="addPoint('team1')"
-      :disabled="busy"
-      class="relative flex flex-col items-center justify-center bg-blue-600 text-white text-center"
+      class="tap-zone relative flex flex-col items-center justify-center bg-blue-600 text-white text-center"
       :class="{ 'order-2': state.side_switched }"
     >
       <div class="absolute top-4 left-4 text-2xl font-semibold flex items-center gap-2">
@@ -60,15 +60,16 @@
         <span>{{ team1_label }}</span>
       </div>
       <div class="absolute top-4 right-4 text-2xl font-semibold opacity-80" x-text="state.team1_games"></div>
-      <div class="text-[18rem] leading-none font-bold tabular-nums" x-text="state.team1_points"></div>
+      <div x-ref="team1Score"
+           class="text-[18rem] leading-none tracking-tighter font-bold tabular-nums"
+           x-text="points('team1')"></div>
     </button>
 
     <!-- Team 2 tap zone -->
     <button
       type="button"
       @click="addPoint('team2')"
-      :disabled="busy"
-      class="relative flex flex-col items-center justify-center bg-red-600 text-white text-center"
+      class="tap-zone relative flex flex-col items-center justify-center bg-red-600 text-white text-center"
       :class="{ 'order-1': state.side_switched }"
     >
       <div class="absolute top-4 left-4 text-2xl font-semibold flex items-center gap-2">
@@ -76,9 +77,28 @@
         <span>{{ team2_label }}</span>
       </div>
       <div class="absolute top-4 right-4 text-2xl font-semibold opacity-80" x-text="state.team2_games"></div>
-      <div class="text-[18rem] leading-none font-bold tabular-nums" x-text="state.team2_points"></div>
+      <div x-ref="team2Score"
+           class="text-[18rem] leading-none tracking-tighter font-bold tabular-nums"
+           x-text="points('team2')"></div>
     </button>
   </div>
+
+  <!-- Error toast. Replaces the blocking browser dialog this used to raise,
+       which froze the page mid-match and read as a browser failure rather
+       than as part of the scoreboard. -->
+  <div
+    x-show="error"
+    x-cloak
+    x-transition:enter="transition ease-out duration-200"
+    x-transition:enter-start="opacity-0"
+    x-transition:enter-end="opacity-100"
+    x-transition:leave="transition ease-in duration-150"
+    x-transition:leave-start="opacity-100"
+    x-transition:leave-end="opacity-0"
+    role="alert"
+    class="absolute bottom-20 left-1/2 -translate-x-1/2 z-20 max-w-[90vw] rounded-full bg-destructive px-5 py-2 text-sm font-medium text-destructive-foreground shadow-lg"
+    x-text="error"
+  ></div>
 
   <!-- Bottom controls -->
   <div
@@ -105,11 +125,17 @@
   </div>
 </div>
 
-<style>
-  [x-cloak] { display: none !important; }
-</style>
-
 <script>
+// Haptic vocabulary. Each pattern is tied to one causal event and fires on the
+// same frame as its visual, otherwise the two read as unrelated. Kept short and
+// few: a buzz on everything trains the umpire to ignore all of them.
+const HAPTICS = {
+  point: 12,
+  gameWon: [0, 35, 70, 35],
+  sideSwitch: [0, 45, 90, 45],
+  error: [0, 70, 50, 70],
+};
+
 function scoreboardApp() {
   return {
     state: {},
@@ -118,6 +144,17 @@ function scoreboardApp() {
     busy: false,
     wakeLock: null,
     csrfToken: '',
+    error: '',
+    errorTimer: null,
+    // Points the user has tapped but the server has not confirmed yet. The
+    // display reads through this so the numeral moves on the tap rather than
+    // on the round-trip -- on gym wifi that gap is the difference between a
+    // scoreboard and a dead slab.
+    optimistic: {},
+    pending: 0,
+    // POSTs are serialised: the server applies points in order, and two
+    // in-flight requests could otherwise be processed the wrong way round.
+    queue: Promise.resolve(),
 
     init() {
       const bootstrap = JSON.parse(document.getElementById('scoreboard-bootstrap').textContent);
@@ -157,13 +194,66 @@ function scoreboardApp() {
       }
     },
 
+    // --- Feedback --------------------------------------------------------
+
+    haptic(pattern) {
+      if (!('vibrate' in navigator)) return;
+      try {
+        navigator.vibrate(pattern);
+      } catch (err) {
+        // Some browsers throw when the page has never been interacted with.
+      }
+    },
+
+    // Restart the animation rather than letting a still-running one swallow
+    // the next tap: remove, force a reflow, re-add.
+    bumpScore(side) {
+      const el = this.$refs[side + 'Score'];
+      if (!el) return;
+      el.classList.remove('score-bump');
+      void el.offsetWidth;
+      el.classList.add('score-bump');
+    },
+
+    showError(message) {
+      this.error = message;
+      this.haptic(HAPTICS.error);
+      clearTimeout(this.errorTimer);
+      this.errorTimer = setTimeout(() => { this.error = ''; }, 4000);
+    },
+
+    // --- State -----------------------------------------------------------
+
+    points(side) {
+      const key = side + '_points';
+      return key in this.optimistic ? this.optimistic[key] : (this.state[key] || 0);
+    },
+
     applyPayload(p) {
+      const previous = this.state || {};
+      const wasPrompting = this.shouldPromptSideSwitch;
+
       this.state = p.state || {};
       this.currentServer = p.current_server;
       this.shouldPromptSideSwitch = p.should_prompt_side_switch;
+
+      // A game closing out is a bigger event than a point, and the numerals
+      // resetting to 0 is easy to miss mid-rally.
+      const gamesBefore = (previous.team1_games || 0) + (previous.team2_games || 0);
+      const gamesAfter = (this.state.team1_games || 0) + (this.state.team2_games || 0);
+      if (gamesAfter > gamesBefore) this.haptic(HAPTICS.gameWon);
+
+      if (this.shouldPromptSideSwitch && !wasPrompting) this.haptic(HAPTICS.sideSwitch);
+
       if (p.redirect_url) {
         window.location.href = p.redirect_url;
       }
+    },
+
+    // Serialise onto the queue so requests reach the server in tap order.
+    enqueue(fn) {
+      this.queue = this.queue.then(fn, fn);
+      return this.queue;
     },
 
     async postJSON(url, body) {
@@ -180,30 +270,60 @@ function scoreboardApp() {
         });
         const data = await resp.json();
         if (!resp.ok) {
-          alert(data.error || 'Request failed');
-          return;
+          this.showError(data.error || 'Request failed');
+          return false;
         }
         this.applyPayload(data);
+        return true;
+      } catch (err) {
+        this.showError('Offline — the score has not been saved.');
+        return false;
       } finally {
         this.busy = false;
       }
     },
 
-    async startMatch(server) {
-      await this.postJSON(this.$root.dataset.startUrl, { initial_server: server });
+    startMatch(server) {
+      return this.enqueue(() =>
+        this.postJSON(this.$root.dataset.startUrl, { initial_server: server })
+      );
     },
 
-    async addPoint(side) {
+    addPoint(side) {
       if (this.shouldPromptSideSwitch) return; // block until acknowledged
-      await this.postJSON(this.$root.dataset.pointUrl, { side });
+
+      // Show the point immediately. This is not a re-implementation of the
+      // rules: the server always increments this side before deciding
+      // anything else, so the number shown is never wrong -- at most it is
+      // transient, when the point also ends the game and the server comes
+      // back with 0-0 and a game added. Which is what actually happened.
+      const key = side + '_points';
+      this.optimistic[key] = this.points(side) + 1;
+      this.pending += 1;
+      this.bumpScore(side);
+      this.haptic(HAPTICS.point);
+
+      return this.enqueue(async () => {
+        const ok = await this.postJSON(this.$root.dataset.pointUrl, { side });
+        this.pending -= 1;
+        // Hold the overlay while taps are still outstanding, or an early
+        // response would drag the display backwards. The last one to land
+        // hands authority back to the server.
+        if (!ok || this.pending === 0) this.optimistic = {};
+        if (!ok) await this.refreshState();
+      });
     },
 
-    async confirmSideSwitch() {
-      await this.postJSON(this.$root.dataset.sideSwitchUrl, {});
+    confirmSideSwitch() {
+      return this.enqueue(() => this.postJSON(this.$root.dataset.sideSwitchUrl, {}));
     },
 
-    async undo() {
-      await this.postJSON(this.$root.dataset.undoUrl, {});
+    undo() {
+      return this.enqueue(async () => {
+        const ok = await this.postJSON(this.$root.dataset.undoUrl, {});
+        // Undo re-bases the score; any optimistic overlay is now meaningless.
+        if (ok) this.optimistic = {};
+      });
     },
   };
 }

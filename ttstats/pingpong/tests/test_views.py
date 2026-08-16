@@ -1412,3 +1412,38 @@ class TestHeadToHeadSinglesDetection:
         assert resp.context["total_matches"] == 1
         assert resp.context["player1_match_wins"] == 1
         assert resp.context["player2_match_wins"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Flash-message auto-dismiss coupling
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+class TestFlashMessageMarkup:
+    """base.html's 5s auto-dismiss and _messages.html must agree on a hook.
+
+    The script used to sweep every `[role="alert"]` on the page, which meant
+    any long-lived alert elsewhere -- the scoreboard's error toast -- was
+    silently deleted from the DOM five seconds after load, whether or not it
+    had ever been shown.
+    """
+
+    def test_messages_carry_the_dismiss_hook(self):
+        from django.template.loader import render_to_string
+        from django.contrib.messages.storage.base import Message
+        from django.contrib.messages import constants
+
+        html = render_to_string(
+            "pingpong/_messages.html",
+            {"messages": [Message(constants.SUCCESS, "Saved.")]},
+        )
+        assert "data-flash" in html
+
+    def test_auto_dismiss_targets_only_flash_messages(self, client):
+        user = UserFactory()
+        PlayerFactory(user=user)
+        client.force_login(user)
+        body = client.get(reverse("pingpong:dashboard")).content.decode()
+        assert "[data-flash]" in body
+        assert 'querySelectorAll(\'[role="alert"]\')' not in body
