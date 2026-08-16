@@ -10,6 +10,7 @@ env/
 # Django
 db.sqlite3
 /static/
+ttstats/staticfiles/
 /media/
 *.log
 
