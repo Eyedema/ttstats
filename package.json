@@ -7,9 +7,12 @@
     "build": "npm run vendor && npm run build:css",
     "vendor": "node scripts/vendor_assets.mjs",
     "build:css": "tailwindcss -i ttstats/pingpong/assets/app.css -o ttstats/pingpong/static/pingpong/css/app.css --minify",
-    "watch:css": "tailwindcss -i ttstats/pingpong/assets/app.css -o ttstats/pingpong/static/pingpong/css/app.css --watch"
+    "watch:css": "tailwindcss -i ttstats/pingpong/assets/app.css -o ttstats/pingpong/static/pingpong/css/app.css --watch",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "alpinejs": "^3.16.1",
     "autoprefixer": "^10.4.20",
     "chart.js": "^4.5.1",

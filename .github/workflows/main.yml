@@ -12,10 +12,16 @@ permissions:
   issues: write
 
 jobs:
-  test:
-    name: Run Tests & Coverage
+  # One place that decides what changed. This used to live inside the test job,
+  # but the e2e gate needs the same answer and two copies of the logic would
+  # drift -- which is the exact failure that once gave template-only commits no
+  # CI at all.
+  changes:
+    name: Detect changed files
     runs-on: ubuntu-latest
-
+    outputs:
+      py_changed: ${{ steps.check_files.outputs.py_changed }}
+      assets_changed: ${{ steps.check_files.outputs.assets_changed }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -32,10 +38,10 @@ jobs:
             # For pushes, check files in the current commit
             CHANGED_FILES=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }})
           fi
-          
+
           echo "Changed files:"
           echo "$CHANGED_FILES"
-          
+
           if echo "$CHANGED_FILES" | grep -q "\.py$"; then
             echo "Python files were changed"
             echo "py_changed=true" >> $GITHUB_OUTPUT
@@ -55,18 +61,29 @@ jobs:
             echo "assets_changed=false" >> $GITHUB_OUTPUT
           fi
 
+  test:
+    name: Run Tests & Coverage
+    needs: changes
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history for git diff
+
       # The test suite renders templates that {% static %}-reference app.css.
       # Build it whenever either side changed, so a broken Tailwind config
       # fails here rather than in production.
       - name: Set up Node
-        if: steps.check_files.outputs.py_changed == 'true' || steps.check_files.outputs.assets_changed == 'true'
+        if: needs.changes.outputs.py_changed == 'true' || needs.changes.outputs.assets_changed == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
 
       - name: Build frontend assets
-        if: steps.check_files.outputs.py_changed == 'true' || steps.check_files.outputs.assets_changed == 'true'
+        if: needs.changes.outputs.py_changed == 'true' || needs.changes.outputs.assets_changed == 'true'
         run: |
           npm ci
           npm run build
@@ -74,13 +91,13 @@ jobs:
           test -s ttstats/pingpong/static/pingpong/js/vendor/htmx.min.js
 
       - name: Set up Python
-        if: steps.check_files.outputs.py_changed == 'true'
+        if: needs.changes.outputs.py_changed == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
       - name: Cache pip dependencies
-        if: steps.check_files.outputs.py_changed == 'true'
+        if: needs.changes.outputs.py_changed == 'true'
         uses: actions/cache@v3
         with:
           path: ~/.cache/pip
@@ -89,7 +106,7 @@ jobs:
             ${{ runner.os }}-pip-
 
       - name: Install dependencies
-        if: steps.check_files.outputs.py_changed == 'true'
+        if: needs.changes.outputs.py_changed == 'true'
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
@@ -97,7 +114,7 @@ jobs:
           pip install pytest pytest-django pytest-cov
 
       - name: Run tests with pytest
-        if: steps.check_files.outputs.py_changed == 'true'
+        if: needs.changes.outputs.py_changed == 'true'
         env:
           DJANGO_SETTINGS_MODULE: ttstats.settings.test
           SECRET_KEY: "test-secret-key-for-ci-only"
@@ -106,7 +123,7 @@ jobs:
           pytest --cov=pingpong --cov-config=../.coveragerc --cov-report=term --cov-report=html -v -n auto
 
       - name: Generate coverage summary
-        if: steps.check_files.outputs.py_changed == 'true'
+        if: needs.changes.outputs.py_changed == 'true'
         id: coverage
         run: |
           cd ttstats
@@ -140,11 +157,11 @@ jobs:
           echo "coverage=$COVERAGE" >> $GITHUB_OUTPUT
 
       - name: Skip message
-        if: steps.check_files.outputs.py_changed == 'false'
+        if: needs.changes.outputs.py_changed == 'false'
         run: |
           echo "⏭️  Skipping tests - no Python files were changed" >> $GITHUB_STEP_SUMMARY
       - name: Comment coverage on PR
-        if: github.event_name == 'pull_request' && steps.check_files.outputs.py_changed == 'true'
+        if: github.event_name == 'pull_request' && needs.changes.outputs.py_changed == 'true'
         uses: actions/github-script@v7
         with:
           script: |
@@ -173,19 +190,113 @@ jobs:
             });
 
       - name: Upload coverage HTML report
-        if: steps.check_files.outputs.py_changed == 'true'
+        if: needs.changes.outputs.py_changed == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
           path: ttstats/htmlcov/
           retention-days: 30
 
+  # Real WebKit at an iPhone viewport. This job exists because a drawer shipped
+  # that was permanently open and unclosable on iOS Safari while every check
+  # above was green: pytest asserts on the rendered template string, and the
+  # string was perfect. Nothing here can be established by the job above.
+  #
+  # Note the job itself always runs and gates its own steps, rather than being
+  # skipped by an `if:` at the job level. A skipped job causes everything that
+  # `needs` it to skip too, which would silently take the deploy with it.
+  e2e:
+    name: Browser tests (WebKit / iPhone)
+    needs: changes
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        if: needs.changes.outputs.py_changed == 'true' || needs.changes.outputs.assets_changed == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Set up Python
+        if: needs.changes.outputs.py_changed == 'true' || needs.changes.outputs.assets_changed == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        if: needs.changes.outputs.py_changed == 'true' || needs.changes.outputs.assets_changed == 'true'
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          npm ci
+
+      # Keyed on the resolved Playwright version: a browser build only matches
+      # the client that shipped with it, so a bare "playwright" key would serve
+      # a stale binary after an upgrade.
+      - name: Resolve Playwright version
+        if: needs.changes.outputs.py_changed == 'true' || needs.changes.outputs.assets_changed == 'true'
+        id: pw
+        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> $GITHUB_OUTPUT
+
+      - name: Cache Playwright browsers
+        if: needs.changes.outputs.py_changed == 'true' || needs.changes.outputs.assets_changed == 'true'
+        id: pw_cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ steps.pw.outputs.version }}
+
+      # --with-deps pulls the system libraries WebKit needs on a bare runner.
+      # Only webkit: the default suite does not use Chromium or Firefox, and
+      # installing all three roughly triples this step.
+      - name: Install WebKit
+        if: >-
+          (needs.changes.outputs.py_changed == 'true' || needs.changes.outputs.assets_changed == 'true')
+          && steps.pw_cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps webkit
+
+      - name: Install WebKit system deps (cached browser)
+        if: >-
+          (needs.changes.outputs.py_changed == 'true' || needs.changes.outputs.assets_changed == 'true')
+          && steps.pw_cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps webkit
+
+      # scripts/e2e_server.sh rebuilds the CSS, migrates a throwaway SQLite
+      # file and seeds the fixture; Playwright starts and stops it.
+      - name: Run Playwright suite
+        if: needs.changes.outputs.py_changed == 'true' || needs.changes.outputs.assets_changed == 'true'
+        env:
+          E2E_PYTHON: python
+          SECRET_KEY: "test-secret-key-for-ci-only"
+        run: npx playwright test --project=setup --project=iphone-safari --project=iphone-no-js --project=iphone-reduced
+
+      - name: Upload Playwright report
+        if: >-
+          failure()
+          && (needs.changes.outputs.py_changed == 'true' || needs.changes.outputs.assets_changed == 'true')
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 14
+
+      - name: Skip message
+        if: needs.changes.outputs.py_changed == 'false' && needs.changes.outputs.assets_changed == 'false'
+        run: echo "⏭️  Skipping browser tests - no Python or frontend files were changed" >> $GITHUB_STEP_SUMMARY
+
   # The image is built here, on a 16GB runner, instead of on the 3.7GB VPS.
   # Building there spiked memory hard enough to reach the OOM killer and made a
   # cold deploy take longer than the SSH action's timeout.
   build-image:
     name: Build & push image
-    needs: test
+    needs: [test, e2e]
     if: github.ref == 'refs/heads/master' && github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
@@ -228,7 +339,7 @@ jobs:
 
   deploy:
     name: Deploy to VPS
-    needs: [test, build-image]
+    needs: [test, e2e, build-image]
     if: github.ref == 'refs/heads/master' && github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
