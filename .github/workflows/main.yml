@@ -180,32 +180,94 @@ jobs:
           path: ttstats/htmlcov/
           retention-days: 30
 
-  deploy:
-    name: Deploy to VPS
+  # The image is built here, on a 16GB runner, instead of on the 3.7GB VPS.
+  # Building there spiked memory hard enough to reach the OOM killer and made a
+  # cold deploy take longer than the SSH action's timeout.
+  build-image:
+    name: Build & push image
     needs: test
     if: github.ref == 'refs/heads/master' && github.event_name == 'push'
     runs-on: ubuntu-latest
-    
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.name.outputs.image }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # GHCR rejects uppercase path segments and the owner is "Eyedema".
+      - name: Compute image name
+        id: name
+        run: echo "image=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/ttstats-web" >> $GITHUB_OUTPUT
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/django/Dockerfile
+          # The VPS is x86_64. Building only what it runs keeps this fast.
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ steps.name.outputs.image }}:${{ github.sha }}
+            ${{ steps.name.outputs.image }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: Deploy to VPS
+    needs: [test, build-image]
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+
     steps:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@master
+        env:
+          # Pinned to this commit's image, so a rollback is just re-running an
+          # older deploy rather than a rebuild.
+          WEB_IMAGE: ${{ needs.build-image.outputs.image }}:${{ github.sha }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          # appleboy/ssh-action defaults to a 10m command_timeout, which is
-          # shorter than a cold `--build` on this VPS: the deploy of the
-          # participant refactor was killed while apt was still installing
-          # build-essential, leaving the repo pulled but the containers on the
-          # previous image. The build is the slow part, not the migrate.
-          command_timeout: 40m
+          # The VPS no longer builds, so this is pull + restart + migrate. The
+          # generous timeout is kept for the migrate step, which is the only
+          # part whose duration depends on the data.
+          command_timeout: 20m
+          # GITHUB_TOKEN is what lets the VPS pull from GHCR without a
+          # long-lived deploy key or making the package public.
+          envs: WEB_IMAGE,GHCR_TOKEN,GHCR_USER
           script: |
             set -e
             cd ${{ secrets.WORK_DIR }}
             git pull
-            docker compose -f compose.prod.yml up -d --build
+            echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+            export WEB_IMAGE
+            docker compose -f compose.prod.yml pull web
+            docker compose -f compose.prod.yml up -d
             docker compose -f compose.prod.yml exec -T web python manage.py migrate
             docker compose -f compose.prod.yml exec -T web python manage.py collectstatic --noinput
+            docker logout ghcr.io
+            # Keep the box from filling up with superseded images.
+            docker image prune -f
 
       - name: Deployment status
         run: echo "✅ Deployment to VPS completed successfully!"
