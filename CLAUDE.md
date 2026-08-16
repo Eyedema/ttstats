@@ -269,6 +269,26 @@ Two shapes, both in use:
 - `[x-cloak]` is declared once in `app.css`. Alpine is deferred, so every `x-show` element needs it
   or it flashes visible on first paint. Don't re-add a per-template `<style>` copy.
 
+### Production sends a CSP; dev does not
+
+**`prod.py`'s `script-src` is `'self' 'unsafe-inline'` -- no `'unsafe-eval'`.**
+Alpine 3's standard build compiles every expression with `new Function()`, so
+on the live site `x-data`, `x-show`, `x-text` and `@click` **all throw**, while
+Alpine still gets far enough to strip `x-cloak`. Overlays therefore render open
+with dead dismiss controls. This is exactly how the mobile drawer shipped
+broken while pytest, a manual browser pass and the whole Playwright suite were
+green -- none of them had ever seen the header the real server sends.
+
+- **The mobile drawer is deliberately plain JS.** Do not "modernise" it back
+  onto Alpine.
+- **`scoreboard.html` is still Alpine and is therefore non-functional in
+  production.** Fixing it means one of: adding `'unsafe-eval'` (weakens CSP,
+  though `'unsafe-inline'` is already there), switching to `@alpinejs/csp`
+  (every expression must become an `Alpine.data()` component member), or
+  rewriting it in plain JS. Unresolved -- do not assume it works in prod.
+- `tests/e2e/helpers.js` exports `applyProdCSP(page)`; `csp.spec.js` asserts no
+  script is blocked. Any spec covering interactive behaviour should apply it.
+
 ### Fail-closed rule for JS-managed UI
 
 **UI whose hidden state is managed by JavaScript must fail closed.** A drawer
@@ -278,10 +298,12 @@ state depended on Alpine booting *and* on the compiled CSS carrying
 or the user was trapped. The version it replaced used a static `hidden` class
 and needed zero.
 
-- `[x-cloak]{display:none !important}` is **inlined in `base.html`'s `<head>`**
-  as well as in `app.css`, so it cannot be lost to a bad build, a purge, or a
-  failed fetch. Do not remove the inline copy as a duplicate — it is the
-  belt, and `app.css` is the braces.
+- `[x-cloak]{display:none !important}` and `#mobile-menu-scrim.hidden{display:none}`
+  are **inlined in `base.html`'s `<head>`** as well as coming from `app.css`, so
+  they cannot be lost to a bad build, a purge, or a failed fetch. Do not remove
+  the inline copies as duplicates — the drawer is the one element that is
+  unrecoverable when it renders by mistake, since it covers the viewport and
+  its dismiss control is inside it.
 - Every new overlay/drawer/modal needs a spec asserting it stays closed when
   Alpine and/or the stylesheet fail to load (`tests/e2e/mobile-drawer.spec.js`).
 - **pytest cannot see any of this.** It asserts on the rendered template

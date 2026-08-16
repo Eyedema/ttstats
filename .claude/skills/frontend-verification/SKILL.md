@@ -38,6 +38,20 @@ Concretely, in this repo:
   spec in `tests/e2e/mobile-drawer.spec.js` style asserting it stays closed
   when its dependencies fail to load.
 
+## Production sends a CSP; dev does not
+
+The single biggest blind spot, and the one that actually caused the outage.
+`prod.py` sets `script-src 'self' 'unsafe-inline'` with **no `'unsafe-eval'`**.
+Alpine 3 compiles every expression with `new Function()`, so on the live site
+all of it throws while `x-cloak` still gets stripped.
+
+Apply `applyProdCSP(page)` from `helpers.js` in any spec covering interactive
+behaviour, and keep `csp.spec.js`'s "no script is blocked by the policy" check
+green. A local pass proves nothing about production unless the header is there.
+
+`scoreboard.html` is still Alpine and does not work in production. That is a
+known, unresolved gap -- do not report it as working.
+
 ## What pytest can and cannot see
 
 | Question | pytest | Playwright |

@@ -54,6 +54,23 @@ CSP_SCRIPT_SRC = (
     # <script> blocks. B.5 moves the rules out of them; the directive can
     # tighten once nothing inline remains.
     "'unsafe-inline'",
+    # Alpine 3's standard build compiles every expression with new Function().
+    # Without this the live scoreboard is dead on arrival in production -- 27
+    # CSP violations, and choosing a server does nothing -- while working
+    # perfectly in dev, which sends no CSP at all. The mobile drawer shipped
+    # broken for exactly this reason before anyone noticed the scoreboard was
+    # too.
+    #
+    # This is a real weakening, and it is deliberate. It is also a smaller step
+    # than it looks: 'unsafe-inline' above already permits injected inline
+    # scripts, so the policy's XSS value is limited today either way. The way
+    # to remove BOTH is the @alpinejs/csp build (every expression becomes an
+    # Alpine.data() member), done alongside B.5's removal of inline scripts.
+    #
+    # The e2e suite deliberately keeps testing against the stricter policy --
+    # see PROD_CSP in tests/e2e/helpers.js -- so the mobile drawer, which is
+    # plain JS, can never quietly regress onto eval.
+    "'unsafe-eval'",
 )
 CSP_STYLE_SRC = (
     "'self'",
