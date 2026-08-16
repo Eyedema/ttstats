@@ -12,7 +12,15 @@
          stylesheet having been built, purged correctly, or fetched at all. A
          drawer that fails open is unclosable, because its close button is also
          Alpine. This shipped once already. -->
-    <style>[x-cloak]{display:none !important}</style>
+    <style>
+      [x-cloak]{display:none !important}
+      /* The drawer's closed state must not depend on app.css arriving. It is
+         the only element on the page that is unrecoverable when it renders by
+         mistake -- it covers the viewport and its dismiss control is inside
+         it -- so its one critical rule is inlined rather than trusted to a
+         build step, a purge pass and a network fetch. */
+      #mobile-menu-scrim.hidden{display:none !important}
+    </style>
 
     <link rel="stylesheet" href="{% static 'pingpong/css/app.css' %}">
 
@@ -44,9 +52,7 @@
 <body class="bg-background text-foreground"
       hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
 
-    <div class="flex min-h-screen"
-         x-data="{ menuOpen: false }"
-         @keydown.escape.window="menuOpen = false">
+    <div class="flex min-h-screen">
         <!-- Sidebar -->
         <aside
             class="hidden lg:flex lg:flex-col lg:w-64 lg:fixed lg:inset-y-0 lg:left-0 border-r chrome-blur lg:overflow-y-auto">
@@ -181,8 +187,8 @@
              scrolls; the boundary is a soft edge rather than a hard rule. -->
         <div class="lg:hidden fixed top-0 left-0 right-0 chrome-blur chrome-edge-bottom z-10">
             <div class="flex items-center p-4">
-                <button @click="menuOpen = true" aria-label="Open menu"
-                        :aria-expanded="menuOpen"
+                <button id="mobile-menu-open" type="button" aria-label="Open menu"
+                        aria-expanded="false" aria-controls="mobile-menu-panel"
                         class="p-2 hover:bg-secondary active:bg-secondary/80 rounded-md transition-colors">
                     <img src="{% static 'pingpong/icons/menu.svg' %}" class="w-6 h-6" alt="Menu">
                 </button>
@@ -195,32 +201,26 @@
             </div>
         </div>
 
-        <!-- Mobile menu overlay. The panel enters from the left and leaves the
-             same way -- a drawer that slid in from the edge and then vanished
-             in place reads as a different object arriving and departing. The
-             scrim dims to mark the task as modal. -->
+        <!-- Mobile menu overlay.
+             Deliberately NOT Alpine. Production sends a CSP whose script-src
+             has no 'unsafe-eval', and Alpine 3 compiles every expression with
+             new Function() -- so on the live site x-data/x-show/@click all
+             throw while Alpine still strips x-cloak, leaving this drawer
+             rendered open with a dead close button. That is exactly what
+             shipped. Plain listeners need no eval.
+
+             `hidden` is a static class, so with no JS at all the drawer is
+             closed. Fail closed, never fail open.
+
+             The panel still enters from the left and leaves the same way; the
+             classes are toggled rather than evaluated. -->
         <div id="mobile-menu-scrim"
-             x-show="menuOpen" x-cloak
-             x-transition:enter="transition ease-out duration-200"
-             x-transition:enter-start="opacity-0"
-             x-transition:enter-end="opacity-100"
-             x-transition:leave="transition ease-in duration-150"
-             x-transition:leave-start="opacity-100"
-             x-transition:leave-end="opacity-0"
-             @click.self="menuOpen = false"
-             class="lg:hidden fixed inset-0 bg-black/50 z-20">
+             class="lg:hidden fixed inset-0 bg-black/50 z-20 hidden opacity-0 transition-opacity duration-200">
             <div id="mobile-menu-panel"
-                 x-show="menuOpen"
-                 x-transition:enter="transition ease-out duration-300"
-                 x-transition:enter-start="-translate-x-full opacity-0"
-                 x-transition:enter-end="translate-x-0 opacity-100"
-                 x-transition:leave="transition ease-in duration-200"
-                 x-transition:leave-start="translate-x-0 opacity-100"
-                 x-transition:leave-end="-translate-x-full opacity-0"
-                 class="fixed inset-y-0 left-0 w-64 bg-white border-r overflow-y-auto">
+                 class="fixed inset-y-0 left-0 w-64 bg-white border-r overflow-y-auto -translate-x-full opacity-0 transition duration-300 ease-out">
                 <div class="p-4 border-b flex justify-between items-center">
                     <h2 class="font-semibold">Menu</h2>
-                    <button @click="menuOpen = false" aria-label="Close menu"
+                    <button id="mobile-menu-close" type="button" aria-label="Close menu"
                             class="p-2 hover:bg-secondary active:bg-secondary/80 rounded-md transition-colors">
                         <img src="{% static 'pingpong/icons/x.svg' %}" class="w-5 h-5" alt="Close">
                     </button>
@@ -337,6 +337,58 @@
             </div>
         </main>
     </div>
+
+    <script>
+        // Mobile drawer. Plain listeners on purpose: production's CSP has no
+        // 'unsafe-eval', so anything that evaluates markup expressions is dead
+        // on the live site while working perfectly in dev.
+        (function () {
+            var scrim = document.getElementById('mobile-menu-scrim');
+            var panel = document.getElementById('mobile-menu-panel');
+            var openBtn = document.getElementById('mobile-menu-open');
+            var closeBtn = document.getElementById('mobile-menu-close');
+            if (!scrim || !panel || !openBtn) return;
+
+            // Must outlast the 300ms panel transition. The close path does not
+            // wait on transitionend: reduced motion strips the transition
+            // entirely, the event would never fire, and the drawer would stay
+            // in the DOM as an invisible tap-blocking layer.
+            var LEAVE_MS = 320;
+            var leaveTimer = null;
+
+            function open() {
+                clearTimeout(leaveTimer);
+                scrim.classList.remove('hidden');
+                openBtn.setAttribute('aria-expanded', 'true');
+                // Next frame, so the browser paints the closed state first and
+                // actually animates from it.
+                requestAnimationFrame(function () {
+                    scrim.classList.remove('opacity-0');
+                    panel.classList.remove('-translate-x-full', 'opacity-0');
+                });
+            }
+
+            function close() {
+                scrim.classList.add('opacity-0');
+                panel.classList.add('-translate-x-full', 'opacity-0');
+                openBtn.setAttribute('aria-expanded', 'false');
+                clearTimeout(leaveTimer);
+                leaveTimer = setTimeout(function () {
+                    scrim.classList.add('hidden');
+                }, LEAVE_MS);
+            }
+
+            openBtn.addEventListener('click', open);
+            if (closeBtn) closeBtn.addEventListener('click', close);
+            // Taps on the scrim itself, not on the panel sitting inside it.
+            scrim.addEventListener('click', function (e) {
+                if (e.target === scrim) close();
+            });
+            document.addEventListener('keydown', function (e) {
+                if (e.key === 'Escape' && !scrim.classList.contains('hidden')) close();
+            });
+        })();
+    </script>
 
     {% block extra_js %}{% endblock %}
 </body>

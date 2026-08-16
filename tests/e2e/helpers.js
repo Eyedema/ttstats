@@ -1,5 +1,33 @@
 const { expect } = require('@playwright/test');
 
+/** The Content-Security-Policy the live site sends, copied verbatim from the
+ *  production response headers.
+ *
+ *  Dev sends no CSP at all, which is why the mobile drawer could be broken in
+ *  production while pytest, a manual browser pass and this entire suite were
+ *  green. Specs that exercise interactive behaviour should apply it. */
+const PROD_CSP = [
+  "script-src 'self' 'unsafe-inline'",
+  "frame-ancestors 'none'",
+  "connect-src 'self'",
+  "default-src 'self'",
+  "img-src 'self' data:",
+  "style-src 'self' 'unsafe-inline'",
+  "form-action 'self'",
+  "font-src 'self'",
+].join('; ');
+
+/** Serve every response with the production CSP. */
+async function applyProdCSP(page) {
+  await page.route('**/*', async (route) => {
+    const response = await route.fetch();
+    await route.fulfill({
+      response,
+      headers: { ...response.headers(), 'content-security-policy': PROD_CSP },
+    });
+  });
+}
+
 const E2E_USERNAME = 'e2e';
 const E2E_PASSWORD = 'e2e-local-only';
 
@@ -49,6 +77,8 @@ async function waitForDrawerSettled(page) {
 }
 
 module.exports = {
+  PROD_CSP,
+  applyProdCSP,
   waitForDrawerSettled,
   E2E_USERNAME,
   E2E_PASSWORD,
