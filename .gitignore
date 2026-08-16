@@ -47,3 +47,9 @@ htmlcov/
 .coverage.*
 .codanna
 .fastembed_cache
+# Playwright
+node_modules/
+test-results/
+playwright-report/
+ttstats/e2e.sqlite3
+tests/e2e/.auth/

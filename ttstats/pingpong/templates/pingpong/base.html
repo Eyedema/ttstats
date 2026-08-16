@@ -7,6 +7,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Table Tennis Tracker{% endblock %}</title>
 
+    <!-- Inline, not in app.css: this rule is what keeps Alpine-managed overlays
+         off the screen until Alpine boots, so it must not depend on the
+         stylesheet having been built, purged correctly, or fetched at all. A
+         drawer that fails open is unclosable, because its close button is also
+         Alpine. This shipped once already. -->
+    <style>[x-cloak]{display:none !important}</style>
+
     <link rel="stylesheet" href="{% static 'pingpong/css/app.css' %}">
 
     <!-- htmx must load before Alpine: Alpine's defer'd init should see any
@@ -192,7 +199,8 @@
              same way -- a drawer that slid in from the edge and then vanished
              in place reads as a different object arriving and departing. The
              scrim dims to mark the task as modal. -->
-        <div x-show="menuOpen" x-cloak
+        <div id="mobile-menu-scrim"
+             x-show="menuOpen" x-cloak
              x-transition:enter="transition ease-out duration-200"
              x-transition:enter-start="opacity-0"
              x-transition:enter-end="opacity-100"
@@ -201,7 +209,8 @@
              x-transition:leave-end="opacity-0"
              @click.self="menuOpen = false"
              class="lg:hidden fixed inset-0 bg-black/50 z-20">
-            <div x-show="menuOpen"
+            <div id="mobile-menu-panel"
+                 x-show="menuOpen"
                  x-transition:enter="transition ease-out duration-300"
                  x-transition:enter-start="-translate-x-full opacity-0"
                  x-transition:enter-end="translate-x-0 opacity-100"

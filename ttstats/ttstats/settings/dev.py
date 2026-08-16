@@ -21,10 +21,13 @@ if os.environ.get('DATABASE_URL'):
         )
     }
 else:
+    # TTSTATS_SQLITE_NAME lets the Playwright suite point at a throwaway file
+    # instead of the working db.sqlite3, so an e2e run cannot clobber whatever
+    # you have been clicking around in.
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.sqlite3',
-            'NAME': BASE_DIR / 'db.sqlite3',
+            'NAME': os.environ.get('TTSTATS_SQLITE_NAME') or BASE_DIR / 'db.sqlite3',
         }
     }
 

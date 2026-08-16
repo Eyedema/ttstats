@@ -18,6 +18,11 @@ npm run build                                      # Vendor JS + compile CSS
 npm run watch:css                                  # Rebuild CSS on template change
 python scripts/check_css_coverage.py               # Classes used in templates but absent from the build
 
+# End-to-end (real WebKit at iPhone size -- see the frontend-verification skill)
+npm run test:e2e                                   # All projects
+npm run test:e2e -- --project=iphone-safari        # One project
+npm run test:e2e:ui                                # Interactive debugging
+
 # Development
 docker compose -f compose.dev.yml up --build       # Start dev environment (includes the assets watcher)
 docker compose -f compose.dev.yml exec web python manage.py migrate  # Run migrations
@@ -263,6 +268,25 @@ Two shapes, both in use:
   attribute; a new flash partial must too.
 - `[x-cloak]` is declared once in `app.css`. Alpine is deferred, so every `x-show` element needs it
   or it flashes visible on first paint. Don't re-add a per-template `<style>` copy.
+
+### Fail-closed rule for JS-managed UI
+
+**UI whose hidden state is managed by JavaScript must fail closed.** A drawer
+shipped that was permanently open and unclosable on iOS Safari: its "closed"
+state depended on Alpine booting *and* on the compiled CSS carrying
+`[x-cloak]`, and its close button was also Alpine. Two things had to go right
+or the user was trapped. The version it replaced used a static `hidden` class
+and needed zero.
+
+- `[x-cloak]{display:none !important}` is **inlined in `base.html`'s `<head>`**
+  as well as in `app.css`, so it cannot be lost to a bad build, a purge, or a
+  failed fetch. Do not remove the inline copy as a duplicate — it is the
+  belt, and `app.css` is the braces.
+- Every new overlay/drawer/modal needs a spec asserting it stays closed when
+  Alpine and/or the stylesheet fail to load (`tests/e2e/mobile-drawer.spec.js`).
+- **pytest cannot see any of this.** It asserts on the rendered template
+  string; the string was perfect while the page was broken. Claims about what
+  is on screen need `npm run test:e2e`. See the `frontend-verification` skill.
 
 ### Motion, materials & user preferences
 - **The `prefers-reduced-motion` / `prefers-reduced-transparency` blocks in `app.css` sit outside
