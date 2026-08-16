@@ -12,6 +12,7 @@ Exit code is 1 if anything is missing. Expect some false positives -- dynamic
 values, Alpine expressions and non-Tailwind hook classes all look like classes
 to a regex -- so read the output rather than wiring this into CI as a gate.
 """
+import ast
 import pathlib
 import re
 import sys
@@ -23,8 +24,14 @@ FORMS = ROOT / "ttstats/pingpong/forms.py"
 
 # class="..." and class='...' in templates, plus the Python widget class strings.
 CLASS_ATTR = re.compile(r"""class\s*=\s*["']([^"']*)["']""")
-# A token that looks like a utility rather than prose or a template expression.
-TOKEN = re.compile(r"^[a-z0-9:\[\]\-_./\\%!()]+$", re.IGNORECASE)
+# Django tags inside a class attribute. Stripping the delimiters and their
+# contents leaves the literal classes from every branch, which is what we want:
+# `{% if x %}bg-success{% else %}bg-muted{% endif %}` -> `bg-success bg-muted`.
+# Without this the tag internals (`if`, `endif`, `form.name.errors`) all look
+# like classes and bury the real findings.
+TEMPLATE_TAG = re.compile(r"\{\{.*?\}\}|\{%.*?%\}", re.DOTALL)
+# A token that looks like a utility rather than prose.
+TOKEN = re.compile(r"^[a-z][a-z0-9:\[\]\-_./\\%!()]*$", re.IGNORECASE)
 
 # Classes the app defines itself or that come from a library, not Tailwind.
 IGNORE_PREFIXES = (
@@ -33,9 +40,14 @@ IGNORE_PREFIXES = (
     "htmx-",
 )
 IGNORE_EXACT = {
+    # Defined by the app's own CSS, or used only as a JS/CSS hook.
     "mobile-stack-table",
     "singles-only",
     "doubles-only",
+    "doubles-required",
+    "player-select",
+    "no-results",  # Tom Select dropdown internals
+    "button",  # Django admin's own class, in the admin/ template overrides
     "hidden",  # real Tailwind class, but also toggled by JS; keep noise down
 }
 
@@ -47,16 +59,40 @@ def used_classes() -> set[str]:
         sources.append(FORMS)
     for path in sources:
         text = path.read_text(encoding="utf-8", errors="replace")
+        # Strip Django tags from the whole file *before* looking for class
+        # attributes. A single quote inside a tag -- {% if f == 'all' %} --
+        # otherwise terminates the attribute regex early and leaks the tag's
+        # internals into the results.
+        text = TEMPLATE_TAG.sub(" ", text)
         for match in CLASS_ATTR.finditer(text):
             for token in match.group(1).split():
                 found.add(token)
-        # forms.py builds bare class strings, not class="..." attributes.
+        # forms.py builds bare class strings rather than class="..." attrs.
+        # Parse it instead of scanning lines -- a line-based reader picks up
+        # dict keys like `'class': INPUT_CSS` as though they were classes.
         if path == FORMS:
-            for line in text.splitlines():
-                if "_CSS" in line and "=" in line and "'" in line:
-                    inner = line.split("'")
-                    if len(inner) > 1:
-                        found.update(inner[1].split())
+            found.update(_class_strings_in_python(text))
+    return found
+
+
+def _class_strings_in_python(source: str) -> set[str]:
+    """Every string literal in a .py file that reads like a list of classes.
+
+    Heuristic: several whitespace-separated tokens, most of which carry a
+    hyphen or a variant colon. Real utility strings are dense with those
+    (`h-12 w-full rounded-md md:text-sm`); help text and error messages are
+    not, so prose does not leak in.
+    """
+    found: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+            continue
+        tokens = node.value.split()
+        if len(tokens) < 2 or not all(TOKEN.match(t) for t in tokens):
+            continue
+        utility_ish = sum(1 for t in tokens if "-" in t or ":" in t)
+        if utility_ish >= 0.6 * len(tokens):
+            found.update(tokens)
     return found
 
 
@@ -76,8 +112,8 @@ def main() -> int:
     defined = defined_classes(CSS.read_text())
     missing = []
     for cls in sorted(used_classes()):
-        if not TOKEN.match(cls) or "{" in cls or "}" in cls:
-            continue  # template expression, not a literal class
+        if not TOKEN.match(cls):
+            continue  # not a literal class name
         if cls in IGNORE_EXACT or cls.startswith(IGNORE_PREFIXES):
             continue
         if cls not in defined:

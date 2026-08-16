@@ -22,6 +22,13 @@ module.exports = {
         ring: 'hsl(222.2 84% 4.9%)',
         background: 'hsl(0 0% 100%)',
         foreground: 'hsl(222.2 84% 4.9%)',
+        // `card` was referenced by templates but never defined -- not here
+        // and not in the old inline CDN config -- so bg-card rendered
+        // nothing. shadcn's default card is the background colour.
+        card: {
+          DEFAULT: 'hsl(0 0% 100%)',
+          foreground: 'hsl(222.2 84% 4.9%)',
+        },
         primary: {
           DEFAULT: 'hsl(222.2 47.4% 11.2%)',
           foreground: 'hsl(210 40% 98%)',
