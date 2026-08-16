@@ -19,10 +19,21 @@ unset DATABASE_URL || true
 E2E_DB="$REPO_ROOT/ttstats/e2e.sqlite3"
 export TTSTATS_SQLITE_NAME="$E2E_DB"
 
-npm run build:css >/dev/null
+# `build`, not `build:css`: the vendored htmx/Alpine bundles are gitignored
+# too. On a clean checkout (i.e. CI) skipping the vendor step means Alpine
+# 404s, and the drawer specs would then pass for entirely the wrong reason --
+# a drawer that fails closed because the framework never loaded is exactly the
+# scenario the fail-closed specs deliberately create.
+npm run build >/dev/null
 
 cd "$REPO_ROOT/ttstats"
-PY="$REPO_ROOT/.venv/bin/python"
+
+# Locally this is the project venv; in CI the interpreter is already on PATH
+# with the requirements installed, and there is no .venv to find.
+PY="${E2E_PYTHON:-$REPO_ROOT/.venv/bin/python}"
+if [ ! -x "$PY" ]; then
+  PY="$(command -v python3)"
+fi
 
 rm -f "$E2E_DB"
 "$PY" manage.py migrate --noinput >/dev/null
