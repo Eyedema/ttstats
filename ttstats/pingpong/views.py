@@ -13,7 +13,7 @@ from django.core.exceptions import PermissionDenied
 from django.core.mail import send_mail
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db import transaction
-from django.db.models import Count, F, Q, Sum
+from django.db.models import Count, F, Prefetch, Q, Sum
 from django.http import HttpResponse, JsonResponse
 from django.urls import reverse
 from django.views.decorators.http import require_POST
@@ -33,17 +33,81 @@ from django_ratelimit.exceptions import Ratelimited
 
 logger = logging.getLogger(__name__)
 
+from . import live_scoring
 from .forms import GameForm, MatchEditForm, MatchForm, PlayerRegistrationForm, ScheduledMatchForm, MatchConvertForm, \
     ChampionshipCreateForm, ChampionshipEditForm, ScheduledMatchEditForm
 from .achievements import get_achievement_progress
 from .elo import calculate_expected_score, get_win_probability
-from .models import Game, Location, Match, Player, UserProfile, MatchConfirmation, ScheduledMatch, Team, Championship, EloHistory
+from .models import Game, Location, Match, MatchParticipant, Player, UserProfile, MatchConfirmation, ScheduledMatch, ScheduledMatchParticipant, Side, Championship, EloHistory, format_side_label
 from .emails import send_scheduled_match_email, send_passkey_deleted_email
+from .services import set_match_sides, set_scheduled_match_sides
 
 try:
     from django_otp_webauthn.models import WebAuthnCredential
 except ImportError:
     WebAuthnCredential = None
+
+
+def append_widget_class(field, css):
+    """Add classes to a field's widget without discarding what is there.
+
+    `widget.attrs.update({"class": ...})` replaces the attribute outright,
+    which silently drops the shared `field-input` styling that
+    StyledFormMixin applied.
+    """
+    existing = field.widget.attrs.get("class", "")
+    field.widget.attrs["class"] = f"{existing} {css}".strip()
+
+
+def participants_prefetch(lookup="participants", scheduled=False):
+    """Prefetch participants with their player/user/profile in one go.
+
+    Ordered by player name so cached_player1/2 match the old
+    team.players.all() ordering (Player.Meta.ordering).
+    """
+    model = ScheduledMatchParticipant if scheduled else MatchParticipant
+    return Prefetch(
+        lookup,
+        queryset=model.objects.select_related("player__user__profile").order_by(
+            "player__name"
+        ),
+    )
+
+
+def _player_side(player, match):
+    """Which side a player is on, from prefetched participants."""
+    for participant in match.participants.all():
+        if participant.player_id == player.pk:
+            return participant.side
+    return None
+
+
+def _player_won(player, match):
+    return (
+        match.winner_side is not None
+        and match.winner_side == _player_side(player, match)
+    )
+
+
+def cache_side_players(obj):
+    """Attach cached_team1_players / cached_team2_players (+ player1/2).
+
+    Reads the prefetched participants, so it costs no extra queries.
+    """
+    participants = list(obj.participants.all())
+    obj.cached_team1_players = [p.player for p in participants if p.side == Side.ONE]
+    obj.cached_team2_players = [p.player for p in participants if p.side == Side.TWO]
+    obj.cached_player1 = (
+        obj.cached_team1_players[0] if obj.cached_team1_players else None
+    )
+    obj.cached_player2 = (
+        obj.cached_team2_players[0] if obj.cached_team2_players else None
+    )
+    # Labels too: templates rendering {{ match.team1 }} hit Team.__str__, which
+    # queries players once per row.
+    obj.cached_side1_label = format_side_label(obj.cached_team1_players) or "Side 1"
+    obj.cached_side2_label = format_side_label(obj.cached_team2_players) or "Side 2"
+    return obj
 
 
 # Create your views here.
@@ -67,11 +131,9 @@ class MatchListView(LoginRequiredMixin, ListView):
     def get_queryset(self):
         return (
             Match.objects.all()
-            .select_related("team1", "team2", "location", "winner", "championship")
+            .select_related("location", "championship")
             .prefetch_related(
-                "team1__players__user__profile",
-                "team2__players__user__profile",
-                "winner__players__user__profile",
+                participants_prefetch(),
                 "games",
                 "confirmations",
             )
@@ -94,36 +156,25 @@ class MatchListView(LoginRequiredMixin, ListView):
             # This prevents template from triggering new queries
             games = list(match.games.all())
             match.cached_team1_score = sum(
-                1 for g in games if g.winner_id == match.team1_id
+                1 for g in games if g.winner_side == Side.ONE
             )
             match.cached_team2_score = sum(
-                1 for g in games if g.winner_id == match.team2_id
+                1 for g in games if g.winner_side == Side.TWO
             )
 
-            # Cache team players as lists to avoid queries in template
-            if match.team1:
-                match.cached_team1_players = list(match.team1.players.all())
-                match.cached_player1 = (
-                    match.cached_team1_players[0] if match.cached_team1_players else None
-                )
-            else:
-                match.cached_team1_players = []
-                match.cached_player1 = None
+            # Cache side players as lists to avoid queries in template
+            cache_side_players(match)
 
-            if match.team2:
-                match.cached_team2_players = list(match.team2.players.all())
-                match.cached_player2 = (
-                    match.cached_team2_players[0] if match.cached_team2_players else None
-                )
-            else:
-                match.cached_team2_players = []
-                match.cached_player2 = None
-
-            # Cache winner players
-            if match.winner:
-                match.cached_winner_players = list(match.winner.players.all())
+            # Cache winner players and label
+            if match.winner_side == Side.ONE:
+                match.cached_winner_players = match.cached_team1_players
+                match.cached_winner_label = match.cached_side1_label
+            elif match.winner_side == Side.TWO:
+                match.cached_winner_players = match.cached_team2_players
+                match.cached_winner_label = match.cached_side2_label
             else:
                 match.cached_winner_players = []
+                match.cached_winner_label = ""
 
             # Cache match_confirmed status to avoid N+1 queries
             # This replicates the logic from Match.team1_confirmed and Match.team2_confirmed
@@ -176,14 +227,20 @@ class MatchDetailView(LoginRequiredMixin, DetailView):
         elo_changes = match.elo_history.select_related('player').all()
 
         # Pass separate elo changes for easier template access
+        side_by_player = {
+            p.player_id: p.side for p in match.participants.all()
+        }
         for change in elo_changes:
-            if change.player in match.team1.players.all():
+            side = side_by_player.get(change.player_id)
+            if side == Side.ONE:
                 context['player1_elo_change'] = change
-            elif change.player in match.team2.players.all():
+            elif side == Side.TWO:
                 context['player2_elo_change'] = change
 
         # Win probability (uses pre-match Elo if EloHistory exists)
-        t1_pct, t2_pct = get_win_probability(match.team1, match.team2, match=match)
+        t1_pct, t2_pct = get_win_probability(
+            match.side1_players, match.side2_players, match=match
+        )
         context['team1_win_pct'] = t1_pct
         context['team2_win_pct'] = t2_pct
 
@@ -211,17 +268,14 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
             # Cache miss - fetch and compute stats
             # Use is_confirmed=True to filter at DB level
             all_matches = Match.objects.filter(
-                Q(team1__players=player) | Q(team2__players=player),
+                participants__player=player,
                 is_confirmed=True,
-            ).select_related('team1', 'team2', 'winner').prefetch_related(
-                'team1__players',
-                'team2__players',
-            ).order_by('-date_played').distinct()
+            ).prefetch_related(participants_prefetch()).order_by('-date_played')
 
             confirmed_matches = list(all_matches)
 
             total_matches = len(confirmed_matches)
-            wins = len([m for m in confirmed_matches if m.winner and player in m.winner.players.all()])
+            wins = len([m for m in confirmed_matches if _player_won(player, m)])
             losses = total_matches - wins
             streaks = self._calculate_streaks(confirmed_matches)
 
@@ -239,12 +293,9 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
 
         # Always fetch paginated matches fresh (lightweight with DB-level filtering)
         confirmed_matches_qs = Match.objects.filter(
-            Q(team1__players=player) | Q(team2__players=player),
+            participants__player=player,
             is_confirmed=True,
-        ).select_related('team1', 'team2', 'winner').prefetch_related(
-            'team1__players',
-            'team2__players',
-        ).order_by('-date_played').distinct()
+        ).prefetch_related(participants_prefetch()).order_by('-date_played')
 
         from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
 
@@ -260,7 +311,8 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
 
         # Add p1_score, p2_score, and player_won to each match from player's perspective
         for match in confirmed_matches_page.object_list:
-            if player in match.team1.players.all():
+            cache_side_players(match)
+            if _player_side(player, match) == Side.ONE:
                 match.p1_score = match.team1_score
                 match.p2_score = match.team2_score
             else:
@@ -268,7 +320,7 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
                 match.p2_score = match.team1_score
 
             # Check if player won (works for both 1v1 and 2v2)
-            match.player_won = match.winner and player in match.winner.players.all()
+            match.player_won = _player_won(player, match)
 
         # Elo chart data (included in player_stats cache)
         if 'elo_chart_labels' in cached_stats:
@@ -311,7 +363,7 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
         longest_win = longest_loss = win_streak = loss_streak = 0
 
         for match in matches:
-            player_won = self.object in match.winner.players.all()
+            player_won = _player_won(self.object, match)
 
             if player_won:
                 if streak_type != 'win':
@@ -320,7 +372,7 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
                     streak_type = 'win'
                 win_streak += 1
                 current_streak = win_streak
-            elif match.winner:  # Loss
+            elif match.winner_side:  # Loss
                 if streak_type != 'loss':
                     longest_win = max(longest_win, win_streak)
                     win_streak = loss_streak = 0
@@ -374,18 +426,17 @@ class DashboardView(LoginRequiredMixin, TemplateView):
             user_player = self.request.user.player
             live_qs = Match.live_objects.filter(
                 scorekeeper=user_player, is_live=True
-            ).select_related("team1", "team2").prefetch_related(
-                "team1__players", "team2__players"
-            )
+            ).prefetch_related(participants_prefetch())
             for m in live_qs:
                 state = m.live_state or {}
+                cache_side_players(m)
                 live_matches.append({
                     "pk": m.pk,
                     "opponent": " & ".join(
-                        p.name for p in m.team2.players.all()
+                        p.name for p in m.cached_team2_players
                     ),
                     "team1_label": " & ".join(
-                        p.name for p in m.team1.players.all()
+                        p.name for p in m.cached_team1_players
                     ),
                     "team1_games": state.get("team1_games", 0),
                     "team2_games": state.get("team2_games", 0),
@@ -458,9 +509,9 @@ class GameCreateView(LoginRequiredMixin, CreateView):
             raise PermissionDenied
 
         # Check if match is already complete
-        if self.match.winner:
+        if self.match.winner_side:
             messages.warning(
-                request, f"This match is already complete. {self.match.winner} won!"
+                request, f"This match is already complete. {self.match.winner_label} won!"
             )
             return redirect("pingpong:match_detail", pk=self.match.pk)
 
@@ -469,6 +520,9 @@ class GameCreateView(LoginRequiredMixin, CreateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["match"] = self.match
+        # The Alt+1..4 shortcut scorelines, derived from the scoring rules
+        # rather than typed into the template's JavaScript.
+        context["score_presets"] = live_scoring.common_final_scores()
         # Get next game number
         last_game = self.match.games.order_by("-game_number").first()
         context["next_game_number"] = (last_game.game_number + 1) if last_game else 1
@@ -492,7 +546,7 @@ class GameCreateView(LoginRequiredMixin, CreateView):
         self.match.refresh_from_db()
 
         # Check if match is now complete
-        if self.match.winner:
+        if self.match.winner_side:
             # Check if it was auto-confirmed by signals.py logic
             if self.match.match_confirmed:
                 unverified_players = self.match.get_unverified_players()
@@ -503,7 +557,8 @@ class GameCreateView(LoginRequiredMixin, CreateView):
                     )
             messages.success(
                 self.request,
-                f"🎉 Match Complete! {self.match.winner} wins {self.match.team1_score}-{self.match.team2_score}!", #TODO: "wins", but what if it is a team with 2 names?
+                f"🎉 Match Complete! {self.match.winner_label} wins "
+                f"{self.match.side1_score}-{self.match.side2_score}!",
             )
             # Always go to match detail if match is complete, regardless of button pressed
             return redirect("pingpong:match_detail", pk=self.match.pk)
@@ -561,8 +616,8 @@ class MatchCreateView(LoginRequiredMixin, CreateView):
                 # Pre-select and lock user as player1
                 form.fields["player1"].initial = user_player
                 form.fields["player1"].disabled = True
-                form.fields["player1"].widget.attrs.update(
-                    {"class": "bg-muted cursor-not-allowed"}
+                append_widget_class(
+                    form.fields["player1"], "bg-muted cursor-not-allowed"
                 )
                 form.fields[
                     "player1"
@@ -653,57 +708,12 @@ class MatchCreateView(LoginRequiredMixin, CreateView):
                 )
                 return self.form_invalid(form)
 
-        # Create Team objects
-        from .models import Team
-
+        # Sides are written after the match exists (they need its pk).
         if is_double:
-            # Create 2-player teams (or reuse existing)
-            team1 = (Team.objects
-                     .filter(players=player1)
-                     .filter(players=player2)
-                     .first()
-                     )
-            if not team1:
-                team1 = Team.objects.create()
-                team1.players.set([player1, player2])
-                team1.save()
-
-            team2 = (Team.objects
-                     .filter(players=player3)
-                     .filter(players=player4)
-                     .first()
-                     )
-            if not team2:
-                team2 = Team.objects.create()
-                team2.players.set([player3, player4])
-                team2.save()
+            self._sides = ([player1, player2], [player3, player4])
         else:
-            # Create 1-player teams (or reuse existing)
-            team1 = (Team.objects
-                     .filter(players=player1)
-                     .annotate(num_players=Count('players'))
-                     .filter(num_players=1)
-                     .first()
-                     )
-            if not team1:
-                team1 = Team.objects.create()
-                team1.players.set([player1])
-                team1.save()
+            self._sides = ([player1], [player2])
 
-            team2 = (Team.objects
-                     .filter(players=player2)
-                     .annotate(num_players=Count('players'))
-                     .filter(num_players=1)
-                     .first()
-                     )
-            if not team2:
-                team2 = Team.objects.create()
-                team2.players.set([player2])
-                team2.save()
-
-        # Assign teams to match instance (don't save yet)
-        form.instance.team1 = team1
-        form.instance.team2 = team2
         form.instance.is_double = is_double
 
         # "Score live" branch — KAN-7. Doubles deferred (KAN-13).
@@ -721,7 +731,10 @@ class MatchCreateView(LoginRequiredMixin, CreateView):
         else:
             messages.success(self.request, "Match created successfully!")
 
-        return super().form_valid(form)
+        response = super().form_valid(form)
+        set_match_sides(self.object, *self._sides)
+        self.object.save()  # recompute now that the sides exist
+        return response
 
 
 class MatchUpdateView(LoginRequiredMixin, UpdateView):
@@ -738,31 +751,43 @@ class MatchUpdateView(LoginRequiredMixin, UpdateView):
 
     def get_form_class(self):
         # If match has a winner, only allow editing location and notes
-        if self.object.winner:
+        if self.object.winner_side:
             return MatchEditForm
         return MatchForm
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["locations"] = Location.objects.all()
-        context["is_complete"] = bool(self.object.winner)
+        context["is_complete"] = bool(self.object.winner_side)
         return context
 
     def get_success_url(self):
         return reverse_lazy("pingpong:match_detail", kwargs={"pk": self.object.pk})
 
     def form_valid(self, form):
-        if self.object.winner:
+        if self.object.winner_side:
             messages.success(self.request, "Match details updated successfully!")
         else:
             messages.success(self.request, "Match updated successfully!")
         return super().form_valid(form)
 
 
+def is_htmx(request):
+    """True when htmx issued this request, so only a fragment is wanted."""
+    return request.headers.get("HX-Request") == "true"
+
+
 class LeaderboardView(LoginRequiredMixin, TemplateView):
     """Display player rankings and statistics"""
 
     template_name = "pingpong/leaderboard.html"
+
+    def get_template_names(self):
+        # htmx asks for just the results block; a normal load gets the page.
+        # Both render the same partial, so they cannot drift.
+        if is_htmx(self.request):
+            return ["pingpong/_leaderboard_results.html"]
+        return [self.template_name]
 
     def _leaderboard_cache_key(self, match_type, date_filter, start_date, end_date, top_x):
         """Build a cache key that includes filter params and a generation counter."""
@@ -834,13 +859,8 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
             )
 
         # Prefetch only what we need for stats
-        matches_query = matches_query.select_related(
-            'team1', 'team2', 'winner'
-        ).prefetch_related(
-            'team1__players',
-            'team2__players',
-            'winner__players',
-            'games'
+        matches_query = matches_query.prefetch_related(
+            participants_prefetch(), 'games'
         )
 
         # Load all confirmed matches once into memory
@@ -849,18 +869,12 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
         # Build a lookup dictionary: player_id -> list of their matches
         # This avoids N+1 queries
         player_matches = {}
+        player_won_match = set()  # (player_id, match_id) pairs
         for match in confirmed_matches:
-            # Get players from team1
-            for player in match.team1.players.all():
-                if player.id not in player_matches:
-                    player_matches[player.id] = []
-                player_matches[player.id].append(match)
-
-            # Get players from team2
-            for player in match.team2.players.all():
-                if player.id not in player_matches:
-                    player_matches[player.id] = []
-                player_matches[player.id].append(match)
+            for participant in match.participants.all():
+                player_matches.setdefault(participant.player_id, []).append(match)
+                if match.winner_side == participant.side:
+                    player_won_match.add((participant.player_id, match.id))
 
         # Pre-cache game counts for all matches to avoid repeated queries
         match_game_counts = {}
@@ -886,11 +900,11 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
             total_matches = len(player_match_list)
 
             # Calculate wins using cached data
-            wins = 0
-            for match in player_match_list:
-                # winner.players is already prefetched
-                if match.winner and player in match.winner.players.all():
-                    wins += 1
+            wins = sum(
+                1
+                for match in player_match_list
+                if (player.id, match.id) in player_won_match
+            )
 
             losses = total_matches - wins
             win_rate = (wins / total_matches * 100) if total_matches > 0 else 0
@@ -960,54 +974,49 @@ class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
                 return context
 
             # Check if any 2v2 matches exist between these players
-            has_2v2_matches = Match.objects.filter(
-                Q(team1__players=player1) | Q(team2__players=player1)
-            ).filter(
-                Q(team1__players=player2) | Q(team2__players=player2)
-            ).filter(
-                is_double=True
-            ).exists()
+            has_2v2_matches = (
+                Match.objects.filter(participants__player=player1)
+                .filter(participants__player=player2)
+                .filter(is_double=True)
+                .exists()
+            )
             context['has_2v2_matches'] = has_2v2_matches
 
             # Get all confirmed 1v1 matches between these players
             # Use is_confirmed=True for DB-level filtering
+            # A true 1v1: exactly two participants, one being each player.
             all_matches = (
-                Match.objects.annotate(
-                    team1_player_count=Count('team1__players', distinct=True),
-                    team2_player_count=Count('team2__players', distinct=True)
-                )
-                .filter(
-                    team1_player_count=1,
-                    team2_player_count=1,
-                    is_confirmed=True,
-                )
-                .filter(
-                    Q(team1__players=player1, team2__players=player2) |
-                    Q(team1__players=player2, team2__players=player1)
-                )
-                .select_related("team1", "team2", "winner")
-                .prefetch_related(
-                    "games",
-                    "team1__players",
-                    "team2__players",
-                )
-                .distinct()
+                Match.objects.annotate(participant_count=Count('participants'))
+                .filter(participant_count=2, is_confirmed=True)
+                .filter(participants__player=player1)
+                .filter(participants__player=player2)
+                .prefetch_related("games", participants_prefetch())
                 .order_by("date_played")
             )
 
-            matches = list(all_matches)
+            matches = [cache_side_players(m) for m in all_matches]
+
+            # Orient each match from player1's perspective. The template read
+            # match.player1_score / player2_score, which nothing ever set, so
+            # the score column in the match table rendered blank.
+            for match in matches:
+                if match.cached_player1 == player1:
+                    match.player1_score = match.side1_score
+                    match.player2_score = match.side2_score
+                else:
+                    match.player1_score = match.side2_score
+                    match.player2_score = match.side1_score
+                match.player1_won = _player_won(player1, match)
 
             if matches:
                 # Basic stats (matches is now a list, not QuerySet)
                 total_matches = len(matches)
-                player1_match_wins = len([
-                    m for m in matches
-                    if m.winner and player1 in m.winner.players.all()
-                ])
-                player2_match_wins = len([
-                    m for m in matches
-                    if m.winner and player2 in m.winner.players.all()
-                ])
+                player1_match_wins = len(
+                    [m for m in matches if _player_won(player1, m)]
+                )
+                player2_match_wins = len(
+                    [m for m in matches if _player_won(player2, m)]
+                )
 
                 # Game-level analysis
                 all_games = []
@@ -1022,7 +1031,7 @@ class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
                     games = match.games.all()
                     for game in games:
                         # Determine scores based on who was player1 in the match
-                        if match.team1.players.first() == player1:
+                        if match.cached_player1 == player1:
                             p1_score = game.team1_score
                             p2_score = game.team2_score
                         else:
@@ -1099,27 +1108,25 @@ class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
                 # Recent form (last 5 matches) - matches is already ordered by date_played
                 recent_matches = list(reversed(matches[-5:]))  # Get last 5 and reverse for desc order
                 player1_recent_wins = sum(
-                    1 for m in recent_matches
-                    if m.winner and player1 in m.winner.players.all()
+                    1 for m in recent_matches if _player_won(player1, m)
                 )
                 player2_recent_wins = sum(
-                    1 for m in recent_matches
-                    if m.winner and player2 in m.winner.players.all()
+                    1 for m in recent_matches if _player_won(player2, m)
                 )
 
                 # Match margins (for average margin per match chart)
                 match_margins = []
                 for match in matches:
-                    if match.winner.players.first() == player1:
+                    if _player_won(player1, match):
                         margin = (
                             match.team1_score - match.team2_score
-                            if match.team1.players.first() == player1
+                            if match.cached_player1 == player1
                             else match.team2_score - match.team1_score
                         )
-                    elif match.winner.players.first() == player2:
+                    elif _player_won(player2, match):
                         margin = -(
                             match.team1_score - match.team2_score
-                            if match.team1.players.first() == player1
+                            if match.cached_player1 == player1
                             else match.team2_score - match.team1_score
                         )
                     else:
@@ -1274,8 +1281,7 @@ def match_confirm(request, pk):
         user_player = Player.objects.get(user=request.user)
 
         # Verify the player belongs to one of the two teams
-        if (user_player not in match.team1.players.all() and
-                user_player not in match.team2.players.all()):
+        if not match.participants.filter(player=user_player).exists():
             messages.error(request, "You are not a player in this match.")
             return redirect("pingpong:match_detail", pk=pk)
 
@@ -1407,8 +1413,8 @@ class ScheduledMatchCreateView(LoginRequiredMixin, CreateView):
                 # Pre-select and lock user as player1
                 form.fields["player1"].initial = user_player
                 form.fields["player1"].disabled = True
-                form.fields["player1"].widget.attrs.update(
-                    {"class": "bg-muted cursor-not-allowed"}
+                append_widget_class(
+                    form.fields["player1"], "bg-muted cursor-not-allowed"
                 )
                 form.fields["player1"].help_text = "You are automatically set as Player 1"
 
@@ -1465,40 +1471,10 @@ class ScheduledMatchCreateView(LoginRequiredMixin, CreateView):
                 )
                 return self.form_invalid(form)
 
-        # Create 1-player teams (scheduled matches are singles only for now)
-        from .models import Team
-
-        if True:  # Scheduled matches are singles-only
-            # Create 1-player teams (or reuse existing)
-            team1 = (Team.objects
-                     .filter(players=player1)
-                     .annotate(num_players=Count('players'))
-                     .filter(num_players=1)
-                     .first()
-                     )
-            if not team1:
-                team1 = Team.objects.create()
-                team1.players.set([player1])
-                team1.save()
-
-            team2 = (Team.objects
-                     .filter(players=player2)
-                     .annotate(num_players=Count('players'))
-                     .filter(num_players=1)
-                     .first()
-                     )
-            if not team2:
-                team2 = Team.objects.create()
-                team2.players.set([player2])
-                team2.save()
-
-        # Assign teams to scheduled match
-        form.instance.team1 = team1
-        form.instance.team2 = team2
-
-        # Save the scheduled match
+        # Save first, then attach the sides (they need the pk).
         self.object = form.save()
         scheduled_match = self.object
+        set_scheduled_match_sides(scheduled_match, [player1], [player2])
 
         # Send notification emails to both players
         send_scheduled_match_email(scheduled_match, player1)
@@ -1559,7 +1535,7 @@ class CalendarView(LoginRequiredMixin, TemplateView):
         scheduled_matches = ScheduledMatch.objects.filter(
             scheduled_date__year=year,
             scheduled_date__month=month,
-        ).select_related('match', 'match__team1', 'match__team2').prefetch_related(
+        ).select_related('match').prefetch_related(
             'match__confirmations'
         ).order_by("scheduled_date", "scheduled_time")
 
@@ -1614,13 +1590,16 @@ class CalendarView(LoginRequiredMixin, TemplateView):
         # Get upcoming scheduled matches (all future)
         upcoming_matches = ScheduledMatch.objects.filter(
             scheduled_date__gte=today
-        ).select_related('team1', 'team2').prefetch_related(
-            'team1__players', 'team2__players',
+        ).prefetch_related(
+            participants_prefetch(scheduled=True)
         ).order_by("scheduled_date", "scheduled_time")[:5]
 
         # Attach win probability to upcoming matches
         for sm in upcoming_matches:
-            t1_pct, t2_pct = get_win_probability(sm.team1, sm.team2)
+            cache_side_players(sm)
+            t1_pct, t2_pct = get_win_probability(
+                sm.cached_team1_players, sm.cached_team2_players
+            )
             sm.team1_win_pct = t1_pct
             sm.team2_win_pct = t2_pct
 
@@ -1675,7 +1654,9 @@ class ScheduledMatchDetailView(LoginRequiredMixin, DetailView):
         context['can_convert'] = can_convert
 
         # Win probability
-        t1_pct, t2_pct = get_win_probability(scheduled_match.team1, scheduled_match.team2)
+        t1_pct, t2_pct = get_win_probability(
+            scheduled_match.side1_players, scheduled_match.side2_players
+        )
         context['team1_win_pct'] = t1_pct
         context['team2_win_pct'] = t2_pct
 
@@ -1785,63 +1766,19 @@ class ScheduledMatchConvertView(LoginRequiredMixin, CreateView):
                 )
                 return self.form_invalid(form)
 
-        # Create or reuse Team objects (same logic as MatchCreateView)
+        # Note the pairing differs from MatchCreateView: this form lays out
+        # side 1 as player1+player3.
         if is_double:
-            # Create 2-player teams
-            team1 = (Team.objects
-                     .filter(players=player1)
-                     .filter(players=player3)
-                     .annotate(num_players=Count('players'))
-                     .filter(num_players=2)
-                     .first()
-                     )
-            if not team1:
-                team1 = Team.objects.create()
-                team1.players.set([player1, player3])
-                team1.save()
-
-            team2 = (Team.objects
-                     .filter(players=player2)
-                     .filter(players=player4)
-                     .annotate(num_players=Count('players'))
-                     .filter(num_players=2)
-                     .first()
-                     )
-            if not team2:
-                team2 = Team.objects.create()
-                team2.players.set([player2, player4])
-                team2.save()
+            self._sides = ([player1, player3], [player2, player4])
         else:
-            # Create 1-player teams
-            team1 = (Team.objects
-                     .filter(players=player1)
-                     .annotate(num_players=Count('players'))
-                     .filter(num_players=1)
-                     .first()
-                     )
-            if not team1:
-                team1 = Team.objects.create()
-                team1.players.set([player1])
-                team1.save()
+            self._sides = ([player1], [player2])
 
-            team2 = (Team.objects
-                     .filter(players=player2)
-                     .annotate(num_players=Count('players'))
-                     .filter(num_players=1)
-                     .first()
-                     )
-            if not team2:
-                team2 = Team.objects.create()
-                team2.players.set([player2])
-                team2.save()
-
-        # Assign teams to match
-        form.instance.team1 = team1
-        form.instance.team2 = team2
         form.instance.is_double = is_double
 
-        # Save the match
+        # Save the match, then attach its sides (they need the pk)
         response = super().form_valid(form)
+        set_match_sides(self.object, *self._sides)
+        self.object.save()
 
         # Link scheduled match to this match
         self.scheduled_match.match = self.object
@@ -1930,196 +1867,6 @@ class PasskeyManagementView(LoginRequiredMixin, View):
         messages.success(request, f"Passkey '{device_name}' deleted")
         return redirect('pingpong:passkey_management')
 
-class TeamsListView(LoginRequiredMixin, ListView):
-    """View to list all players"""
-
-    template_name = "pingpong/team_list.html"
-    context_object_name = "teams"
-    model = Team
-    paginate_by = 10
-
-    def get_queryset(self):
-        # Annota il conteggio dei giocatori e filtra solo team con 2 giocatori
-        return Team.objects.annotate(
-            player_count=Count('players')
-        ).filter(
-            player_count=2
-        ).prefetch_related('players').order_by('name')
-
-
-class TeamUpdateView(LoginRequiredMixin, UpdateView):
-    """View to update an existing team"""
-
-    model = Team
-    template_name = "pingpong/team_form.html"
-    fields = ["name"]
-
-    def get_success_url(self):
-        return reverse_lazy("pingpong:team_detail", kwargs={"pk": self.object.pk})
-
-    def form_valid(self, form):
-        messages.success(
-            self.request, f"Team '{form.instance.name}' updated successfully!"
-        )
-        return super().form_valid(form)
-
-class TeamDetailView(LoginRequiredMixin, DetailView):
-    """View to show details of a single team"""
-
-    template_name = "pingpong/team_detail.html"
-    context_object_name = "team"
-    model = Team
-
-    def get_context_data(self, **kwargs: Any) -> dict[str, Any]:
-        context = super().get_context_data(**kwargs)
-
-        team = self.get_object()
-
-        # Fetch confirmed matches for team using DB-level filtering
-        confirmed_matches = list(Match.objects.filter(
-            Q(team1=team) | Q(team2=team),
-            is_confirmed=True,
-        ).select_related('team1', 'team2', 'winner').prefetch_related(
-            'team1__players',
-            'team2__players',
-            'games'
-        ).order_by('-date_played').distinct())
-
-        # Add custom attributes to each match from team's perspective
-        for match in confirmed_matches:
-            # Determine if team is team1 or team2
-            is_team1 = match.team1 == team
-
-            # Set opponent team
-            match.opponent_team = match.team2 if is_team1 else match.team1
-
-            # Set scores from team's perspective
-            match.team_score = match.team1_score if is_team1 else match.team2_score
-            match.opponent_score = match.team2_score if is_team1 else match.team1_score
-
-            # Check if team won
-            match.team_won = match.winner == team
-
-        total_matches = len(confirmed_matches)
-
-        # Won matches and losses
-        wins = len([m for m in confirmed_matches if m.winner == team])
-        losses = total_matches - wins
-
-        # Calculate streaks
-        stats = self._calculate_streaks(confirmed_matches, team)
-
-        # Calculate performance statistics
-        performance = self._calculate_performance_stats(confirmed_matches)
-
-        context.update({
-            'matches': confirmed_matches,
-            'total_matches': total_matches,
-            'wins': wins,
-            'losses': losses,
-            'win_rate': round((wins / total_matches * 100), 1) if total_matches > 0 else 0,
-            'loss_rate': round((losses / total_matches * 100), 1) if total_matches > 0 else 0,
-            'current_streak': stats['current_streak'],
-            'longest_win_streak': stats['longest_win_streak'],
-            'longest_loss_streak': stats['longest_loss_streak'],
-            'avg_score': performance['avg_score'],
-            'avg_opponent_score': performance['avg_opponent_score'],
-            'best_win': performance['best_win'],
-            'worst_loss': performance['worst_loss'],
-        })
-
-        return context
-
-    def _calculate_streaks(self, matches, team):
-        """Calculate current streak, longest win streak, and longest loss streak"""
-        current_streak = 0
-        streak_type = None  # 'win' or 'loss'
-        longest_win = 0
-        longest_loss = 0
-        win_streak = 0
-        loss_streak = 0
-
-        # Iterate through matches from most recent to oldest
-        for match in matches:
-            team_won = match.winner == team
-
-            if team_won:
-                if streak_type != 'win':
-                    # Switching from loss to win or starting fresh
-                    longest_loss = max(longest_loss, loss_streak)
-                    loss_streak = 0
-                    win_streak = 0
-                    streak_type = 'win'
-                win_streak += 1
-                current_streak = win_streak
-            elif match.winner:  # Loss (match has a winner but it's not this team)
-                if streak_type != 'loss':
-                    # Switching from win to loss or starting fresh
-                    longest_win = max(longest_win, win_streak)
-                    win_streak = 0
-                    loss_streak = 0
-                    streak_type = 'loss'
-                loss_streak += 1
-                current_streak = -loss_streak  # Negative for loss streak
-
-        # Update longest streaks one final time
-        if streak_type == 'win':
-            longest_win = max(longest_win, win_streak)
-        elif streak_type == 'loss':
-            longest_loss = max(longest_loss, loss_streak)
-
-        return {
-            'current_streak': current_streak,
-            'longest_win_streak': longest_win,
-            'longest_loss_streak': longest_loss,
-        }
-
-    def _calculate_performance_stats(self, matches):
-        """Calculate average scores and best/worst performances"""
-        if not matches:
-            return {
-                'avg_score': 0,
-                'avg_opponent_score': 0,
-                'best_win': 'N/A',
-                'worst_loss': 'N/A',
-            }
-
-        total_team_score = 0
-        total_opponent_score = 0
-        best_win_margin = -999
-        best_win_score = None
-        worst_loss_margin = 999
-        worst_loss_score = None
-
-        for match in matches:
-            # Add to totals
-            total_team_score += match.team_score
-            total_opponent_score += match.opponent_score
-
-            # Calculate margin
-            margin = match.team_score - match.opponent_score
-
-            # Track best win (largest positive margin)
-            if match.team_won and margin > best_win_margin:
-                best_win_margin = margin
-                best_win_score = f"{match.team_score}-{match.opponent_score}"
-
-            # Track worst loss (largest negative margin)
-            if not match.team_won and margin < worst_loss_margin:
-                worst_loss_margin = margin
-                worst_loss_score = f"{match.team_score}-{match.opponent_score}"
-
-        avg_score = total_team_score / len(matches)
-        avg_opponent_score = total_opponent_score / len(matches)
-
-        return {
-            'avg_score': round(avg_score, 1),
-            'avg_opponent_score': round(avg_opponent_score, 1),
-            'best_win': best_win_score if best_win_score else 'N/A',
-            'worst_loss': worst_loss_score if worst_loss_score else 'N/A',
-        }
-
-
 class ChampionshipListView(LoginRequiredMixin, ListView):
     """View to list all championships"""
 
@@ -2138,7 +1885,7 @@ class ChampionshipListView(LoginRequiredMixin, ListView):
         queryset = Championship.objects.select_related(
             'created_by', 'location'
         ).prefetch_related(
-            'participants', 'participants__players'
+            'entries__members__player'
         )
 
         # Filter by status (supports tab-based filtering)
@@ -2154,7 +1901,7 @@ class ChampionshipListView(LoginRequiredMixin, ListView):
             # Championships where user is a participant
             try:
                 player = user.player
-                queryset = queryset.filter(participants__players=player)
+                queryset = queryset.filter(entry_members__player=player)
             except (AttributeError, Player.DoesNotExist):
                 queryset = queryset.none()
         elif participation_filter == 'public':
@@ -2182,7 +1929,7 @@ class ChampionshipDetailView(LoginRequiredMixin, DetailView):
         return Championship.objects.select_related(
             'created_by', 'location'
         ).prefetch_related(
-            'participants', 'participants__players'
+            'entries__members__player'
         )
 
     def get_context_data(self, **kwargs):
@@ -2198,9 +1945,9 @@ class ChampionshipDetailView(LoginRequiredMixin, DetailView):
         scheduled_matches = ScheduledMatch.all_objects.filter(
             championship=championship
         ).select_related(
-            'team1', 'team2', 'location', 'match'
+            'location', 'match'
         ).prefetch_related(
-            'team1__players', 'team2__players'
+            participants_prefetch(scheduled=True)
         ).order_by('round_number', 'scheduled_date', 'scheduled_time')
         context['scheduled_matches'] = scheduled_matches
 
@@ -2224,47 +1971,46 @@ class ChampionshipDetailView(LoginRequiredMixin, DetailView):
         completed_matches = Match.all_objects.filter(
             championship=championship
         ).select_related(
-            'team1', 'team2', 'winner', 'location'
+            'location'
         ).prefetch_related(
-            'team1__players', 'team2__players', 'games', 'confirmations'
+            participants_prefetch(), 'games', 'confirmations'
         ).order_by('-date_played')
         context['completed_matches'] = completed_matches
         context['completed_count'] = completed_matches.count()
 
         # Pass participants count to avoid multiple COUNT queries in template
-        context['participants_count'] = championship.participants.count()
+        context['participants_count'] = championship.entries.count()
 
         # Build results matrix for round-robin display
-        # Use winner__isnull=False instead of is_confirmed=True because
+        # Use winner_side__isnull=False instead of is_confirmed=True because
         # championship matches may have winners but not yet be confirmed
         confirmed_champ_matches = Match.all_objects.filter(
-            championship=championship, winner__isnull=False
-        ).select_related('team1', 'team2', 'winner').prefetch_related('games')
+            championship=championship, winner_side__isnull=False
+        )
 
         matrix = {}
         for match in confirmed_champ_matches:
-            t1_score = sum(1 for g in match.games.all() if g.winner_id == match.team1_id)
-            t2_score = sum(1 for g in match.games.all() if g.winner_id == match.team2_id)
-            matrix[(match.team1_id, match.team2_id)] = {
-                'score': f'{t1_score}-{t2_score}',
-                'won': match.winner_id == match.team1_id,
+            matrix[(match.side1_entry_id, match.side2_entry_id)] = {
+                'score': f'{match.team1_score_cache}-{match.team2_score_cache}',
+                'won': match.winner_side == Side.ONE,
                 'match_pk': match.pk,
             }
 
         standings = context.get('standings', [])
-        matrix_teams = [s['team'] for s in standings]
+        matrix_teams = [s['entry'] for s in standings]
         matrix_rows = []
-        for team in matrix_teams:
+        for entry in matrix_teams:
             row = []
             for opponent in matrix_teams:
-                if team.pk == opponent.pk:
+                if entry.pk == opponent.pk:
                     row.append({'self': True})
                 else:
-                    result = matrix.get((team.pk, opponent.pk))
+                    result = matrix.get((entry.pk, opponent.pk))
                     row.append(result if result else {'pending': True})
             matrix_rows.append({
-                'team': team,
-                'display_name': team.name or str(team),
+                'team': entry,
+                'entry': entry,
+                'display_name': str(entry),
                 'cells': row,
             })
         context['matrix_rows'] = matrix_rows
@@ -2274,27 +2020,86 @@ class ChampionshipDetailView(LoginRequiredMixin, DetailView):
         try:
             player = self.request.user.player
             # Get user's teams that match championship type
-            required_size = 1 if championship.championship_type == Championship.ChampionshipType.SINGLES else 2
+            already_entered = championship.entry_members.filter(
+                player=player
+            ).exists()
 
-            user_teams = Team.objects.annotate(
-                player_count=Count('players', distinct=True)
-            ).filter(
-                player_count=required_size,
-                players=player,
-            ).exclude(
-                pk__in=championship.participants.values_list('pk', flat=True)
-            ).distinct().order_by('name')
+            # Doubles entries need a partner, so offer the other players who
+            # have not entered yet.
+            available_partners = Player.objects.exclude(pk=player.pk).exclude(
+                pk__in=championship.entry_members.values_list('player_id', flat=True)
+            ).order_by('name')
 
             context['can_register'] = (
-                    championship.is_registration_open and
-                    not championship.is_full and
-                    user_teams.exists()
+                    championship.is_registration_open
+                    and not championship.is_full
+                    and not already_entered
             )
-            context['user_teams'] = user_teams
+            context['needs_partner'] = (
+                championship.championship_type
+                == Championship.ChampionshipType.DOUBLES
+            )
+            context['available_partners'] = available_partners
+            context['user_teams'] = []
         except (AttributeError, Player.DoesNotExist):
             context['can_register'] = False
+            context['needs_partner'] = False
+            context['available_partners'] = []
             context['user_teams'] = []
 
+        return context
+
+
+class MatchValidateView(LoginRequiredMixin, View):
+    """Validate a partially-filled match form without saving anything.
+
+    match_form.html used to re-implement MatchForm.clean() in JavaScript:
+    it rebuilt every player dropdown on each change to remove already-picked
+    players, and toggled `required` on player3/player4 by hand. Two copies of
+    the same rules, and only the Python one actually decides whether a match
+    can be created.
+    """
+
+    def post(self, request, *args, **kwargs):
+        form = MatchForm(request.POST)
+        form.is_valid()
+
+        # Drop only Django's own "this field is required" errors: the user is
+        # still filling the form in, and nagging about fields they have not
+        # reached yet is noise. Match on the error *code*, not the message --
+        # "Four players are required for a doubles match!" is a rule
+        # violation that happens to contain the word "required".
+        errors = [
+            error.message % (error.params or {}) if error.params else error.message
+            for field_errors in form.errors.as_data().values()
+            for error in field_errors
+            if error.code != "required"
+        ]
+        return render(
+            request, "pingpong/_form_errors.html", {"errors": errors}
+        )
+
+
+class ChampionshipParticipantsFragmentView(LoginRequiredMixin, TemplateView):
+    """The participant picker, re-rendered for a given championship type.
+
+    The create form used to respond to a type change by rewriting the URL and
+    reloading the whole page, discarding anything already typed in. htmx
+    swaps just this fragment instead.
+    """
+
+    template_name = "pingpong/_championship_participants.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        championship_type = self.request.GET.get(
+            "championship_type", Championship.ChampionshipType.SINGLES
+        )
+        context["form"] = ChampionshipCreateForm(championship_type=championship_type)
+        # Private championships are the ones that pick participants up front;
+        # is_public arrives via hx-include so the swap keeps the current
+        # visibility rather than resetting it.
+        context["show_participants"] = self.request.GET.get("is_public") != "on"
         return context
 
 
@@ -2327,8 +2132,8 @@ class ChampionshipCreateView(LoginRequiredMixin, CreateView):
         # Add participants for private championships
         if not championship.is_public:
             private_participants = form.cleaned_data.get('private_participants')
-            if private_participants:
-                championship.participants.set(private_participants)
+            for player in private_participants or []:
+                championship.register_entry([player])
                 # Change status to scheduled
                 championship.status = Championship.Status.SCHEDULED
                 championship.save()
@@ -2388,34 +2193,36 @@ class ChampionshipRegisterView(LoginRequiredMixin, View):
 
     def post(self, request, pk):
         championship = get_object_or_404(Championship, pk=pk)
-        team_id = request.POST.get('team')
-
-        if not team_id:
-            messages.error(request, "Please select a team to register")
-            return redirect('pingpong:championship_detail', pk=pk)
-
-        team = get_object_or_404(Team, pk=team_id)
-
-        # Verify user is part of this team
         try:
             player = request.user.player
-            if player not in team.players.all():
-                messages.error(request, "You can only register your own teams")
-                return redirect('pingpong:championship_detail', pk=pk)
         except (AttributeError, Player.DoesNotExist):
             messages.error(request, "You need a player profile to register")
             return redirect('pingpong:championship_detail', pk=pk)
 
-        # Try to register
-        if championship.register_team(team):
+        # You always enter as yourself; doubles additionally needs a partner.
+        entry_players = [player]
+        if championship.championship_type == Championship.ChampionshipType.DOUBLES:
+            partner_id = request.POST.get('partner') or request.POST.get('team')
+            if not partner_id:
+                messages.error(request, "Please choose a partner to register")
+                return redirect('pingpong:championship_detail', pk=pk)
+            partner = get_object_or_404(Player, pk=partner_id)
+            if partner.pk == player.pk:
+                messages.error(request, "You cannot partner with yourself")
+                return redirect('pingpong:championship_detail', pk=pk)
+            entry_players.append(partner)
+
+        entry = championship.register_entry(entry_players)
+        if entry is not None:
             messages.success(
                 request,
-                f"Successfully registered {team} for {championship.name}!"
+                f"Successfully registered {entry} for {championship.name}!"
             )
         else:
             messages.error(
                 request,
-                f"Unable to register. Championship may be full or registration closed."
+                "Unable to register. Championship may be full, registration "
+                "closed, or one of you is already entered."
             )
 
         return redirect('pingpong:championship_detail', pk=pk)
@@ -2460,22 +2267,17 @@ class ChampionshipUnregisterView(LoginRequiredMixin, View):
 
     def post(self, request, pk):
         championship = get_object_or_404(Championship, pk=pk)
-        team_id = request.POST.get('team')
 
-        if not team_id:
-            messages.error(request, "Invalid team")
-            return redirect('pingpong:championship_detail', pk=pk)
-
-        team = get_object_or_404(Team, pk=team_id)
-
-        # Verify user is part of this team
         try:
             player = request.user.player
-            if player not in team.players.all():
-                messages.error(request, "You can only unregister your own teams")
-                return redirect('pingpong:championship_detail', pk=pk)
         except (AttributeError, Player.DoesNotExist):
             messages.error(request, "You need a player profile")
+            return redirect('pingpong:championship_detail', pk=pk)
+
+        # You can only withdraw the entry you are part of.
+        entry = championship.entries.filter(members__player=player).first()
+        if entry is None:
+            messages.error(request, "You are not registered for this championship")
             return redirect('pingpong:championship_detail', pk=pk)
 
         # Check if championship allows unregistration
@@ -2483,9 +2285,12 @@ class ChampionshipUnregisterView(LoginRequiredMixin, View):
             messages.error(request, "Cannot unregister after championship has started")
             return redirect('pingpong:championship_detail', pk=pk)
 
-        # Unregister
-        championship.participants.remove(team)
-        messages.success(request, f"Successfully unregistered {team} from {championship.name}")
+        label = str(entry)
+        entry.delete()
+
+        messages.success(
+            request, f"Successfully unregistered {label} from {championship.name}"
+        )
 
         return redirect('pingpong:championship_detail', pk=pk)
 
@@ -2539,7 +2344,6 @@ class ScheduledMatchEditView(LoginRequiredMixin, UpdateView):
 # Live Scoreboard (KAN-4)
 # ---------------------------------------------------------------------------
 
-from . import live_scoring  # noqa: E402  (kept local to the section it serves)
 
 
 def _get_live_match_for_scorekeeper(request, pk):
@@ -2586,13 +2390,12 @@ class LiveScoreboardView(LoginRequiredMixin, View):
             messages.info(request, "This match is no longer live.")
             return redirect("pingpong:match_detail", pk=pk)
 
-        team1_players = list(match.team1.players.all())
-        team2_players = list(match.team2.players.all())
+        cache_side_players(match)
 
         context = {
             "match": match,
-            "team1_label": " & ".join(p.name for p in team1_players),
-            "team2_label": " & ".join(p.name for p in team2_players),
+            "team1_label": " & ".join(p.name for p in match.cached_team1_players),
+            "team2_label": " & ".join(p.name for p in match.cached_team2_players),
             "bootstrap": _scoreboard_payload(match),
             "point_url": reverse("pingpong:live_point", args=[pk]),
             "start_url": reverse("pingpong:live_start", args=[pk]),
@@ -2709,7 +2512,13 @@ class LivePointView(LoginRequiredMixin, View):
 
 
 class LiveStateView(LoginRequiredMixin, View):
-    """GET the canonical state — used by the client to rehydrate on reload."""
+    """GET the canonical state, for the scoreboard to resync against.
+
+    The page calls this when the tab becomes visible again: a phone that
+    slept, or a match finished from another device, would otherwise leave
+    the scoreboard showing a score the server no longer agrees with.
+    Restricted to the scorekeeper (and staff), like the write endpoints.
+    """
 
     def get(self, request, pk):
         # all_objects so we can return a completed match's redirect too

@@ -44,6 +44,35 @@ jobs:
             echo "py_changed=false" >> $GITHUB_OUTPUT
           fi
 
+          # Frontend assets are gated separately. Before this, a commit that
+          # touched only templates or the Tailwind config got zero CI, so a
+          # purge misconfiguration could ship unnoticed.
+          if echo "$CHANGED_FILES" | grep -qE "\.(html|css|js)$|tailwind\.config\.js|postcss\.config\.js|package(-lock)?\.json"; then
+            echo "Frontend files were changed"
+            echo "assets_changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "No frontend files were changed"
+            echo "assets_changed=false" >> $GITHUB_OUTPUT
+          fi
+
+      # The test suite renders templates that {% static %}-reference app.css.
+      # Build it whenever either side changed, so a broken Tailwind config
+      # fails here rather than in production.
+      - name: Set up Node
+        if: steps.check_files.outputs.py_changed == 'true' || steps.check_files.outputs.assets_changed == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Build frontend assets
+        if: steps.check_files.outputs.py_changed == 'true' || steps.check_files.outputs.assets_changed == 'true'
+        run: |
+          npm ci
+          npm run build
+          test -s ttstats/pingpong/static/pingpong/css/app.css
+          test -s ttstats/pingpong/static/pingpong/js/vendor/htmx.min.js
+
       - name: Set up Python
         if: steps.check_files.outputs.py_changed == 'true'
         uses: actions/setup-python@v5

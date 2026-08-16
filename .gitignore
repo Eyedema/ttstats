@@ -10,13 +10,24 @@ env/
 # Django
 db.sqlite3
 /static/
+ttstats/staticfiles/
 /media/
 *.log
 
 # Environment
+# .env.dev is tracked on purpose -- it is the dev template and holds only fake
+# credentials. Anything real (a Supabase DATABASE_URL) goes in .env.dev.local,
+# which compose.dev.yml loads after it and which is never committed.
 .env
-#.env.dev
+.env.dev.local
 .env.prod
+
+# Frontend build output (produced by `npm run build:css`; the Docker image
+# builds it in the `assets` stage, compose.dev.yml rebuilds it on the fly)
+node_modules/
+ttstats/pingpong/static/pingpong/css/app.css
+ttstats/pingpong/static/pingpong/js/vendor/
+ttstats/pingpong/static/pingpong/css/vendor/
 
 # Docker
 docker-compose.override.yml

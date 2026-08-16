@@ -6,6 +6,7 @@ from django.contrib.auth.models import User
 from django.db import models
 from django.utils import timezone
 
+from . import match_state
 from .managers import ChampionshipManager, GameManager, LiveMatchManager, MatchManager, PlayerManager, ScheduledMatchManager
 
 # Email verification token expires after 24 hours
@@ -90,38 +91,49 @@ class Player(models.Model):
         return self.nickname if self.nickname else self.name
 
 
-class Team(models.Model):
-    """Concept used for matches to include both singles and doubles score"""
-
-    players = models.ManyToManyField(Player, related_name="teams")
-    name = models.CharField(max_length=100, blank=True)
-
-    def __str__(self):
-        if self.name:
-            return self.name
-
-        # Default: "Player1 and Player2"
-        players_list = self.players.order_by('name').all()
-        if len(players_list) == 1:
-            return str(players_list[0])
-        elif len(players_list) == 2:
-            return f"{players_list[0]} and {players_list[1]}"
-        else:
-            names = [p.name for p in players_list[:2]]
-            return f"{names[0]} and {names[1]} (+{len(players_list) - 2})"
+def format_side_label(players):
+    """Human-readable name for a side: "Ada", "Ada and Bob", "Ada and Bob (+1)"."""
+    players = list(players)
+    if not players:
+        return ""
+    if len(players) == 1:
+        return str(players[0])
+    if len(players) == 2:
+        return f"{players[0]} and {players[1]}"
+    return f"{players[0]} and {players[1]} (+{len(players) - 2})"
 
 
-class Match(models.Model):
+class SideLabelMixin:
+    """Side labels for anything exposing players_on(side)."""
+
+    def side_label(self, side):
+        return format_side_label(self.players_on(side)) or f"Side {int(side)}"
+
+    @property
+    def side1_label(self):
+        return self.side_label(Side.ONE)
+
+    @property
+    def side2_label(self):
+        return self.side_label(Side.TWO)
+
+
+class Side(models.IntegerChoices):
+    """Which half of a match a player or result belongs to.
+
+    Replaces pointing at a Team object: a side is a position within one match,
+    not an entity, so an integer says what an FK could only imply.
+    """
+
+    ONE = 1, "Side 1"
+    TWO = 2, "Side 2"
+
+
+class Match(SideLabelMixin, models.Model):
     """Individual match between two players"""
 
     is_double = models.BooleanField(default=False)
 
-    team1 = models.ForeignKey(
-        Team, on_delete=models.CASCADE, related_name="matches_as_team1", null=True
-    )
-    team2 = models.ForeignKey(
-        Team, on_delete=models.CASCADE, related_name="matches_as_team2", null=True
-    )
     championship = models.ForeignKey(
         'Championship',
         on_delete=models.SET_NULL,
@@ -148,11 +160,19 @@ class Match(models.Model):
     # Best of format (best of 3, 5, 7, etc.)
     best_of = models.IntegerField(default=5, help_text="Best of how many games?")
 
-    winner = models.ForeignKey(
-        Team,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
+    winner_side = models.PositiveSmallIntegerField(
+        choices=Side.choices, null=True, blank=True, db_index=True
+    )
+
+    # Championship entry per side, so standings never have to reverse-map a
+    # match to an entry by intersecting player sets.
+    side1_entry = models.ForeignKey(
+        'ChampionshipEntry', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='%(class)s_as_side1',
+    )
+    side2_entry = models.ForeignKey(
+        'ChampionshipEntry', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='%(class)s_as_side2',
     )
 
     confirmations = models.ManyToManyField(Player, through='MatchConfirmation', related_name="player_matchconfirmations")
@@ -189,8 +209,7 @@ class Match(models.Model):
         if user.is_staff or user.is_superuser:
             return True
         try:
-            return (self.team1.players.filter(user_id=user.pk).exists() or
-                    self.team2.players.filter(user_id=user.pk).exists())
+            return self.participants.filter(player__user_id=user.pk).exists()
         except AttributeError:
             return False
 
@@ -205,91 +224,91 @@ class Match(models.Model):
         verbose_name_plural = "matches"
 
     def __str__(self):
-        return f"{self.team1} vs {self.team2} - {self.date_played.date()}"
+        return f"{self.side1_label} vs {self.side2_label} - {self.date_played.date()}"
 
     @property
-    def team1_score(self):
-        return self.games.filter(winner=self.team1).count()
+    def side1_score(self):
+        """Games won by side 1. Reads the cache recompute() maintains."""
+        return self.team1_score_cache
 
     @property
-    def team2_score(self):
-        return self.games.filter(winner=self.team2).count()
+    def side2_score(self):
+        return self.team2_score_cache
+
+    # Legacy names, kept because templates and emails read them.
+    team1_score = side1_score
+    team2_score = side2_score
+
+    @property
+    def winner_label(self):
+        return self.side_label(self.winner_side) if self.winner_side else ""
+
+    def players_on(self, side):
+        """Players on one side of the match, read from MatchParticipant."""
+        return Player.objects.filter(
+            match_participations__match_id=self.pk,
+            match_participations__side=side,
+        )
+
+    @property
+    def all_players(self):
+        """Everyone in the match, both sides."""
+        return Player.objects.filter(match_participations__match_id=self.pk)
+
+    @property
+    def side1_players(self):
+        return self.players_on(Side.ONE)
+
+    @property
+    def side2_players(self):
+        return self.players_on(Side.TWO)
+
+    def _verified_player_ids(self, side):
+        """Ids of players on ``side`` whose email is verified."""
+        return set(
+            self.players_on(side)
+            .filter(user__profile__email_verified=True)
+            .values_list("id", flat=True)
+        )
+
+    def _confirmed_player_ids(self):
+        return set(self.confirmations.values_list("id", flat=True))
 
     @property
     def team1_confirmed(self):
-        """All Team 1 members have confirmed"""
-        team1_players = self.team1.players.filter(user__profile__email_verified=True)
-        team1_ids = {p.id for p in team1_players}
-        confirmed_ids = {c.id for c in self.confirmations.all()}
-
-        if team1_ids.issubset(confirmed_ids):
-            return True
-
-        all_unverified = all(
-            not (p.user and p.user.profile.email_verified)
-            for p in team1_players.all()
+        """All verified Team 1 members have confirmed"""
+        return match_state.side_confirmed(
+            self._verified_player_ids(Side.ONE), self._confirmed_player_ids()
         )
-
-        return all_unverified
 
     @property
     def team2_confirmed(self):
-        """All Team 2 members have confirmed"""
-        team2_players = self.team2.players.filter(user__profile__email_verified=True)
-        team2_ids = {p.id for p in team2_players}
-        confirmed_ids = {c.id for c in self.confirmations.all()}
-
-        if team2_ids.issubset(confirmed_ids):
-            return True
-
-        all_unverified = all(
-            not (p.user and p.user.profile.email_verified)
-            for p in team2_players.all()
+        """All verified Team 2 members have confirmed"""
+        return match_state.side_confirmed(
+            self._verified_player_ids(Side.TWO), self._confirmed_player_ids()
         )
-
-        return all_unverified
 
     @property
     def match_confirmed(self):
-        """Tutti i giocatori di entrambi i team hanno confermato"""
-        return self.team1_confirmed and self.team2_confirmed
-
-    @property
-    def player1(self):
-        """Backward-compatible property: returns first player from team1"""
-        if self.team1:
-            return self.team1.players.first()
-        return None
-
-    @property
-    def player2(self):
-        """Backward-compatible property: returns first player from team2"""
-        if self.team2:
-            return self.team2.players.first()
-        return None
+        """Every verified player on both teams has confirmed."""
+        return match_state.confirmation_complete(
+            self._verified_player_ids(Side.ONE),
+            self._verified_player_ids(Side.TWO),
+            self._confirmed_player_ids(),
+        )
 
     def should_auto_confirm(self):
-        if not self.winner or self.match_confirmed:
-            return False
-
-        team1_all_unverified = True
-        for player in self.team1.players.all():
-            if player.user and player.user.profile.email_verified:
-                team1_all_unverified = False
-                break
-
-        team2_all_unverified = True
-        for player in self.team2.players.all():
-            if player.user and player.user.profile.email_verified:
-                team2_all_unverified = False
-                break
-
-        return team1_all_unverified or team2_all_unverified
+        return match_state.should_auto_confirm(
+            has_winner=bool(self.winner_side),
+            already_confirmed=self.match_confirmed,
+            side1_has_verified=bool(self._verified_player_ids(Side.ONE)),
+            side2_has_verified=bool(self._verified_player_ids(Side.TWO)),
+        )
 
     def get_unverified_players(self):
         unverified = []
 
-        all_players = (self.team1.players.all() | self.team2.players.all())
+        all_players = self.all_players
 
         for player in all_players:
             if not player.user or not player.user.profile.email_verified:
@@ -297,52 +316,53 @@ class Match(models.Model):
 
         return unverified
 
-    def update_cache_fields(self):
-        """Update all denormalized cache fields. Call from signals after changes."""
-        self.team1_score_cache = self.games.filter(winner=self.team1).count()
-        self.team2_score_cache = self.games.filter(winner=self.team2).count()
-        self.is_confirmed = self._calculate_confirmation_status()
-
-    def _calculate_confirmation_status(self):
-        """Calculate actual confirmation status from live data."""
-        team1_verified_ids = set(
-            self.team1.players.filter(
-                user__profile__email_verified=True
-            ).values_list('id', flat=True)
-        )
-        team2_verified_ids = set(
-            self.team2.players.filter(
-                user__profile__email_verified=True
-            ).values_list('id', flat=True)
-        )
-        confirmed_ids = set(
-            self.confirmations.all().values_list('id', flat=True)
-        )
+    def _game_wins(self):
+        """Games won per side. Uses Game.all_objects so the GameManager's
+        user/is_live filters don't hide our own children.
+        """
+        games_qs = Game.all_objects.filter(match_id=self.pk)
         return (
-            team1_verified_ids.issubset(confirmed_ids) and
-            team2_verified_ids.issubset(confirmed_ids)
+            games_qs.filter(winner_side=Side.ONE).count(),
+            games_qs.filter(winner_side=Side.TWO).count(),
         )
+
+    def recompute(self, save=True):
+        """Single source of truth for winner, score caches and is_confirmed.
+
+        With ``save=True`` the new values are written with a queryset update so
+        no pre/post_save signal fires -- callers are usually inside one. With
+        ``save=False`` the instance is only mutated, for use from ``save()``.
+
+        Live matches skip winner detection: the scoreboard endpoint flips
+        is_live=False at match-end, then the normal pipeline picks the winner up.
+        """
+        if not self.pk:
+            return
+
+        if not self.is_live:
+            side1_wins, side2_wins = self._game_wins()
+            self.team1_score_cache = side1_wins
+            self.team2_score_cache = side2_wins
+
+            decided = match_state.winner_side(side1_wins, side2_wins, self.best_of)
+            if decided is not None:
+                self.winner_side = decided
+            # An undecided result deliberately leaves an existing winner in
+            # place rather than clearing it, matching long-standing behaviour.
+
+        self.is_confirmed = self.match_confirmed
+
+        if save:
+            Match.all_objects.filter(pk=self.pk).update(
+                team1_score_cache=self.team1_score_cache,
+                team2_score_cache=self.team2_score_cache,
+                winner_side=self.winner_side,
+                is_confirmed=self.is_confirmed,
+            )
 
     def save(self, *args, **kwargs):
-        # Auto-determine winner based on games. Use Game.all_objects so the
-        # GameManager's user/is_live filters don't hide our own children.
-        # Live matches skip winner detection entirely — the scoreboard
-        # endpoint flips is_live=False at match-end, then this save() picks
-        # up the winner and the normal signal pipeline runs.
         if self.pk and not self.is_live:
-            games_qs = Game.all_objects.filter(match_id=self.pk)
-            t1_wins = games_qs.filter(winner=self.team1).count()
-            t2_wins = games_qs.filter(winner=self.team2).count()
-            games_to_win = (self.best_of // 2) + 1
-
-            # Update score cache
-            self.team1_score_cache = t1_wins
-            self.team2_score_cache = t2_wins
-
-            if t1_wins >= games_to_win:
-                self.winner = self.team1
-            elif t2_wins >= games_to_win:
-                self.winner = self.team2
+            self.recompute(save=False)
         super().save(*args, **kwargs)
 
 
@@ -355,6 +375,32 @@ class MatchConfirmation(models.Model):
         unique_together = ('match', 'player')  # Players need to confirm only once
 
 
+class MatchParticipant(models.Model):
+    """A player's place in a match. Replaces the Team indirection."""
+
+    match = models.ForeignKey(
+        Match, on_delete=models.CASCADE, related_name="participants"
+    )
+    player = models.ForeignKey(
+        Player, on_delete=models.CASCADE, related_name="match_participations"
+    )
+    side = models.PositiveSmallIntegerField(choices=Side.choices)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["match", "player"], name="uniq_match_player"
+            )
+        ]
+        indexes = [
+            models.Index(fields=["match", "side"]),
+            models.Index(fields=["player", "match"]),
+        ]
+
+    def __str__(self):
+        return f"{self.player} on side {self.side} of match {self.match_id}"
+
+
 class Game(models.Model):
     """Individual game within a match"""
 
@@ -363,12 +409,8 @@ class Game(models.Model):
     team1_score = models.IntegerField(default=0)
     team2_score = models.IntegerField(default=0)
 
-    winner = models.ForeignKey(
-        Team,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="games_won", # TODO: before it was won_games, search and replace it!
+    winner_side = models.PositiveSmallIntegerField(
+        choices=Side.choices, null=True, blank=True
     )
 
     duration_minutes = models.IntegerField(null=True, blank=True)
@@ -384,12 +426,19 @@ class Game(models.Model):
     def __str__(self):
         return f"Game {self.game_number}: {self.team1_score}-{self.team2_score}"
 
+    @property
+    def winner_label(self):
+        """Name of the side that won this game, resolved via the parent match."""
+        if not self.winner_side:
+            return ""
+        return self.match.side_label(self.winner_side)
+
     def save(self, *args, **kwargs):
-        # Auto-determine winner
+        # Auto-determine which side won this game
         if self.team1_score > self.team2_score:
-            self.winner = self.match.team1
+            self.winner_side = Side.ONE
         elif self.team2_score > self.team1_score:
-            self.winner = self.match.team2
+            self.winner_side = Side.TWO
 
         super().save(*args, **kwargs)
 
@@ -436,15 +485,9 @@ class UserProfile(models.Model):
         return f"Profile of {self.user.username}"
 
 
-class ScheduledMatch(models.Model):
+class ScheduledMatch(SideLabelMixin, models.Model):
     """A match scheduled for the future"""
 
-    team1 = models.ForeignKey(
-        Team, on_delete=models.CASCADE, related_name="scheduled_matches_as_team1"
-    )
-    team2 = models.ForeignKey(
-        Team, on_delete=models.CASCADE, related_name="scheduled_matches_as_team2"
-    )
     championship = models.ForeignKey(
         'Championship',
         on_delete=models.CASCADE,
@@ -476,6 +519,17 @@ class ScheduledMatch(models.Model):
     )
 
     # Track if emails were sent
+    # Championship entry per side, so standings never have to reverse-map a
+    # match to an entry by intersecting player sets.
+    side1_entry = models.ForeignKey(
+        'ChampionshipEntry', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='%(class)s_as_side1',
+    )
+    side2_entry = models.ForeignKey(
+        'ChampionshipEntry', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='%(class)s_as_side2',
+    )
+
     notification_sent = models.BooleanField(default=False)
 
     # Link to actual match if scheduled match was converted
@@ -498,7 +552,7 @@ class ScheduledMatch(models.Model):
         verbose_name_plural = "Scheduled Matches"
 
     def __str__(self):
-        return f"{self.team1} vs {self.team2} - {self.scheduled_date} at {self.scheduled_time}"
+        return f"{self.side1_label} vs {self.side2_label} - {self.scheduled_date} at {self.scheduled_time}"
 
     @property
     def scheduled_datetime(self):
@@ -514,7 +568,7 @@ class ScheduledMatch(models.Model):
             return True
         try:
             user_player = user.player
-            return user_player in (self.team1.players.all() | self.team2.players.all())
+            return self.participants.filter(player=user_player).exists()
         except (AttributeError, Player.DoesNotExist):
             return False
 
@@ -522,19 +576,20 @@ class ScheduledMatch(models.Model):
         """Check if user can edit this scheduled match"""
         return self.user_can_view(user)
 
-    @property
-    def player1(self):
-        """Backward-compatible property: returns first player from team1"""
-        if self.team1:
-            return self.team1.players.first()
-        return None
+    def players_on(self, side):
+        """Players on one side, read from ScheduledMatchParticipant."""
+        return Player.objects.filter(
+            scheduled_match_participations__scheduled_match_id=self.pk,
+            scheduled_match_participations__side=side,
+        )
 
     @property
-    def player2(self):
-        """Backward-compatible property: returns first player from team2"""
-        if self.team2:
-            return self.team2.players.first()
-        return None
+    def side1_players(self):
+        return self.players_on(Side.ONE)
+
+    @property
+    def side2_players(self):
+        return self.players_on(Side.TWO)
 
     @property
     def is_converted(self):
@@ -545,6 +600,33 @@ class ScheduledMatch(models.Model):
     def is_fully_confirmed(self):
         """Check if linked match exists and is fully confirmed"""
         return bool(self.match and self.match.match_confirmed)
+
+
+class ScheduledMatchParticipant(models.Model):
+    """A player's place in a scheduled match. Mirrors MatchParticipant."""
+
+    scheduled_match = models.ForeignKey(
+        ScheduledMatch, on_delete=models.CASCADE, related_name="participants"
+    )
+    player = models.ForeignKey(
+        Player, on_delete=models.CASCADE, related_name="scheduled_match_participations"
+    )
+    side = models.PositiveSmallIntegerField(choices=Side.choices)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["scheduled_match", "player"],
+                name="uniq_scheduled_match_player",
+            )
+        ]
+        indexes = [models.Index(fields=["scheduled_match", "side"])]
+
+    def __str__(self):
+        return (
+            f"{self.player} on side {self.side} "
+            f"of scheduled match {self.scheduled_match_id}"
+        )
 
 
 class EloHistory(models.Model):
@@ -673,13 +755,6 @@ class Championship(models.Model):
         default=Status.REGISTRATION
     )
 
-    # Participants (Teams - can be single player or doubles team)
-    participants = models.ManyToManyField(
-        Team,
-        related_name='championships',
-        blank=True,
-        help_text="Registered teams/players"
-    )
 
     # Matches
     # Note: matches are linked via ForeignKey in Match model
@@ -729,108 +804,101 @@ class Championship(models.Model):
     @property
     def current_participants_count(self):
         """Get current number of participants"""
-        return self.participants.count()
+        return self.entries.count()
 
     @property
     def is_full(self):
         """Check if championship is at capacity"""
         return self.current_participants_count >= self.max_participants
 
-    def can_register(self, team):
-        """Check if a team can register for this championship"""
+    @property
+    def required_entry_size(self):
+        return 1 if self.championship_type == self.ChampionshipType.SINGLES else 2
+
+    def can_register(self, players):
+        """Whether ``players`` may enter as one competitor."""
+        players = list(players)
         if not self.is_registration_open:
             return False
         if self.is_full:
             return False
-        if self.participants.filter(pk=team.pk).exists():
+        if len(players) != self.required_entry_size:
             return False
-        # Check team size matches championship type
-        team_size = team.players.count()
-        if self.championship_type == self.ChampionshipType.SINGLES and team_size != 1:
+        if len({p.pk for p in players}) != len(players):
             return False
-        if self.championship_type == self.ChampionshipType.DOUBLES and team_size != 2:
+        # One entry per player per championship (also a DB constraint).
+        if self.entry_members.filter(player__in=players).exists():
             return False
         return True
 
-    def register_team(self, team):
-        """Register a team for the championship"""
-        if self.can_register(team):
-            self.participants.add(team)
-            return True
-        return False
+    def register_entry(self, players, display_name=""):
+        """Create an entry for ``players``. Returns the entry, or None."""
+        players = list(players)
+        if not self.can_register(players):
+            return None
+        entry = ChampionshipEntry.objects.create(
+            championship=self, display_name=display_name
+        )
+        ChampionshipEntryMember.objects.bulk_create(
+            [
+                ChampionshipEntryMember(entry=entry, player=p, championship=self)
+                for p in players
+            ]
+        )
+        return entry
 
     def generate_schedule(self):
-        """
-        Generate round-robin schedule for the championship using the circle method.
+        """Generate the round-robin schedule (home and away legs).
 
-        Creates home and away rounds (andata e ritorno). Each round has n/2 matches
-        where every team plays exactly once. Rounds are spaced 7 days apart.
+        The pairing itself lives in championship_scheduling as a pure
+        function; this method only turns pairings into rows.
         """
         from datetime import timedelta, time
 
-        participants = list(self.participants.all())
-        n = len(participants)
+        from .championship_scheduling import round_robin_double_rounds
 
-        if n < 2:
+        entries = list(self.entries.prefetch_related("members__player"))
+        if len(entries) < 2:
             return False
 
-        # Delete existing scheduled matches for this championship
         ScheduledMatch.all_objects.filter(championship=self).delete()
 
-        # Circle method for round-robin scheduling
-        # If odd number of participants, add a "bye" (None)
-        teams = list(participants)
-        if n % 2 == 1:
-            teams.append(None)  # bye
-
-        num_teams = len(teams)
-        num_rounds = num_teams - 1
-
-        # Generate rounds using circle method:
-        # Fix first team, rotate the rest
-        rounds = []  # List of (round_number, [(team1, team2), ...])
-
-        for round_idx in range(num_rounds):
-            round_matches = []
-            for i in range(num_teams // 2):
-                t1 = teams[i]
-                t2 = teams[num_teams - 1 - i]
-                if t1 is not None and t2 is not None:
-                    round_matches.append((t1, t2))
-            rounds.append((round_idx + 1, round_matches))
-
-            # Rotate: keep teams[0] fixed, rotate the rest clockwise
-            teams = [teams[0]] + [teams[-1]] + teams[1:-1]
-
-        # Create home leg (andata) and away leg (ritorno)
-        all_rounds = []
-        for round_num, matches in rounds:
-            all_rounds.append((round_num, matches))
-        for round_num, matches in rounds:
-            # Swap home/away for return leg
-            away_matches = [(t2, t1) for t1, t2 in matches]
-            all_rounds.append((round_num + num_rounds, away_matches))
-
-        # Create scheduled matches, 1 round per week
+        all_rounds = round_robin_double_rounds(entries)
         match_time = time(hour=18, minute=0)
 
-        matches_to_create = []
-        for round_num, round_matches in all_rounds:
+        to_create = []
+        for round_num, pairings in all_rounds:
             round_date = self.start_date + timedelta(weeks=round_num - 1)
-            for team1, team2 in round_matches:
-                matches_to_create.append(ScheduledMatch(
+            for entry1, entry2 in pairings:
+                to_create.append(ScheduledMatch(
                     championship=self,
-                    team1=team1,
-                    team2=team2,
+                    side1_entry=entry1,
+                    side2_entry=entry2,
                     scheduled_date=round_date,
                     scheduled_time=match_time,
                     location=self.location,
                     created_by=self.created_by,
                     round_number=round_num,
                 ))
-        ScheduledMatch.all_objects.bulk_create(matches_to_create)
+        created = ScheduledMatch.all_objects.bulk_create(to_create)
 
-        # Set end_date based on last round
+        # bulk_create does not fire post_save, so the participant rows the
+        # save hook would have written have to be built explicitly.
+        participant_rows = [
+            ScheduledMatchParticipant(
+                scheduled_match=scheduled, player_id=member.player_id, side=side
+            )
+            for scheduled in created
+            for side, entry in (
+                (Side.ONE, scheduled.side1_entry),
+                (Side.TWO, scheduled.side2_entry),
+            )
+            for member in entry.members.all()
+        ]
+        ScheduledMatchParticipant.objects.bulk_create(
+            participant_rows, ignore_conflicts=True
+        )
+
         if all_rounds:
             last_round_num = all_rounds[-1][0]
             self.end_date = self.start_date + timedelta(weeks=last_round_num - 1)
@@ -839,77 +907,54 @@ class Championship(models.Model):
         return True
 
     def get_standings(self):
-        """
-        Calculate championship standings.
+        """Calculate championship standings.
 
-        Ranking criteria:
-        1. Points (3 for win, 0 for loss)
-        2. Game difference (games won - games lost)
-        3. Total games won
-        4. Total games lost
+        Ranked by points (3 per win), then game difference, then games won,
+        then fewest games lost.
         """
-        standings = []
-
-        # Fetch all championship matches once with prefetch
-        all_matches_qs = Match.all_objects.filter(
-            championship=self,
-        ).select_related('team1', 'team2', 'winner').prefetch_related(
-            'games', 'confirmations',
-            'team1__players', 'team1__players__user__profile',
-            'team2__players', 'team2__players__user__profile',
+        matches = list(
+            Match.all_objects.filter(championship=self).prefetch_related(
+                'confirmations', 'participants__player__user__profile'
+            )
         )
-        # Filter to confirmed matches in Python using prefetched data
-        all_matches = [m for m in all_matches_qs if m.match_confirmed]
+        confirmed = [m for m in matches if m.match_confirmed]
 
-        # Pre-compute game scores using prefetched data (avoids N+1)
-        match_scores = {}
-        for match in all_matches:
-            t1_score = sum(1 for g in match.games.all() if g.winner_id == match.team1_id)
-            t2_score = sum(1 for g in match.games.all() if g.winner_id == match.team2_id)
-            match_scores[match.pk] = (t1_score, t2_score)
+        standings = []
+        for entry in self.entries.prefetch_related('members__player'):
+            played = wins = losses = games_won = games_lost = 0
 
-        participants = self.participants.prefetch_related('players').all()
-
-        for team in participants:
-            played = 0
-            wins = 0
-            losses = 0
-            games_won = 0
-            games_lost = 0
-
-            for match in all_matches:
-                if match.team1_id != team.pk and match.team2_id != team.pk:
+            for match in confirmed:
+                if match.side1_entry_id == entry.pk:
+                    my_side, mine, theirs = (
+                        Side.ONE, match.team1_score_cache, match.team2_score_cache
+                    )
+                elif match.side2_entry_id == entry.pk:
+                    my_side, mine, theirs = (
+                        Side.TWO, match.team2_score_cache, match.team1_score_cache
+                    )
+                else:
                     continue
 
                 played += 1
-                is_team1 = match.team1_id == team.pk
-                t1_score, t2_score = match_scores[match.pk]
-                team_score = t1_score if is_team1 else t2_score
-                opponent_score = t2_score if is_team1 else t1_score
-
-                games_won += team_score
-                games_lost += opponent_score
-
-                if match.winner_id == team.pk:
+                games_won += mine
+                games_lost += theirs
+                if match.winner_side == my_side:
                     wins += 1
                 else:
                     losses += 1
 
-            points = (wins * 3)
-            game_difference = games_won - games_lost
-
             standings.append({
-                'team': team,
+                'entry': entry,
+                'team': entry,  # legacy key, still used by templates
                 'played': played,
                 'wins': wins,
                 'losses': losses,
                 'games_won': games_won,
                 'games_lost': games_lost,
-                'game_difference': game_difference,
-                'points': points,
+                'game_difference': games_won - games_lost,
+                'points': wins * 3,
             })
 
-        # Sort by: points (desc), game difference (desc), games won (desc), games lost (asc)
         standings.sort(
             key=lambda x: (x['points'], x['game_difference'], x['games_won'], -x['games_lost']),
             reverse=True
@@ -940,8 +985,7 @@ class Championship(models.Model):
             championship=self
         ).prefetch_related(
             'confirmations',
-            'team1__players__user__profile',
-            'team2__players__user__profile',
+            'participants__player__user__profile',
         )
         for match in championship_matches:
             if not match.match_confirmed:
@@ -962,7 +1006,7 @@ class Championship(models.Model):
         # Check if user is a participant
         try:
             player = user.player
-            return self.participants.filter(players=player).exists()
+            return self.entry_members.filter(player=player).exists()
         except (AttributeError, Player.DoesNotExist):
             return False
 
@@ -977,3 +1021,64 @@ class Championship(models.Model):
             return self.created_by == player
         except (AttributeError, Player.DoesNotExist):
             return False
+
+
+class ChampionshipEntry(models.Model):
+    """One competitor in a championship: a player, or a pair for doubles.
+
+    Replaces registering a Team. An entry belongs to exactly one championship,
+    so the same people entering two championships are two entries -- which is
+    what lets the database enforce one entry per player per championship.
+    """
+
+    championship = models.ForeignKey(
+        Championship, on_delete=models.CASCADE, related_name="entries"
+    )
+    display_name = models.CharField(
+        max_length=100, blank=True, help_text="Optional team name for this entry"
+    )
+    seed = models.PositiveSmallIntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["seed", "created_at"]
+        verbose_name_plural = "championship entries"
+
+    @property
+    def players(self):
+        return Player.objects.filter(championship_entries__entry=self)
+
+    def __str__(self):
+        return self.display_name or format_side_label(self.players) or "Entry"
+
+
+class ChampionshipEntryMember(models.Model):
+    """A player belonging to a championship entry.
+
+    ``championship`` is denormalized from ``entry`` so the database can enforce
+    that a player appears in at most one entry per championship -- impossible
+    with the old M2M(Team), where a player could register two singleton teams.
+    """
+
+    entry = models.ForeignKey(
+        ChampionshipEntry, on_delete=models.CASCADE, related_name="members"
+    )
+    player = models.ForeignKey(
+        Player, on_delete=models.CASCADE, related_name="championship_entries"
+    )
+    championship = models.ForeignKey(
+        Championship, on_delete=models.CASCADE, related_name="entry_members"
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["entry", "player"], name="uniq_entry_player"
+            ),
+            models.UniqueConstraint(
+                fields=["championship", "player"], name="uniq_championship_player"
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.player} in {self.entry}"

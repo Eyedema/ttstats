@@ -114,7 +114,23 @@ STATICFILES_DIRS = [
     BASE_DIR / 'pingpong' / 'static',
 ]
 
-STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+# Plain storage by default. prod.py swaps in WhiteNoise's hashing manifest
+# storage; dev and tests must not use it, because it refuses to resolve any
+# file that is not in a manifest built by collectstatic.
+#
+# Note this is STORAGES, not STATICFILES_STORAGE: Django 5.1 removed the
+# latter. It was still spelled the old way here, so it was ignored outright
+# on Django 6.0 and production served unhashed, uncompressed files -- a
+# deploy could not bust a browser's cache of app.css, whose name never
+# changes even though its contents do.
+STORAGES = {
+    "default": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+    },
+    "staticfiles": {
+        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+    },
+}
 
 LOGOUT_REDIRECT_URL = '/pingpong/'
 ADMIN_LOGOUT_URL = '/accounts/logout/'

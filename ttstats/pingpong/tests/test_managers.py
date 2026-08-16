@@ -1,15 +1,21 @@
 import pytest
 from django.contrib.auth.models import AnonymousUser
 
-from pingpong.models import Game, Match, Player, ScheduledMatch
+from pingpong.models import Championship, Game, Match, Player, ScheduledMatch
 from ttstats.middleware import _thread_locals
 from .conftest import (
+    ChampionshipFactory,
     GameFactory,
     MatchFactory,
     PlayerFactory,
     ScheduledMatchFactory,
     UserFactory,
 )
+
+
+def _user_with_player():
+    u = UserFactory()
+    return u, PlayerFactory(user=u)
 
 
 def _set_current_user(user):
@@ -78,6 +84,53 @@ class TestMatchManager:
         MatchFactory()
         _set_current_user(u)
         assert Match.objects.count() == 0
+
+    def test_doubles_match_appears_exactly_once(self):
+        """The OR across two M2M joins cross-products rows; only .distinct()
+        collapses them. Any rewrite must keep the row count at one.
+        """
+        u, p = _user_with_player()
+        partner = PlayerFactory(with_user=True)
+        opp1 = PlayerFactory(with_user=True)
+        opp2 = PlayerFactory(with_user=True)
+        m = MatchFactory(
+            team1_players=[p, partner], team2_players=[opp1, opp2], is_double=True
+        )
+
+        _set_current_user(u)
+        rows = list(Match.objects.all())
+        assert [row.pk for row in rows] == [m.pk]
+        assert Match.objects.count() == 1
+
+    def test_championship_participant_sees_matches_they_are_not_in(self):
+        """A championship entrant can see every match in that championship,
+        not only their own -- the Exists(championship_qs) branch.
+        """
+        u, p = _user_with_player()
+        champ = ChampionshipFactory(with_entries=[[p]])
+
+        others = [PlayerFactory(with_user=True) for _ in range(2)]
+        champ_match = MatchFactory(
+            player1=others[0], player2=others[1], championship=champ
+        )
+        unrelated = MatchFactory()
+
+        _set_current_user(u)
+        visible = set(Match.objects.values_list("pk", flat=True))
+        assert champ_match.pk in visible
+        assert unrelated.pk not in visible
+
+    def test_live_matches_are_hidden(self):
+        u, p = _user_with_player()
+        other = PlayerFactory(with_user=True)
+        live = MatchFactory(player1=p, player2=other, is_live=True)
+        done = MatchFactory(player1=p, player2=other)
+
+        _set_current_user(u)
+        visible = set(Match.objects.values_list("pk", flat=True))
+        assert done.pk in visible
+        assert live.pk not in visible
+        assert live.pk in set(Match.all_objects.values_list("pk", flat=True))
 
 
 # ===========================================================================
@@ -201,3 +254,89 @@ class TestScheduledMatchManager:
         ScheduledMatchFactory()
         _set_current_user(u)
         assert ScheduledMatch.objects.count() == 0
+
+    def test_doubles_scheduled_match_appears_exactly_once(self):
+        u, p = _user_with_player()
+        partner = PlayerFactory(with_user=True)
+        opp1 = PlayerFactory(with_user=True)
+        opp2 = PlayerFactory(with_user=True)
+        sm = ScheduledMatchFactory(
+            team1_players=[p, partner], team2_players=[opp1, opp2]
+        )
+
+        _set_current_user(u)
+        assert [row.pk for row in ScheduledMatch.objects.all()] == [sm.pk]
+
+    def test_championship_participant_sees_scheduled_matches_they_are_not_in(self):
+        u, p = _user_with_player()
+        champ = ChampionshipFactory(with_entries=[[p]])
+
+        others = [PlayerFactory(with_user=True) for _ in range(2)]
+        champ_sm = ScheduledMatchFactory(
+            player1=others[0], player2=others[1], championship=champ
+        )
+        unrelated = ScheduledMatchFactory()
+
+        _set_current_user(u)
+        visible = set(ScheduledMatch.objects.values_list("pk", flat=True))
+        assert champ_sm.pk in visible
+        assert unrelated.pk not in visible
+
+
+# ===========================================================================
+# ChampionshipManager
+# ===========================================================================
+
+@pytest.mark.django_db
+class TestChampionshipManager:
+    def test_no_user_context_returns_all(self):
+        ChampionshipFactory()
+        ChampionshipFactory(is_public=False)
+        assert Championship.objects.count() == 2
+
+    def test_anonymous_returns_empty(self):
+        ChampionshipFactory()
+        _set_current_user(AnonymousUser())
+        assert Championship.objects.count() == 0
+
+    def test_staff_sees_all(self):
+        ChampionshipFactory()
+        ChampionshipFactory(is_public=False)
+        staff = UserFactory(is_staff=True)
+        _set_current_user(staff)
+        assert Championship.objects.count() == 2
+
+    def test_regular_user_sees_public_only_by_default(self):
+        u, _ = _user_with_player()
+        public = ChampionshipFactory()
+        private = ChampionshipFactory(is_public=False)
+
+        _set_current_user(u)
+        visible = set(Championship.objects.values_list("pk", flat=True))
+        assert public.pk in visible
+        assert private.pk not in visible
+
+    def test_regular_user_sees_private_championship_they_entered(self):
+        u, p = _user_with_player()
+        private = ChampionshipFactory(
+            is_public=False, with_participants=[[p]]
+        )
+
+        _set_current_user(u)
+        assert private.pk in set(Championship.objects.values_list("pk", flat=True))
+
+    def test_regular_user_sees_private_championship_they_created(self):
+        u, p = _user_with_player()
+        private = ChampionshipFactory(is_public=False, created_by=p)
+
+        _set_current_user(u)
+        assert private.pk in set(Championship.objects.values_list("pk", flat=True))
+
+    def test_user_without_player_sees_public_only(self):
+        u = UserFactory()
+        public = ChampionshipFactory()
+        private = ChampionshipFactory(is_public=False)
+
+        _set_current_user(u)
+        visible = set(Championship.objects.values_list("pk", flat=True))
+        assert visible == {public.pk}

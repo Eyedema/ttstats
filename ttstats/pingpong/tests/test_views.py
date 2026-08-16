@@ -1,3 +1,5 @@
+import re
+
 import pytest
 from datetime import date, timedelta, time
 from django.core import mail
@@ -14,7 +16,8 @@ from .conftest import (
     ScheduledMatchFactory,
     UserFactory,
     confirm_match,
-    confirm_team,
+    confirm_match_silent,
+    confirm_side,
     get_match_players,
 )
 
@@ -267,6 +270,323 @@ class TestMatchDetailView:
         assert resp.status_code == 404
 
 
+@pytest.mark.django_db
+class TestMatchDetailWinnerDisplay:
+    """The singles layout used to compare match.winner (a Team) against
+    match.side1_players.first() (a Player), so the winner badge never rendered. The literal
+    "WINNER" appears only in the badge blocks, once per winning side.
+    """
+
+    def _finished_singles(self, winner_side):
+        u, p = _verified_user_with_player()
+        other = PlayerFactory(with_user=True)
+        m = MatchFactory(player1=p, player2=other, best_of=5)
+        hi, lo = (11, 5) if winner_side == 1 else (5, 11)
+        for n in (1, 2, 3):
+            GameFactory(match=m, game_number=n, team1_score=hi, team2_score=lo)
+        m.refresh_from_db()
+        return u, m
+
+    def test_badge_renders_when_side1_wins(self):
+        u, m = self._finished_singles(1)
+        assert m.winner_side == 1
+        resp = _login_client(u).get(reverse("pingpong:match_detail", args=[m.pk]))
+        assert resp.status_code == 200
+        assert resp.content.decode().count("WINNER") == 1
+
+    def test_badge_renders_when_side2_wins(self):
+        u, m = self._finished_singles(2)
+        assert m.winner_side == 2
+        resp = _login_client(u).get(reverse("pingpong:match_detail", args=[m.pk]))
+        assert resp.status_code == 200
+        assert resp.content.decode().count("WINNER") == 1
+
+    def test_no_badge_while_match_unfinished(self):
+        u, p = _verified_user_with_player()
+        other = PlayerFactory(with_user=True)
+        m = MatchFactory(player1=p, player2=other, best_of=5)
+        GameFactory(match=m, game_number=1, team1_score=11, team2_score=5)
+        m.refresh_from_db()
+        assert m.winner_side is None
+        resp = _login_client(u).get(reverse("pingpong:match_detail", args=[m.pk]))
+        assert resp.content.decode().count("WINNER") == 0
+
+
+@pytest.mark.django_db
+class TestTemplatesRenderParticipantNames:
+    """Templates that still dereferenced the removed Team fields.
+
+    Django resolves a missing attribute to the empty string instead of
+    raising, so these rendered blank and the whole suite stayed green.
+    Worse, `game.winner == match.team1` became `'' == ''` -- always true --
+    so every game was highlighted as a side-1 win, including the ones side 2
+    won. Assertions here are on the exact fragments that were empty.
+    """
+
+    def _match_with_split_games(self):
+        """Side 2 wins game 1; side 1 wins games 2 and 3."""
+        u = UserFactory()
+        p = PlayerFactory(user=u, name="Aurelio Home")
+        u.profile.email_verified = True
+        u.profile.save()
+        other = PlayerFactory(with_user=True, name="Bartholomew Away")
+        m = MatchFactory(player1=p, player2=other, best_of=5)
+        GameFactory(match=m, game_number=1, team1_score=5, team2_score=11)
+        GameFactory(match=m, game_number=2, team1_score=11, team2_score=5)
+        GameFactory(match=m, game_number=3, team1_score=11, team2_score=7)
+        m.refresh_from_db()
+        return u, m
+
+    def test_each_game_names_the_side_that_actually_won_it(self):
+        u, m = self._match_with_split_games()
+        assert [g.winner_side for g in m.games.order_by("game_number")] == [2, 1, 1]
+
+        body = _login_client(u).get(
+            reverse("pingpong:match_detail", args=[m.pk])
+        ).content.decode()
+
+        # Game 1 went to side 2; games 2 and 3 to side 1. Before the fix every
+        # per-game winner slot rendered a placeholder dash instead of a name.
+        assert '<span class="font-medium">Bartholomew Away</span>' in body
+        assert '<span class="font-medium">Aurelio Home</span>' in body
+
+    def test_scheduled_match_detail_title_names_both_sides(self):
+        u = UserFactory()
+        p = PlayerFactory(user=u, name="Aurelio Home")
+        u.profile.email_verified = True
+        u.profile.save()
+        other = PlayerFactory(with_user=True, name="Bartholomew Away")
+        sm = ScheduledMatchFactory(player1=p, player2=other)
+
+        body = _login_client(u).get(
+            reverse("pingpong:scheduled_match_detail", args=[sm.pk])
+        ).content.decode()
+
+        # Rendered as "<title> vs  - Scheduled Match</title>" before the fix.
+        assert "<title>Aurelio Home vs Bartholomew Away - Scheduled Match</title>" in body
+        assert "<title> vs " not in body
+
+    def test_scheduled_match_convert_title_names_both_sides(self):
+        u = UserFactory()
+        p = PlayerFactory(user=u, name="Aurelio Home")
+        u.profile.email_verified = True
+        u.profile.save()
+        other = PlayerFactory(with_user=True, name="Bartholomew Away")
+        sm = ScheduledMatchFactory(player1=p, player2=other)
+
+        body = _login_client(u).get(
+            reverse(
+                "pingpong:scheduled_match_convert",
+                kwargs={"scheduled_match_pk": sm.pk},
+            )
+        ).content.decode()
+
+        assert (
+            "<title>Record Match Results - Aurelio Home vs Bartholomew Away</title>"
+            in body
+        )
+
+
+@pytest.mark.django_db
+class TestMatchFormRepopulatesOnError:
+    """The match form used to hand-write its <option> loops.
+
+    Those loops compared `form.f.value` against a literal -- but on a bound
+    form the value is the raw POST *string*, so `"7" == 7` was false and the
+    user's choice vanished when validation failed. Django's own widget
+    rendering gets this right; these tests pin that it stays that way.
+    """
+
+    def _post_invalid(self, **overrides):
+        """Same player on both sides -- fails MatchForm.clean()."""
+        staff, p = _staff_with_player()
+        data = {
+            "player1": p.pk,
+            "player2": p.pk,  # invalid: must be different
+            "date_played": "2026-02-02T14:30",
+            "match_type": "tournament",
+            "best_of": "7",
+            "is_double": "False",
+        }
+        data.update(overrides)
+        resp = _login_client(staff).post(reverse("pingpong:match_add"), data)
+        assert resp.status_code == 200, "form should redisplay, not redirect"
+        return p, resp.content.decode()
+
+    def _selected(self, body, name):
+        block = re.search(rf'<select[^>]*name="{name}".*?</select>', body, re.S)
+        assert block, f"no <select name={name}> in the response"
+        return re.findall(r'<option value="([^"]*)"[^>]*selected', block.group(0))
+
+    def test_best_of_keeps_the_submitted_value(self):
+        """The regression: best_of came back with nothing selected at all."""
+        _, body = self._post_invalid()
+        assert self._selected(body, "best_of") == ["7"]
+
+    def test_match_type_keeps_the_submitted_value(self):
+        _, body = self._post_invalid()
+        assert self._selected(body, "match_type") == ["tournament"]
+
+    def test_player_choice_keeps_the_submitted_value(self):
+        """Same int-vs-string comparison, on a ModelChoiceField."""
+        p, body = self._post_invalid()
+        assert self._selected(body, "player1") == [str(p.pk)]
+
+    def test_date_played_keeps_the_submitted_value(self):
+        _, body = self._post_invalid()
+        field = re.search(r'<input[^>]*name="date_played"[^>]*>', body)
+        assert field and 'value="2026-02-02T14:30"' in field.group(0)
+
+    def test_locked_player1_keeps_the_shared_control_styling(self):
+        """The non-staff path adds `bg-muted cursor-not-allowed` to player1.
+
+        Doing that with attrs.update({"class": ...}) replaces the attribute
+        outright and drops `field-input`, leaving the locked control
+        unstyled. It only became visible once the widget -- rather than a
+        hand-written <select> -- started rendering.
+        """
+        u = UserFactory()
+        p = PlayerFactory(user=u)
+        u.profile.email_verified = True
+        u.profile.save()
+        PlayerFactory(with_user=True)
+
+        body = _login_client(u).get(reverse("pingpong:match_add")).content.decode()
+        tag = re.search(r'<select[^>]*name="player1"[^>]*>', body).group(0)
+
+        assert "field-input" in tag
+        assert "bg-muted" in tag
+        assert "disabled" in tag
+
+    def test_every_error_is_shown_not_just_the_first(self):
+        """_field.html loops over field.errors; templates used to print
+        .errors.0 and silently drop the rest."""
+        staff, p = _staff_with_player()
+        other = PlayerFactory(with_user=True)
+        resp = _login_client(staff).post(
+            reverse("pingpong:match_add"),
+            {
+                "player1": p.pk,
+                "player2": other.pk,
+                "date_played": "not a date",
+                "match_type": "tournament",
+                "best_of": "999",  # not one of BEST_OF_CHOICES
+                "is_double": "False",
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.content.decode()
+        assert "Enter a valid date/time" in body
+        assert "Select a valid choice" in body
+
+
+@pytest.mark.django_db
+class TestLeaderboardHtmxFragment:
+    """Changing a filter swaps the results block instead of reloading.
+
+    The three filter <select>s each had a JS listener calling form.submit().
+    """
+
+    def _seeded_client(self):
+        u = UserFactory(is_staff=True)
+        p = PlayerFactory(user=u, name="Aurelio Ranked")
+        u.profile.email_verified = True
+        u.profile.save()
+        other = PlayerFactory(with_user=True, name="Bartholomew Ranked")
+        m = MatchFactory(player1=p, player2=other)
+        for n in (1, 2, 3):
+            GameFactory(match=m, game_number=n, team1_score=11, team2_score=5)
+        m.refresh_from_db()
+        confirm_match_silent(m)
+        return _login_client(u)
+
+    def test_normal_request_returns_the_whole_page(self):
+        resp = self._seeded_client().get(reverse("pingpong:leaderboard"))
+        assert resp.status_code == 200
+        assert b"<!DOCTYPE" in resp.content
+        assert b'id="leaderboard-results"' in resp.content
+
+    def test_htmx_request_returns_only_the_results_block(self):
+        resp = self._seeded_client().get(
+            reverse("pingpong:leaderboard"), HTTP_HX_REQUEST="true"
+        )
+        assert resp.status_code == 200
+        assert b"<!DOCTYPE" not in resp.content
+        # Must carry the swap target, or hx-swap="outerHTML" replaces the
+        # block with something htmx can never target again.
+        assert b'id="leaderboard-results"' in resp.content
+        assert b"Aurelio Ranked" in resp.content
+
+    def test_filters_apply_to_the_fragment(self):
+        resp = self._seeded_client().get(
+            reverse("pingpong:leaderboard"),
+            {"match_type": "doubles"},
+            HTTP_HX_REQUEST="true",
+        )
+        assert resp.status_code == 200
+        assert b"Aurelio Ranked" not in resp.content
+
+
+@pytest.mark.django_db
+class TestMatchValidateView:
+    """Live validation, replacing the JS copy of MatchForm.clean().
+
+    match_form.html used to rebuild every player dropdown on each change to
+    remove already-picked players, and toggle `required` on player3/player4
+    by hand -- two statements of rules that only Python actually enforces.
+    """
+
+    def _post(self, data):
+        staff, p = _staff_with_player()
+        other = PlayerFactory(with_user=True)
+        payload = {"player1": p.pk, "player2": other.pk}
+        payload.update({k: (p.pk if v == "SELF" else v) for k, v in data.items()})
+        resp = _login_client(staff).post(reverse("pingpong:match_validate"), payload)
+        assert resp.status_code == 200
+        return resp.content.decode()
+
+    def test_reports_duplicate_players(self):
+        body = self._post({"player2": "SELF", "is_double": "False"})
+        assert "All players must be different!" in body
+
+    def test_reports_incomplete_doubles(self):
+        """The rule the JS expressed by toggling `required` attributes."""
+        body = self._post({"is_double": "True"})
+        assert "Four players are required for a doubles match!" in body
+
+    def test_silent_on_a_valid_partial_form(self):
+        body = self._post(
+            {
+                "is_double": "False",
+                "date_played": "2026-02-02T10:00",
+                "match_type": "casual",
+                "best_of": "5",
+            }
+        )
+        assert 'role="alert"' not in body
+
+    def test_does_not_nag_about_unfilled_fields(self):
+        """An empty form is not yet wrong, just unfinished.
+
+        Filtering has to key on Django's `required` error *code*: the message
+        for incomplete doubles also contains the word "required".
+        """
+        staff, _ = _staff_with_player()
+        resp = _login_client(staff).post(reverse("pingpong:match_validate"), {})
+        assert resp.status_code == 200
+        assert 'role="alert"' not in resp.content.decode()
+
+    def test_saves_nothing(self):
+        before = Match.all_objects.count()
+        self._post({"is_double": "False", "date_played": "2026-02-02T10:00",
+                    "match_type": "casual", "best_of": "5"})
+        assert Match.all_objects.count() == before
+
+    def test_requires_login(self):
+        resp = Client().post(reverse("pingpong:match_validate"), {})
+        assert resp.status_code == 302
+
+
 # ===========================================================================
 # MatchCreateView
 # ===========================================================================
@@ -302,7 +622,11 @@ class TestMatchCreateView:
         })
         assert resp.status_code == 302
         # Check that a match exists where player p is in team1
-        match = Match.objects.filter(team1__players=p, team2__players=other).first()
+        match = (
+            Match.objects.filter(participants__player=p)
+            .filter(participants__player=other)
+            .first()
+        )
         assert match is not None
 
     def test_same_player_rejection(self):
@@ -342,7 +666,7 @@ class TestMatchUpdateView:
         GameFactory(match=m, game_number=1, team1_score=11, team2_score=5)
         GameFactory(match=m, game_number=2, team1_score=11, team2_score=9)
         m.refresh_from_db()
-        assert m.winner is not None
+        assert m.winner_side is not None
 
         c = _login_client(u)
         resp = c.get(reverse("pingpong:match_edit", args=[m.pk]))
@@ -371,15 +695,15 @@ class TestMatchUpdateView:
 
     def test_championship_spectator_cannot_edit_other_match(self):
         """Championship participants must not be able to edit matches between *other* players in the same championship."""
-        from .conftest import ChampionshipFactory, TeamFactory
+        from .conftest import ChampionshipFactory
 
         spectator, sp_player = _verified_user_with_player()
         p1 = PlayerFactory(with_user=True)
         p2 = PlayerFactory(with_user=True)
 
-        sp_team = TeamFactory(players=[sp_player])
-        t1 = TeamFactory(players=[p1])
-        t2 = TeamFactory(players=[p2])
+        sp_team = [sp_player]
+        t1 = [p1]
+        t2 = [p2]
 
         champ = ChampionshipFactory(with_participants=[sp_team, t1, t2])
         m = MatchFactory(player1=p1, player2=p2)
@@ -461,21 +785,20 @@ class TestGameCreateView:
         assert resp.status_code == 302
         assert f"/matches/{m.pk}/" in resp.url
         m.refresh_from_db()
-        # Winner is now a Team, and p is in team1
-        assert m.winner == m.team1
-        assert p in m.winner.players.all()
+        assert m.winner_side == 1
+        assert p in m.players_on(1)
 
     def test_championship_spectator_cannot_add_game_to_other_match(self):
         """Championship spectators must not add games to matches between other players."""
-        from .conftest import ChampionshipFactory, TeamFactory
+        from .conftest import ChampionshipFactory
 
         spectator, sp_player = _verified_user_with_player()
         p1 = PlayerFactory(with_user=True)
         p2 = PlayerFactory(with_user=True)
 
-        sp_team = TeamFactory(players=[sp_player])
-        t1 = TeamFactory(players=[p1])
-        t2 = TeamFactory(players=[p2])
+        sp_team = [sp_player]
+        t1 = [p1]
+        t2 = [p2]
 
         champ = ChampionshipFactory(with_participants=[sp_team, t1, t2])
         m = MatchFactory(player1=p1, player2=p2)
@@ -819,7 +1142,7 @@ class TestMatchConfirm:
         other = PlayerFactory(with_user=True)
         m = MatchFactory(player1=p, player2=other)
         # Pre-confirm the match for player p
-        confirm_team(m, 1)
+        confirm_side(m, 1)
         c = _login_client(u)
         resp = c.post(reverse("pingpong:match_confirm", args=[m.pk]))
         assert resp.status_code == 302
@@ -976,8 +1299,8 @@ class TestMatchConfirmEloUpdate:
         match.refresh_from_db()
 
         # Verify winner is set but not confirmed
-        assert match.winner == match.team1
-        assert player1 in match.winner.players.all()
+        assert match.winner_side == 1
+        assert player1 in match.players_on(1)
         assert not match.team1_confirmed
         assert not match.team2_confirmed
         assert EloHistory.objects.count() == 0
@@ -1021,3 +1344,71 @@ class TestMatchConfirmEloUpdate:
         assert history_p1.old_rating == 1500
         assert history_p1.new_rating == player1.elo_rating
         assert history_p1.rating_change > 0
+
+
+@pytest.mark.django_db
+class TestHeadToHeadSinglesDetection:
+    """Head-to-head is singles-only. That used to be enforced by annotating
+    each team's player count; it is now a participant count.
+    """
+
+    def _h2h(self, client, p1, p2):
+        return client.get(
+            reverse("pingpong:head_to_head"), {"player1": p1.pk, "player2": p2.pk}
+        )
+
+    def test_doubles_match_between_the_same_pair_is_excluded(self):
+        u, me = _verified_user_with_player()
+        opponent = PlayerFactory(with_user=True)
+        partner = PlayerFactory(with_user=True)
+        other = PlayerFactory(with_user=True)
+
+        doubles = MatchFactory(
+            team1_players=[me, partner],
+            team2_players=[opponent, other],
+            is_double=True,
+        )
+        for n in (1, 2, 3):
+            GameFactory(match=doubles, game_number=n, team1_score=11, team2_score=5)
+        doubles.refresh_from_db()
+        confirm_match(doubles)
+
+        resp = self._h2h(_login_client(u), me, opponent)
+        assert resp.status_code == 200
+        assert resp.context.get("total_matches") in (None, 0)
+        assert resp.context.get("has_2v2_matches") is True
+
+    def test_match_table_scores_are_oriented_to_player1(self):
+        """match.player1_score / player2_score were read by the template but
+        never set by the view, so the score column rendered blank.
+        """
+        u, me = _verified_user_with_player()
+        opponent = PlayerFactory(with_user=True)
+
+        # me on side 2, so orientation actually has to do something
+        m = MatchFactory(player1=opponent, player2=me, best_of=5)
+        for n in (1, 2, 3):
+            GameFactory(match=m, game_number=n, team1_score=11, team2_score=5)
+        m.refresh_from_db()
+        confirm_match(m)
+
+        resp = self._h2h(_login_client(u), me, opponent)
+        row = resp.context["matches"][0]
+        assert (row.player1_score, row.player2_score) == (0, 3)
+        assert row.player1_won is False
+
+    def test_singles_matches_are_counted(self):
+        u, me = _verified_user_with_player()
+        opponent = PlayerFactory(with_user=True)
+
+        m = MatchFactory(player1=me, player2=opponent)
+        for n in (1, 2, 3):
+            GameFactory(match=m, game_number=n, team1_score=11, team2_score=5)
+        m.refresh_from_db()
+        confirm_match(m)
+
+        resp = self._h2h(_login_client(u), me, opponent)
+        assert resp.status_code == 200
+        assert resp.context["total_matches"] == 1
+        assert resp.context["player1_match_wins"] == 1
+        assert resp.context["player2_match_wins"] == 0

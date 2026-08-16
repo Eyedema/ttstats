@@ -35,17 +35,20 @@ class MatchManager(models.Manager):
 
         # Regular users see only their matches + championship matches they participate in
         try:
-            from .models import Championship
+            from .models import Championship, MatchParticipant
             user_player = user.player
+            # Semi-joins rather than m2m joins: no row fan-out, so no
+            # .distinct() and no ordering restrictions that come with it.
+            mine = Exists(
+                MatchParticipant.objects.filter(
+                    match_id=OuterRef('pk'), player=user_player
+                )
+            )
             championship_qs = Championship.all_objects.filter(
                 pk=OuterRef('championship_id'),
-                participants__players=user_player,
+                entry_members__player=user_player,
             )
-            return qs.filter(
-                Q(team1__players=user_player) |
-                Q(team2__players=user_player) |
-                Exists(championship_qs)
-            ).distinct()
+            return qs.filter(mine | Exists(championship_qs))
         except AttributeError:
             # User has no linked player
             return qs.none()
@@ -115,10 +118,14 @@ class GameManager(models.Manager):
 
         # Filter to games from matches user can see
         try:
+            from .models import MatchParticipant
             user_player = user.player
             return qs.filter(
-                Q(match__team1__players=user_player)
-                | Q(match__team2__players=user_player)
+                Exists(
+                    MatchParticipant.objects.filter(
+                        match_id=OuterRef('match_id'), player=user_player
+                    )
+                )
             )
         except AttributeError:
             return qs.none()
@@ -153,12 +160,16 @@ class ChampionshipManager(models.Manager):
 
         # Regular users see public + their championships
         try:
+            from .models import ChampionshipEntryMember
             user_player = user.player
+            entered = Exists(
+                ChampionshipEntryMember.objects.filter(
+                    championship_id=OuterRef('pk'), player=user_player
+                )
+            )
             return qs.filter(
-                Q(is_public=True) |
-                Q(participants__players=user_player) |
-                Q(created_by=user_player)
-            ).distinct()
+                Q(is_public=True) | Q(created_by=user_player) | entered
+            )
         except AttributeError:
             return qs.filter(is_public=True)
 
@@ -192,17 +203,18 @@ class ScheduledMatchManager(models.Manager):
 
         # Regular users see only their scheduled matches + championship matches they participate in
         try:
-            from .models import Championship
+            from .models import Championship, ScheduledMatchParticipant
             user_player = user.player
+            mine = Exists(
+                ScheduledMatchParticipant.objects.filter(
+                    scheduled_match_id=OuterRef('pk'), player=user_player
+                )
+            )
             championship_qs = Championship.all_objects.filter(
                 pk=OuterRef('championship_id'),
-                participants__players=user_player,
+                entry_members__player=user_player,
             )
-            return qs.filter(
-                Q(team1__players=user_player) |
-                Q(team2__players=user_player) |
-                Exists(championship_qs)
-            ).distinct()
+            return qs.filter(mine | Exists(championship_qs))
         except AttributeError:
             # User has no linked player
             return qs.none()

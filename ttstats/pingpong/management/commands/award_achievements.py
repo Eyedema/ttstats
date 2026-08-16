@@ -52,13 +52,12 @@ class Command(BaseCommand):
             matches = (
                 Match.all_objects
                 .filter(
-                    Q(team1__players=player) | Q(team2__players=player),
+                    participants__player=player,
                     is_confirmed=True,
-                    winner__isnull=False,
+                    winner_side__isnull=False,
                 )
-                .select_related('team1', 'team2', 'winner')
-                .prefetch_related(
-                    'team1__players', 'team2__players',
+                                .prefetch_related(
+                    'participants__player',
                     'games', 'elo_history',
                 )
                 .order_by('date_played')

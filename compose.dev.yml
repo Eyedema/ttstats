@@ -19,12 +19,28 @@ services:
       - redis_data_dev:/data
     command: redis-server --appendonly yes
 
+  # The web service bind-mounts ./ttstats over /app, which shadows the CSS the
+  # image built at COPY --from=assets time. This service rebuilds it into the
+  # mounted tree instead, and keeps rebuilding as templates change.
+  assets:
+    image: node:20-alpine
+    working_dir: /build
+    command: sh -c "npm ci && npm run vendor && npm run watch:css"
+    volumes:
+      - .:/build
+      - node_modules_dev:/build/node_modules
+
   web:
     build:
       context: .
       dockerfile: docker/django/Dockerfile
     command: python manage.py runserver 0.0.0.0:8000
-    env_file: .env.dev
+    # .env.dev.local is optional and loaded second, so it wins. Real credentials
+    # (e.g. a Supabase DATABASE_URL) belong there -- .env.dev is committed.
+    env_file:
+      - .env.dev
+      - path: .env.dev.local
+        required: false
     volumes:
       - ./ttstats:/app
     ports:
@@ -32,7 +48,9 @@ services:
     depends_on:
       - db
       - redis
+      - assets
 
 volumes:
   pgdata_dev:
   redis_data_dev:
+  node_modules_dev:

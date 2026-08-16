@@ -558,3 +558,66 @@ class TestAwardAchievementsCommand:
         assert PlayerAchievement.objects.filter(player=p1).exists()
         # p2 should NOT have been processed (they lost, so no first_blood anyway,
         # but the command should have only iterated over p1)
+
+
+@pytest.mark.django_db
+class TestPlayerSideHelpers:
+    """The Team-based _player_team/_opponent_team helpers became side lookups."""
+
+    def _doubles(self):
+        players = [PlayerFactory(with_user=True) for _ in range(4)]
+        m = MatchFactory(
+            team1_players=players[:2], team2_players=players[2:], is_double=True
+        )
+        return players, m
+
+    def test_side_lookup_for_a_side_two_player(self):
+        from pingpong.achievements import _opponent_side, _player_side
+        from pingpong.models import Side
+
+        players, m = self._doubles()
+
+        assert _player_side(players[2], m) == Side.TWO
+        assert _opponent_side(players[2], m) == Side.ONE
+        assert _player_side(players[0], m) == Side.ONE
+        assert _opponent_side(players[0], m) == Side.TWO
+
+    def test_side_lookup_for_a_non_participant_is_none(self):
+        from pingpong.achievements import _opponent_side, _player_side
+
+        _, m = self._doubles()
+        outsider = PlayerFactory(with_user=True)
+
+        assert _player_side(outsider, m) is None
+        assert _opponent_side(outsider, m) is None
+
+    def test_doubles_partner_on_the_winning_side_counts_as_a_win(self):
+        from pingpong.achievements import _player_won_count, _player_won_match
+
+        players, m = self._doubles()
+        for n in (1, 2, 3):
+            GameFactory(match=m, game_number=n, team1_score=11, team2_score=4)
+        m.refresh_from_db()
+        confirm_match_silent(m)
+        m.refresh_from_db()
+
+        assert _player_won_match(players[0], m) is True
+        assert _player_won_match(players[1], m) is True
+        assert _player_won_match(players[2], m) is False
+        assert _player_won_count(players[1]) == 1
+        assert _player_won_count(players[2]) == 0
+
+    def test_confirmed_matches_are_not_duplicated_for_doubles(self):
+        """The old Q(team1__players)|Q(team2__players) OR needed .distinct();
+        one participant row per player per match means it no longer does.
+        """
+        from pingpong.achievements import _player_confirmed_matches
+
+        players, m = self._doubles()
+        for n in (1, 2, 3):
+            GameFactory(match=m, game_number=n, team1_score=11, team2_score=4)
+        m.refresh_from_db()
+        confirm_match_silent(m)
+
+        pks = list(_player_confirmed_matches(players[0]).values_list("pk", flat=True))
+        assert pks == [m.pk]

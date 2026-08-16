@@ -11,7 +11,6 @@ from .conftest import (
     LocationFactory,
     MatchFactory,
     PlayerFactory,
-    TeamFactory,
     UserFactory,
     confirm_match,
 )
@@ -33,12 +32,12 @@ def _auth_client(user):
 
 
 def _singles_team(player):
-    return TeamFactory(players=[player])
+    return [player]
 
 
 def _make_participants(n=4):
     players = [_player_with_verified_user() for _ in range(n)]
-    teams = [_singles_team(p) for p in players]
+    teams = [[p] for p in players]
     return players, teams
 
 
@@ -139,7 +138,7 @@ class TestChampionshipResultsMatrix:
         """Championship detail includes matrix_rows when matches are confirmed."""
         players, teams = _make_participants(3)
         champ = ChampionshipFactory(with_participants=teams)
-        m = MatchFactory(team1=teams[0], team2=teams[1], championship=champ)
+        m = MatchFactory(team1_players=[players[0]], team2_players=[players[1]], championship=champ)
         GameFactory(match=m, game_number=1, team1_score=11, team2_score=5)
         GameFactory(match=m, game_number=2, team1_score=11, team2_score=7)
         GameFactory(match=m, game_number=3, team1_score=11, team2_score=9)
@@ -166,7 +165,7 @@ class TestChampionshipResultsMatrix:
         """Matrix shows correct game score from row team's perspective."""
         players, teams = _make_participants(2)
         champ = ChampionshipFactory(with_participants=teams)
-        m = MatchFactory(team1=teams[0], team2=teams[1], championship=champ)
+        m = MatchFactory(team1_players=[players[0]], team2_players=[players[1]], championship=champ)
         GameFactory(match=m, game_number=1, team1_score=11, team2_score=5)
         GameFactory(match=m, game_number=2, team1_score=11, team2_score=7)
         GameFactory(match=m, game_number=3, team1_score=11, team2_score=9)
@@ -251,42 +250,75 @@ class TestChampionshipEditView:
 
 @pytest.mark.django_db
 class TestChampionshipRegistration:
-    def test_register_team(self):
+    def test_register_creates_an_entry(self):
         player = _player_with_verified_user()
-        team = _singles_team(player)
         client = _auth_client(player.user)
         champ = ChampionshipFactory()
         resp = client.post(
-            reverse("pingpong:championship_register", args=[champ.pk]),
-            {"team": team.pk},
+            reverse("pingpong:championship_register", args=[champ.pk]), {}
         )
         assert resp.status_code == 302
-        assert champ.participants.filter(pk=team.pk).exists()
+        assert champ.entries.count() == 1
+        assert list(champ.entries.first().players) == [player]
 
-    def test_unregister_team(self):
+    def test_registering_twice_is_rejected(self):
         player = _player_with_verified_user()
-        team = _singles_team(player)
-        champ = ChampionshipFactory(with_participants=[team])
+        client = _auth_client(player.user)
+        champ = ChampionshipFactory()
+        url = reverse("pingpong:championship_register", args=[champ.pk])
+        client.post(url, {})
+        client.post(url, {})
+        assert champ.entries.count() == 1
+
+    def test_doubles_registration_requires_a_partner(self):
+        from pingpong.models import Championship as C
+
+        player = _player_with_verified_user()
+        client = _auth_client(player.user)
+        champ = ChampionshipFactory(championship_type=C.ChampionshipType.DOUBLES)
+        resp = client.post(
+            reverse("pingpong:championship_register", args=[champ.pk]), {}
+        )
+        assert resp.status_code == 302
+        assert champ.entries.count() == 0
+
+    def test_doubles_registration_with_a_partner(self):
+        from pingpong.models import Championship as C
+
+        player = _player_with_verified_user()
+        partner = _player_with_verified_user()
+        client = _auth_client(player.user)
+        champ = ChampionshipFactory(championship_type=C.ChampionshipType.DOUBLES)
+        resp = client.post(
+            reverse("pingpong:championship_register", args=[champ.pk]),
+            {"partner": partner.pk},
+        )
+        assert resp.status_code == 302
+        assert champ.entries.count() == 1
+        assert set(champ.entries.first().players) == {player, partner}
+
+    def test_unregister_entry(self):
+        player = _player_with_verified_user()
+        champ = ChampionshipFactory(with_entries=[[player]])
         client = _auth_client(player.user)
         resp = client.post(
-            reverse("pingpong:championship_unregister", args=[champ.pk]),
-            {"team": team.pk},
+            reverse("pingpong:championship_unregister", args=[champ.pk])
         )
         assert resp.status_code == 302
-        assert not champ.participants.filter(pk=team.pk).exists()
+        assert not champ.entries.filter(members__player=player).exists()
 
     def test_unregister_blocked_after_registration_phase(self):
         player = _player_with_verified_user()
-        team = _singles_team(player)
-        champ = ChampionshipFactory(status=Championship.Status.SCHEDULED, with_participants=[team])
+        champ = ChampionshipFactory(
+            status=Championship.Status.SCHEDULED, with_entries=[[player]]
+        )
         client = _auth_client(player.user)
         resp = client.post(
-            reverse("pingpong:championship_unregister", args=[champ.pk]),
-            {"team": team.pk},
+            reverse("pingpong:championship_unregister", args=[champ.pk])
         )
         assert resp.status_code == 302
-        # Team should still be registered
-        assert champ.participants.filter(pk=team.pk).exists()
+        # Entry should still be registered
+        assert champ.entries.filter(members__player=player).exists()
 
 
 # ---------------------------------------------------------------------------
@@ -398,8 +430,8 @@ class TestChampionshipMatchLifecycle:
             reverse("pingpong:scheduled_match_convert", args=[sm.pk]),
             {
                 "is_double": False,
-                "player1": sm.team1.players.first().pk,
-                "player2": sm.team2.players.first().pk,
+                "player1": sm.side1_players.first().pk,
+                "player2": sm.side2_players.first().pk,
                 "date_played": date.today().isoformat(),
                 "match_type": "casual",
                 "best_of": 5,
@@ -430,8 +462,8 @@ class TestChampionshipMatchLifecycle:
             reverse("pingpong:scheduled_match_convert", args=[sm.pk]),
             {
                 "is_double": False,
-                "player1": sm.team1.players.first().pk,
-                "player2": sm.team2.players.first().pk,
+                "player1": sm.side1_players.first().pk,
+                "player2": sm.side2_players.first().pk,
                 "date_played": date.today().isoformat(),
                 "match_type": "casual",
                 "best_of": 5,
@@ -440,3 +472,55 @@ class TestChampionshipMatchLifecycle:
 
         champ.refresh_from_db()
         assert champ.status == Championship.Status.IN_PROGRESS
+
+
+@pytest.mark.django_db
+class TestChampionshipParticipantsFragment:
+    """The participant picker, swapped in by htmx on a type change.
+
+    Before this the page rebuilt its own URL and reloaded, throwing away
+    everything already entered in the form.
+    """
+
+    def _get(self, **params):
+        player = _player_with_verified_user()
+        PlayerFactory(with_user=True)
+        client = _auth_client(player.user)
+        return client.get(
+            reverse("pingpong:championship_participants_fragment"), params
+        )
+
+    def test_singles_offers_the_players(self):
+        resp = self._get(championship_type=Championship.ChampionshipType.SINGLES)
+        assert resp.status_code == 200
+        assert resp.content.decode().count('type="checkbox"') == 2
+
+    def test_doubles_offers_none(self):
+        """Doubles entries are formed by registering with a partner, so there
+        is nothing to pre-select."""
+        resp = self._get(championship_type=Championship.ChampionshipType.DOUBLES)
+        assert resp.status_code == 200
+        assert 'type="checkbox"' not in resp.content.decode()
+
+    def test_public_championships_keep_the_block_hidden(self):
+        """is_public rides along via hx-include so the swap preserves the
+        current visibility instead of resetting it."""
+        resp = self._get(
+            championship_type=Championship.ChampionshipType.SINGLES, is_public="on"
+        )
+        assert "display: none" in resp.content.decode()
+
+    def test_requires_login(self):
+        resp = Client().get(
+            reverse("pingpong:championship_participants_fragment")
+        )
+        assert resp.status_code == 302
+
+    def test_create_page_renders_the_section_exactly_once(self):
+        """First paint includes the same partial the fragment view returns,
+        so the markup exists in one place."""
+        player = _player_with_verified_user()
+        body = _auth_client(player.user).get(
+            reverse("pingpong:championship_create")
+        ).content.decode()
+        assert body.count('id="private-participants-section"') == 1

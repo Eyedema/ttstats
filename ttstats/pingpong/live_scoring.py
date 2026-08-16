@@ -17,6 +17,12 @@ Side = Literal["team1", "team2"]
 # little audit trail.
 MAX_EVENTS = 50
 
+# The rules of the game, named rather than sprinkled as literals. A game goes
+# to the first side to reach WIN_POINTS, except that they must be at least
+# MIN_LEAD clear -- so at 10-10 play continues until someone leads by two.
+WIN_POINTS = 11
+MIN_LEAD = 2
+
 
 def games_to_win(best_of: int) -> int:
     """Games one side needs to win the match. best_of=5 → 3, best_of=7 → 4."""
@@ -87,12 +93,47 @@ def current_server(state: dict) -> Side | None:
 
 
 def is_game_won(t1_points: int, t2_points: int) -> Side | None:
-    """Table tennis: first to 11 by 2."""
-    if t1_points >= 11 and t1_points - t2_points >= 2:
+    """Which side, if either, has won: first to WIN_POINTS, by MIN_LEAD."""
+    if t1_points >= WIN_POINTS and t1_points - t2_points >= MIN_LEAD:
         return "team1"
-    if t2_points >= 11 and t2_points - t1_points >= 2:
+    if t2_points >= WIN_POINTS and t2_points - t1_points >= MIN_LEAD:
         return "team2"
     return None
+
+
+def is_valid_final_score(t1_points: int, t2_points: int) -> bool:
+    """True if this is a score a finished game could actually have ended on.
+
+    Not the same as "somebody is ahead": 11-10 has a leader but is not over,
+    and 13-5 cannot happen because play stops the moment the lead is enough.
+    """
+    if t1_points < 0 or t2_points < 0:
+        return False
+    if is_game_won(t1_points, t2_points) is None:
+        return False
+    winner, loser = max(t1_points, t2_points), min(t1_points, t2_points)
+    # Past deuce the winner takes it by exactly MIN_LEAD -- the game would
+    # have ended earlier otherwise.
+    if winner > WIN_POINTS:
+        return winner - loser == MIN_LEAD
+    return True
+
+
+def common_final_scores() -> list[tuple[int, int]]:
+    """The handful of scorelines worth offering as one-key shortcuts.
+
+    Derived from the rules above rather than typed out, so changing
+    WIN_POINTS moves the presets with it. game_form.html used to hard-code
+    11-0 / 11-9 / 0-11 / 9-11 in JavaScript.
+    """
+    shutout = (WIN_POINTS, 0)
+    closest = (WIN_POINTS, WIN_POINTS - MIN_LEAD)
+    return [
+        shutout,
+        closest,
+        (shutout[1], shutout[0]),
+        (closest[1], closest[0]),
+    ]
 
 
 def is_match_complete(state: dict) -> bool:

@@ -18,6 +18,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --user --no-warn-script-location -r requirements.txt
 
+# Asset stage: compile Tailwind. Kept separate from the Python builder so a
+# template-only change does not reinstall pip packages, and vice versa.
+FROM node:20-alpine AS assets
+
+WORKDIR /build
+
+COPY package.json package-lock.json ./
+RUN npm ci
+
+# Tailwind scans templates and forms.py to decide which classes to emit, so
+# both have to be present before the build runs.
+COPY tailwind.config.js postcss.config.js ./
+# scripts/ carries vendor_assets.mjs, which `npm run build` invokes.
+COPY scripts/ ./scripts/
+COPY ttstats/ ./ttstats/
+RUN npm run build
+
 # Final stage
 FROM python:3.12-slim
 
@@ -40,6 +57,13 @@ ENV PATH=/root/.local/bin:$PATH
 
 # Copy application code from ttstats subdirectory
 COPY ttstats/ .
+
+# Built CSS and vendored JS must land AFTER the source copy above, or they get
+# overwritten by the (empty) css/ directory that ships in the repo.
+COPY --from=assets /build/ttstats/pingpong/static/pingpong/css/ \
+     /app/pingpong/static/pingpong/css/
+COPY --from=assets /build/ttstats/pingpong/static/pingpong/js/vendor/ \
+     /app/pingpong/static/pingpong/js/vendor/
 
 # Copy and make entrypoint executable
 COPY docker/django/entrypoint.sh /entrypoint.sh

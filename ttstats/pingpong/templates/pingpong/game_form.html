@@ -19,15 +19,15 @@
             <div>
                 <p class="text-sm opacity-80 mb-1">Adding score for</p>
                 {% if match.is_double %}
-                <h2 class="text-2xl font-bold">{{ match.team1.name|default:"Team 1" }} vs {{ match.team2.name|default:"Team 2" }}</h2>
+                <h2 class="text-2xl font-bold">{{ match.side1_label }} vs {{ match.side2_label }}</h2>
                 <p class="text-sm opacity-90 mt-1">
-                    ({% for p in match.team1.players.all %}{{ p.name }}{% if not forloop.last %} & {% endif %}{% endfor %}
+                    ({% for p in match.side1_players %}{{ p.name }}{% if not forloop.last %} & {% endif %}{% endfor %}
                     vs
-                    {% for p in match.team2.players.all %}{{ p.name }}{% if not forloop.last %} & {% endif %}{% endfor %})
+                    {% for p in match.side2_players %}{{ p.name }}{% if not forloop.last %} & {% endif %}{% endfor %})
                 </p>
                 <p class="text-sm opacity-90 mt-1">{{ match.date_played|date:"F d, Y" }} • Best of {{ match.best_of }}</p>
                 {% else %}
-                <h2 class="text-2xl font-bold">{{ match.player1 }} vs {{ match.player2 }}</h2>
+                <h2 class="text-2xl font-bold">{{ match.side1_label }} vs {{ match.side2_label }}</h2>
                 <p class="text-sm opacity-90 mt-1">{{ match.date_played|date:"F d, Y" }} • Best of {{ match.best_of }}</p>
                 {% endif %}
             </div>
@@ -81,12 +81,12 @@
                         <div class="space-y-2">
                             <label class="text-sm font-medium leading-none" for="id_team1_score">
                                 {% if match.is_double %}
-                                    {{ match.team1.name|default:"Team 1" }}
+                                    {{ match.side1_label }}
                                     <span class="text-xs text-muted-foreground block mt-0.5">
-                                        ({% for p in match.team1.players.all %}{{ p.name }}{% if not forloop.last %} & {% endif %}{% endfor %})
+                                        ({% for p in match.side1_players %}{{ p.name }}{% if not forloop.last %} & {% endif %}{% endfor %})
                                     </span>
                                 {% else %}
-                                    {{ match.player1 }}
+                                    {{ match.side1_label }}
                                 {% endif %}
                                 <span class="text-destructive">*</span>
                             </label>
@@ -102,7 +102,9 @@
                                 autofocus
                             />
                             {% if form.team1_score.errors %}
-                            <p class="text-sm text-destructive">{{ form.team1_score.errors.0 }}</p>
+                            {% for error in form.team1_score.errors %}
+                            <p class="text-sm text-destructive">{{ error }}</p>
+                            {% endfor %}
                             {% endif %}
                         </div>
 
@@ -110,12 +112,12 @@
                         <div class="space-y-2">
                             <label class="text-sm font-medium leading-none" for="id_team2_score">
                                 {% if match.is_double %}
-                                    {{ match.team2.name|default:"Team 2" }}
+                                    {{ match.side2_label }}
                                     <span class="text-xs text-muted-foreground block mt-0.5">
-                                        ({% for p in match.team2.players.all %}{{ p.name }}{% if not forloop.last %} & {% endif %}{% endfor %})
+                                        ({% for p in match.side2_players %}{{ p.name }}{% if not forloop.last %} & {% endif %}{% endfor %})
                                     </span>
                                 {% else %}
-                                    {{ match.player2 }}
+                                    {{ match.side2_label }}
                                 {% endif %}
                                 <span class="text-destructive">*</span>
                             </label>
@@ -130,7 +132,9 @@
                                 required
                             />
                             {% if form.team2_score.errors %}
-                            <p class="text-sm text-destructive">{{ form.team2_score.errors.0 }}</p>
+                            {% for error in form.team2_score.errors %}
+                            <p class="text-sm text-destructive">{{ error }}</p>
+                            {% endfor %}
                             {% endif %}
                         </div>
                     </div>
@@ -162,7 +166,9 @@
                         class="flex h-10 w-full rounded-md border border-input bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.duration_minutes.errors %}border-destructive{% endif %}" 
                     />
                     {% if form.duration_minutes.errors %}
-                    <p class="text-sm text-destructive">{{ form.duration_minutes.errors.0 }}</p>
+                    {% for error in form.duration_minutes.errors %}
+                    <p class="text-sm text-destructive">{{ error }}</p>
+                    {% endfor %}
                     {% else %}
                     <p class="text-sm text-muted-foreground">Track how long each game lasted</p>
                     {% endif %}
@@ -205,7 +211,11 @@
     </div>
 </div>
 
+{{ score_presets|json_script:"score-presets" }}
 <script>
+    const SCORE_PRESETS = JSON.parse(
+        document.getElementById('score-presets').textContent
+    );
     // Keyboard shortcuts for quick scoring
     document.addEventListener('keydown', function(e) {
         const team1Input = document.getElementById('id_team1_score');
@@ -247,26 +257,15 @@
             form.submit();
         }
 
-        // Quick score presets
+        // Quick score presets. The scorelines come from the server, which
+        // derives them from the scoring rules in live_scoring.py -- they used
+        // to be four hard-coded cases here.
         if (e.altKey) {
-            e.preventDefault();
-            switch(e.key) {
-                case '1': // 11-0
-                    team1Input.value = '11';
-                    team2Input.value = '0';
-                    break;
-                case '2': // 11-9
-                    team1Input.value = '11';
-                    team2Input.value = '9';
-                    break;
-                case '3': // 0-11
-                    team1Input.value = '0';
-                    team2Input.value = '11';
-                    break;
-                case '4': // 9-11
-                    team1Input.value = '9';
-                    team2Input.value = '11';
-                    break;
+            const preset = SCORE_PRESETS[Number(e.key) - 1];
+            if (preset) {
+                e.preventDefault();
+                team1Input.value = preset[0];
+                team2Input.value = preset[1];
             }
         }
     });
@@ -284,7 +283,7 @@
             <li><kbd class="px-1.5 py-0.5 text-xs bg-muted rounded">Tab</kbd> Switch to Team/Player 2</li>
             <li><kbd class="px-1.5 py-0.5 text-xs bg-muted rounded">Ctrl</kbd>+<kbd class="px-1.5 py-0.5 text-xs bg-muted rounded">Enter</kbd> Save & Add Next</li>
             <li><kbd class="px-1.5 py-0.5 text-xs bg-muted rounded">Shift</kbd>+<kbd class="px-1.5 py-0.5 text-xs bg-muted rounded">Enter</kbd> Save & Finish</li>
-            <li><kbd class="px-1.5 py-0.5 text-xs bg-muted rounded">Alt</kbd>+<kbd class="px-1.5 py-0.5 text-xs bg-muted rounded">1-4</kbd> Quick scores (11-0, 11-9, 0-11, 9-11)</li>
+            <li><kbd class="px-1.5 py-0.5 text-xs bg-muted rounded">Alt</kbd>+<kbd class="px-1.5 py-0.5 text-xs bg-muted rounded">1-${SCORE_PRESETS.length}</kbd> Quick scores (${SCORE_PRESETS.map(s => s.join('-')).join(', ')})</li>
         </ul>
     `;
     document.querySelector('.space-y-6').appendChild(helpText);

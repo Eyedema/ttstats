@@ -1,7 +1,7 @@
 {% extends "pingpong/base.html" %}
 {% load static %}
 
-{% block title %}{{ scheduled_match.team1 }} vs {{ scheduled_match.team2 }} - Scheduled Match{% endblock %}
+{% block title %}{{ scheduled_match.side1_label }} vs {{ scheduled_match.side2_label }} - Scheduled Match{% endblock %}
 
 {% block content %}
 <div class="max-w-4xl mx-auto space-y-6">
@@ -23,13 +23,13 @@
                         {% if scheduled_match.location %} • {{ scheduled_match.location }}{% endif %}
                     </p>
                     <h1 class="text-3xl font-bold mb-2">
-                        {{ scheduled_match.team1 }} vs {{ scheduled_match.team2 }}
+                        {{ scheduled_match.side1_label }} vs {{ scheduled_match.side2_label }}
                     </h1>
-                    {% if scheduled_match.team1.players.count == 2 %}
+                    {% if scheduled_match.is_double %}
                     <p class="text-sm opacity-70 mb-3">
-                        {% for p in scheduled_match.team1.players.all %}{{ p.name }}{% if not forloop.last %} & {% endif %}{% endfor %}
+                        {% for p in scheduled_match.side1_players %}{{ p.name }}{% if not forloop.last %} & {% endif %}{% endfor %}
                         vs
-                        {% for p in scheduled_match.team2.players.all %}{{ p.name }}{% if not forloop.last %} & {% endif %}{% endfor %}
+                        {% for p in scheduled_match.side2_players %}{{ p.name }}{% if not forloop.last %} & {% endif %}{% endfor %}
                     </p>
                     {% endif %}
 
@@ -96,7 +96,7 @@
 
                 <div>
                     <dt class="text-sm font-medium text-muted-foreground mb-1">Match Type</dt>
-                    <dd class="text-sm">{% if scheduled_match.team1.players.count == 2 %}Doubles{% else %}Singles{% endif %}</dd>
+                    <dd class="text-sm">{% if scheduled_match.is_double %}Doubles{% else %}Singles{% endif %}</dd>
                 </div>
 
                 {% if scheduled_match.created_by %}
@@ -119,9 +119,9 @@
                 <dt class="text-sm font-medium text-muted-foreground mb-2">Players</dt>
                 <div class="flex flex-col sm:flex-row gap-4">
                     <div class="flex-1 p-4 rounded-md border bg-muted/20">
-                        <p class="text-sm font-medium mb-2">{{ scheduled_match.team1 }}</p>
+                        <p class="text-sm font-medium mb-2">{{ scheduled_match.side1_label }}</p>
                         <ul class="space-y-1">
-                            {% for player in scheduled_match.team1.players.all %}
+                            {% for player in scheduled_match.side1_players %}
                             <li class="text-sm">
                                 <a href="{% url 'pingpong:player_detail' player.pk %}" class="hover:underline">{{ player.name }}</a>
                             </li>
@@ -132,9 +132,9 @@
                         <span class="text-lg font-bold">vs</span>
                     </div>
                     <div class="flex-1 p-4 rounded-md border bg-muted/20">
-                        <p class="text-sm font-medium mb-2">{{ scheduled_match.team2 }}</p>
+                        <p class="text-sm font-medium mb-2">{{ scheduled_match.side2_label }}</p>
                         <ul class="space-y-1">
-                            {% for player in scheduled_match.team2.players.all %}
+                            {% for player in scheduled_match.side2_players %}
                             <li class="text-sm">
                                 <a href="{% url 'pingpong:player_detail' player.pk %}" class="hover:underline">{{ player.name }}</a>
                             </li>
@@ -151,8 +151,8 @@
     <div class="rounded-lg border bg-white p-4 md:p-6">
         <h3 class="text-sm font-medium text-muted-foreground mb-3">Win Probability</h3>
         <div class="flex justify-between text-sm font-medium mb-1.5">
-            <span>{{ scheduled_match.team1 }} {{ team1_win_pct }}%</span>
-            <span>{{ team2_win_pct }}% {{ scheduled_match.team2 }}</span>
+            <span>{{ scheduled_match.side1_label }} {{ team1_win_pct }}%</span>
+            <span>{{ team2_win_pct }}% {{ scheduled_match.side2_label }}</span>
         </div>
         <div class="flex h-2.5 rounded-full overflow-hidden">
             <div class="bg-primary transition-all" style="width: {{ team1_win_pct }}%"></div>

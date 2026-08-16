@@ -50,30 +50,25 @@ class TestMatchListViewPerformance:
         # Assert: Status 200 and low query count
         assert response.status_code == 200
 
-        # With select_related and prefetch_related, we expect:
-        # 1-2. Session/user auth queries
-        # 3. COUNT query for pagination
-        # 4. Base Match query with select_related (team1, team2, location, winner)
-        # 5-7. Prefetch team players + user + profile (3 queries: players, users, profiles)
-        # 8-10. Prefetch team2 players + user + profile
-        # 11-13. Prefetch winner players + user + profile
-        # 14. Prefetch games
-        # 15. Prefetch confirmations
-        # 16-27. Individual team player queries (these happen when we call list())
-        # Total: ~27 queries (down from 300-500 before optimization!)
+        # 1-2. Session/user auth
+        # 3.   COUNT for pagination
+        # 4.   Base Match query with select_related
+        # 5.   Participants + player + user + profile, in one prefetch
+        # 6.   Games
+        # 7.   Confirmations
+        # Total ~10. Was ~27 when players were reached through three separate
+        # team prefetches and the template called Team.__str__ per row.
         print(f"\nQuery count: {query_count}")
-        print(f"Expected: <= 35 queries")
+        print(f"Expected: <= 14 queries")
 
-        # Fail if more than 35 queries
-        # Note: This is still a massive improvement from the original 300-500 queries
-        if query_count > 35:
+        if query_count > 14:
             print("\n\nAll queries:")
             for i, q in enumerate(context.captured_queries):
                 print(f"\n{i+1}. {q['sql']}")
 
-        assert query_count <= 35, (
+        assert query_count <= 14, (
             f"Too many queries: {query_count}. "
-            f"Expected <= 35 with select_related/prefetch_related optimization. "
+            f"Expected <= 14 with participant prefetching. "
             f"(Note: This is still much better than the original 300-500 queries!)"
         )
 
@@ -118,3 +113,48 @@ class TestMatchListViewPerformance:
         assert "page_obj" in response.context
         assert response.context["page_obj"].paginator.per_page == 10
         assert len(response.context["page_obj"].object_list) == 10
+
+
+@pytest.mark.django_db
+class TestMatchListViewPerformanceForRegularUser:
+    """The staff test above never exercises row-level filtering -- staff take
+    an early return. This one goes through MatchManager's semi-join.
+    """
+
+    def test_regular_user_list_stays_cheap_and_has_no_duplicate_rows(self):
+        from django.test.utils import CaptureQueriesContext
+
+        u = UserFactory()
+        u.profile.email_verified = True
+        u.profile.save()
+        me = PlayerFactory(user=u)
+        partner = PlayerFactory(with_user=True)
+
+        mine = []
+        for _ in range(10):
+            opp1, opp2 = PlayerFactory(with_user=True), PlayerFactory(with_user=True)
+            m = MatchFactory(
+                team1_players=[me, partner],
+                team2_players=[opp1, opp2],
+                is_double=True,
+            )
+            GameFactory(match=m, game_number=1, team1_score=11, team2_score=5)
+            mine.append(m.pk)
+        for _ in range(10):
+            MatchFactory()  # not mine
+
+        client = Client()
+        client.force_login(u)
+
+        with CaptureQueriesContext(connection) as context:
+            resp = client.get(reverse("pingpong:match_list"))
+            assert resp.status_code == 200
+            rows = list(resp.context["matches"])
+
+        # Doubles matches must appear once each; the old m2m OR needed
+        # .distinct() to achieve this, the semi-join gets it for free.
+        pks = [m.pk for m in rows]
+        assert sorted(pks) == sorted(mine)
+        assert len(pks) == len(set(pks))
+        print(f"\nRegular-user query count: {len(context.captured_queries)}")
+        assert len(context.captured_queries) <= 14

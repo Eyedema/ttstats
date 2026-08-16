@@ -1,0 +1,19 @@
+{% comment %}
+Live validation feedback for the match form.
+
+Rendered by MatchValidateView, which binds the real MatchForm to whatever has
+been filled in so far. The rules -- players must all differ, doubles needs
+four of them, singles only two -- are stated once, in MatchForm.clean(); this
+block just shows what that returned.
+
+Only complaints the user can act on yet are shown: "this field is required"
+while they are still filling the form in is noise, so the view drops those.
+{% endcomment %}
+<div id="form-errors" class="space-y-2">
+    {% for error in errors %}
+    <div class="rounded-lg border border-destructive bg-destructive/10 p-3 flex items-center gap-2"
+         role="alert">
+        <span class="text-sm font-medium text-destructive">{{ error }}</span>
+    </div>
+    {% endfor %}
+</div>

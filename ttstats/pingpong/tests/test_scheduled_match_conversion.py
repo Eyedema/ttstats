@@ -4,7 +4,7 @@ from django.urls import reverse
 from django.contrib.messages import get_messages
 
 from pingpong.models import Match, ScheduledMatch
-from .conftest import UserFactory, PlayerFactory, LocationFactory, ScheduledMatchFactory, MatchFactory, TeamFactory
+from .conftest import UserFactory, PlayerFactory, LocationFactory, ScheduledMatchFactory, MatchFactory
 
 
 @pytest.mark.django_db
@@ -228,8 +228,8 @@ class TestScheduledMatchConvertView:
 
         # Match should have correct data
         match = sm.match
-        assert match.team1.players.first() == p1
-        assert match.team2.players.first() == p2
+        assert match.side1_players.first() == p1
+        assert match.side2_players.first() == p2
         assert match.location == location
         assert match.match_type == "casual"
         assert match.best_of == 5
@@ -295,11 +295,11 @@ class TestScheduledMatchConvertView:
         p3 = PlayerFactory(with_user=True)
         p4 = PlayerFactory(with_user=True)
 
-        team1 = TeamFactory(players=[p1, p2])
-        team2 = TeamFactory(players=[p3, p4])
+        team1 = [p1, p2]
+        team2 = [p3, p4]
         location = LocationFactory()
 
-        sm = ScheduledMatchFactory(team1=team1, team2=team2, location=location)
+        sm = ScheduledMatchFactory(team1_players=team1, team2_players=team2, location=location)
 
         client.force_login(p1.user)
         url = reverse("pingpong:scheduled_match_convert", kwargs={"scheduled_match_pk": sm.pk})
@@ -328,9 +328,9 @@ class TestScheduledMatchConvertView:
         assert sm.match is not None
         assert sm.match.is_double is True
 
-        # Teams should have correct players
-        team1_players = set(sm.match.team1.players.all())
-        team2_players = set(sm.match.team2.players.all())
+        # Each side should have correct players
+        team1_players = set(sm.match.side1_players)
+        team2_players = set(sm.match.side2_players)
         assert team1_players == {p1, p2}
         assert team2_players == {p3, p4}
 
@@ -543,7 +543,7 @@ class TestConversionIntegration:
 
         # Match should now have a winner
         match.refresh_from_db()
-        assert match.winner is not None
+        assert match.winner_side is not None
 
         # Step 5: Confirm match (both players)
         confirm_url = reverse("pingpong:match_confirm", kwargs={"pk": match.pk})

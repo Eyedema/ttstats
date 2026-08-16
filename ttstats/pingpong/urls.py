@@ -25,6 +25,8 @@ urlpatterns = [
     # Matches
     path("matches/", views.MatchListView.as_view(), name="match_list"),
     path("matches/add/", views.MatchCreateView.as_view(), name="match_add"),
+    # htmx: live validation of the match form, saving nothing.
+    path("matches/validate/", views.MatchValidateView.as_view(), name="match_validate"),
     path("matches/<int:pk>/", views.MatchDetailView.as_view(), name="match_detail"),
     path("matches/<int:pk>/edit/", views.MatchUpdateView.as_view(), name="match_edit"),
     path(
@@ -49,13 +51,14 @@ urlpatterns = [
     # Passkey management
     path("passkeys/", views.PasskeyManagementView.as_view(), name="passkey_management"),
 
-    # Teams
-    path("teams/", views.TeamsListView.as_view(), name="team_list"),
-    path("teams/<int:pk>/", views.TeamDetailView.as_view(), name="team_detail"),
-    path("teams/<int:pk>/edit/", views.TeamUpdateView.as_view(), name="team_edit"),
-
     path('championships/', views.ChampionshipListView.as_view(), name='championship_list'),
     path('championships/create/', views.ChampionshipCreateView.as_view(), name='championship_create'),
+    # htmx fragment: the participant picker, re-rendered when the type changes.
+    path(
+        'championships/participants-fragment/',
+        views.ChampionshipParticipantsFragmentView.as_view(),
+        name='championship_participants_fragment',
+    ),
     path('championships/<int:pk>/', views.ChampionshipDetailView.as_view(), name='championship_detail'),
     path('championships/<int:pk>/edit/', views.ChampionshipEditView.as_view(), name='championship_edit'),
     path('championships/<int:pk>/register/', views.ChampionshipRegisterView.as_view(), name='championship_register'),

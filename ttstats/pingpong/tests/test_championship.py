@@ -1,29 +1,33 @@
 import pytest
 from datetime import date, timedelta
 
-from pingpong.models import Championship, ScheduledMatch, Match
+from pingpong.models import Championship, ScheduledMatch, Match, Side
 from .conftest import (
     ChampionshipFactory,
     GameFactory,
     LocationFactory,
     MatchFactory,
     PlayerFactory,
-    TeamFactory,
     UserFactory,
     confirm_match,
 )
 
 
 def _singles_team(player):
-    """Create a 1-player team for a player."""
-    return TeamFactory(players=[player])
+    """Entries are per player now; kept so call sites read the same."""
+    return [player]
 
 
 def _make_participants(n=4):
     """Create n players each with a 1-player team. Returns (players, teams)."""
     players = [PlayerFactory(with_user=True) for _ in range(n)]
-    teams = [_singles_team(p) for p in players]
+    teams = [[p] for p in players]
     return players, teams
+
+
+def _entry_of(championship, player):
+    """The championship entry containing this player."""
+    return championship.entries.get(members__player=player)
 
 
 # ---------------------------------------------------------------------------
@@ -79,52 +83,64 @@ class TestChampionshipModel:
 
 @pytest.mark.django_db
 class TestChampionshipRegistration:
-    def test_can_register_valid_team(self):
+    def test_can_register_valid_entry(self):
         player = PlayerFactory(with_user=True)
-        team = _singles_team(player)
         champ = ChampionshipFactory()
-        assert champ.can_register(team) is True
+        assert champ.can_register([player]) is True
 
     def test_can_register_returns_false_when_full(self):
         _, teams = _make_participants(2)
         champ = ChampionshipFactory(max_participants=2, with_participants=teams)
         new_player = PlayerFactory(with_user=True)
-        new_team = _singles_team(new_player)
-        assert champ.can_register(new_team) is False
+        assert champ.can_register([new_player]) is False
 
     def test_can_register_returns_false_when_already_registered(self):
         player = PlayerFactory(with_user=True)
         team = _singles_team(player)
         champ = ChampionshipFactory(with_participants=[team])
-        assert champ.can_register(team) is False
+        assert champ.can_register([player]) is False
 
-    def test_can_register_returns_false_for_wrong_team_size(self):
+    def test_can_register_returns_false_if_any_player_already_entered(self):
+        """A player may not appear in two entries of the same championship."""
         p1 = PlayerFactory(with_user=True)
         p2 = PlayerFactory(with_user=True)
-        doubles_team = TeamFactory(players=[p1, p2])
+        p3 = PlayerFactory(with_user=True)
+        champ = ChampionshipFactory(
+            championship_type=Championship.ChampionshipType.DOUBLES
+        )
+        assert champ.register_entry([p1, p2]) is not None
+        assert champ.can_register([p2, p3]) is False
+
+    def test_can_register_returns_false_for_wrong_entry_size(self):
+        p1 = PlayerFactory(with_user=True)
+        p2 = PlayerFactory(with_user=True)
         champ = ChampionshipFactory(championship_type=Championship.ChampionshipType.SINGLES)
-        assert champ.can_register(doubles_team) is False
+        assert champ.can_register([p1, p2]) is False
 
     def test_can_register_doubles_correct_size(self):
         p1 = PlayerFactory(with_user=True)
         p2 = PlayerFactory(with_user=True)
-        doubles_team = TeamFactory(players=[p1, p2])
         champ = ChampionshipFactory(championship_type=Championship.ChampionshipType.DOUBLES)
-        assert champ.can_register(doubles_team) is True
+        assert champ.can_register([p1, p2]) is True
 
-    def test_register_team_success(self):
+    def test_can_register_rejects_the_same_player_twice_in_one_entry(self):
+        p1 = PlayerFactory(with_user=True)
+        champ = ChampionshipFactory(championship_type=Championship.ChampionshipType.DOUBLES)
+        assert champ.can_register([p1, p1]) is False
+
+    def test_register_entry_success(self):
         player = PlayerFactory(with_user=True)
-        team = _singles_team(player)
         champ = ChampionshipFactory()
-        assert champ.register_team(team) is True
-        assert champ.participants.filter(pk=team.pk).exists()
+        entry = champ.register_entry([player])
+        assert entry is not None
+        assert champ.entries.count() == 1
+        assert list(entry.players) == [player]
 
-    def test_register_team_failure(self):
+    def test_register_entry_failure_when_full(self):
         _, teams = _make_participants(2)
         champ = ChampionshipFactory(max_participants=2, with_participants=teams)
         new_player = PlayerFactory(with_user=True)
-        new_team = _singles_team(new_player)
-        assert champ.register_team(new_team) is False
+        assert champ.register_entry([new_player]) is None
 
 
 # ---------------------------------------------------------------------------
@@ -183,18 +199,25 @@ class TestGenerateSchedule:
             assert (dates[i] - dates[i - 1]).days == 7
 
     def test_generate_schedule_home_and_away(self):
-        """Each pair of teams should play once as home and once as away."""
-        _, teams = _make_participants(3)
-        champ = ChampionshipFactory(with_participants=teams)
+        """Each pair of entrants should play once as home and once as away."""
+        players, _ = _make_participants(3)
+        champ = ChampionshipFactory(with_entries=[[p] for p in players])
         champ.generate_schedule()
         matches = ScheduledMatch.all_objects.filter(championship=champ)
 
-        for i, t1 in enumerate(teams):
-            for t2 in teams[i + 1:]:
-                home = matches.filter(team1=t1, team2=t2).count()
-                away = matches.filter(team1=t2, team2=t1).count()
-                assert home == 1, f"{t1} vs {t2} home games should be 1, got {home}"
-                assert away == 1, f"{t2} vs {t1} away games should be 1, got {away}"
+        def _played(home_player, away_player):
+            return matches.filter(
+                participants__player=home_player,
+                participants__side=Side.ONE,
+            ).filter(
+                participants__player=away_player,
+                participants__side=Side.TWO,
+            ).count()
+
+        for i, p1 in enumerate(players):
+            for p2 in players[i + 1:]:
+                assert _played(p1, p2) == 1, f"{p1} vs {p2} home games should be 1"
+                assert _played(p2, p1) == 1, f"{p2} vs {p1} home games should be 1"
 
     def test_generate_schedule_sets_end_date(self):
         _, teams = _make_participants(4)
@@ -240,7 +263,7 @@ class TestGetStandings:
 
         # Create a confirmed match where team1 wins
         match = MatchFactory(
-            team1=teams[0], team2=teams[1],
+            team1_players=[players[0]], team2_players=[players[1]],
             championship=champ, match_type="tournament"
         )
         GameFactory(match=match, game_number=1, team1_score=11, team2_score=5)
@@ -250,8 +273,8 @@ class TestGetStandings:
         confirm_match(match)
 
         standings = champ.get_standings()
-        winner_standing = next(s for s in standings if s['team'] == teams[0])
-        loser_standing = next(s for s in standings if s['team'] == teams[1])
+        winner_standing = next(s for s in standings if s['entry'] == _entry_of(champ, players[0]))
+        loser_standing = next(s for s in standings if s['entry'] == _entry_of(champ, players[1]))
 
         assert winner_standing['wins'] == 1
         assert winner_standing['points'] == 3
@@ -264,7 +287,7 @@ class TestGetStandings:
         champ = ChampionshipFactory(with_participants=teams)
 
         # Team 0 beats Team 1
-        m1 = MatchFactory(team1=teams[0], team2=teams[1], championship=champ)
+        m1 = MatchFactory(team1_players=[players[0]], team2_players=[players[1]], championship=champ)
         GameFactory(match=m1, game_number=1, team1_score=11, team2_score=5)
         GameFactory(match=m1, game_number=2, team1_score=11, team2_score=7)
         GameFactory(match=m1, game_number=3, team1_score=11, team2_score=9)
@@ -272,7 +295,7 @@ class TestGetStandings:
         confirm_match(m1)
 
         # Team 2 beats Team 0
-        m2 = MatchFactory(team1=teams[2], team2=teams[0], championship=champ)
+        m2 = MatchFactory(team1_players=[players[2]], team2_players=[players[0]], championship=champ)
         GameFactory(match=m2, game_number=1, team1_score=11, team2_score=3)
         GameFactory(match=m2, game_number=2, team1_score=11, team2_score=4)
         GameFactory(match=m2, game_number=3, team1_score=11, team2_score=6)
@@ -280,7 +303,7 @@ class TestGetStandings:
         confirm_match(m2)
 
         # Team 2 beats Team 1
-        m3 = MatchFactory(team1=teams[2], team2=teams[1], championship=champ)
+        m3 = MatchFactory(team1_players=[players[2]], team2_players=[players[1]], championship=champ)
         GameFactory(match=m3, game_number=1, team1_score=11, team2_score=2)
         GameFactory(match=m3, game_number=2, team1_score=11, team2_score=3)
         GameFactory(match=m3, game_number=3, team1_score=11, team2_score=1)
@@ -289,11 +312,11 @@ class TestGetStandings:
 
         standings = champ.get_standings()
         # Team 2 should be first (2 wins = 6 pts), Team 0 second (1 win = 3 pts)
-        assert standings[0]['team'] == teams[2]
+        assert standings[0]['entry'] == _entry_of(champ, players[2])
         assert standings[0]['points'] == 6
-        assert standings[1]['team'] == teams[0]
+        assert standings[1]['entry'] == _entry_of(champ, players[0])
         assert standings[1]['points'] == 3
-        assert standings[2]['team'] == teams[1]
+        assert standings[2]['entry'] == _entry_of(champ, players[1])
         assert standings[2]['points'] == 0
 
 
@@ -372,7 +395,8 @@ class TestCheckCompletion:
         # Convert and complete all scheduled matches
         for sm in ScheduledMatch.all_objects.filter(championship=champ):
             match = MatchFactory(
-                team1=sm.team1, team2=sm.team2,
+                team1_players=list(sm.side1_players),
+                team2_players=list(sm.side2_players),
                 championship=champ, match_type="tournament"
             )
             GameFactory(match=match, game_number=1, team1_score=11, team2_score=5)
@@ -386,3 +410,44 @@ class TestCheckCompletion:
         assert champ.check_completion() is True
         champ.refresh_from_db()
         assert champ.status == Championship.Status.COMPLETED
+
+
+@pytest.mark.django_db
+class TestGeneratedScheduleParticipants:
+    """generate_schedule uses bulk_create, which does not fire post_save --
+    so the participant rows the save hook normally writes have to be built
+    explicitly. Without this the generated matches have no participants.
+    """
+
+    def test_generated_scheduled_matches_have_participants(self):
+        players, teams = _make_participants(4)
+        champ = ChampionshipFactory(with_participants=teams)
+
+        assert champ.generate_schedule() is True
+
+        scheduled = ScheduledMatch.all_objects.filter(championship=champ)
+        assert scheduled.exists()
+        for sm in scheduled:
+            assert sm.participants.count() == 2
+            assert list(sm.side1_players) != []
+            assert list(sm.side2_players) != []
+
+    def test_generated_scheduled_matches_are_linked_to_entries(self):
+        players, teams = _make_participants(4)
+        champ = ChampionshipFactory(with_participants=teams)
+        champ.generate_schedule()
+
+        for sm in ScheduledMatch.all_objects.filter(championship=champ):
+            assert sm.side1_entry is not None
+            assert sm.side2_entry is not None
+            assert sm.side1_entry != sm.side2_entry
+            assert set(sm.side1_players) == set(sm.side1_entry.players)
+
+    def test_side_labels_are_not_empty(self):
+        players, teams = _make_participants(3)
+        champ = ChampionshipFactory(with_participants=teams)
+        champ.generate_schedule()
+
+        for sm in ScheduledMatch.all_objects.filter(championship=champ):
+            assert sm.side1_label != "Side 1"
+            assert sm.side2_label != "Side 2"

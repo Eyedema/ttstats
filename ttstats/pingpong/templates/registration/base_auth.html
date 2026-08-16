@@ -1,0 +1,34 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Table Tennis Tracker{% endblock %}</title>
+
+    <link rel="stylesheet" href="{% static 'pingpong/css/app.css' %}">
+
+    {% block extra_head %}{% endblock %}
+</head>
+
+<body class="bg-secondary">
+    <div class="min-h-screen flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
+        <div class="max-w-md w-full space-y-8">
+            <div class="text-center">
+                {% block heading %}
+                <h2 class="text-3xl font-bold text-foreground">Table Tennis Tracker 🏓</h2>
+                <p class="mt-2 text-sm text-muted-foreground">{% block subheading %}{% endblock %}</p>
+                {% endblock %}
+            </div>
+
+            {% include 'pingpong/_messages.html' %}
+
+            {% block content %}{% endblock %}
+        </div>
+    </div>
+
+    {% block extra_body %}{% endblock %}
+</body>
+
+</html>

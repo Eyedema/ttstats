@@ -50,15 +50,14 @@ MIDDLEWARE.insert(1, 'csp.middleware.CSPMiddleware')
 CSP_DEFAULT_SRC = ("'self'",)
 CSP_SCRIPT_SRC = (
     "'self'",
+    # Still needed: base.html and several page templates carry inline
+    # <script> blocks. B.5 moves the rules out of them; the directive can
+    # tighten once nothing inline remains.
     "'unsafe-inline'",
-    "https://cdn.tailwindcss.com",
-    "https://cdn.jsdelivr.net",
-    "https://unpkg.com",
 )
 CSP_STYLE_SRC = (
     "'self'",
     "'unsafe-inline'",
-    "https://cdn.jsdelivr.net",
 )
 CSP_IMG_SRC = ("'self'", "data:")
 CSP_FONT_SRC = ("'self'",)
@@ -68,6 +67,15 @@ CSP_FORM_ACTION = ("'self'",)
 
 # Static files
 STATIC_ROOT = '/app/static/'
+
+# Hash every static file's name and pre-compress it. Requires collectstatic
+# to have run, which entrypoint.sh does before starting Gunicorn.
+STORAGES = {
+    **STORAGES,
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+    },
+}
 
 # Logging
 LOGGING = {

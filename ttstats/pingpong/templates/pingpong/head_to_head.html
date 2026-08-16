@@ -346,18 +346,14 @@
                             </td>
                             <td class="px-6 py-4 whitespace-nowrap text-center">
                                 <span class="font-bold">
-                                    {% if match.player1 == player1 %}
                                     {{ match.player1_score }} - {{ match.player2_score }}
-                                    {% else %}
-                                    {{ match.player2_score }} - {{ match.player1_score }}
-                                    {% endif %}
                                 </span>
                             </td>
                             <td class="px-6 py-4 whitespace-nowrap">
-                                {% if match.winner %}
-                                <span class="inline-flex items-center gap-1 text-sm font-medium {% if match.winner == player1 %}text-success{% else %}text-primary{% endif %}">
+                                {% if match.winner_side %}
+                                <span class="inline-flex items-center gap-1 text-sm font-medium {% if match.player1_won %}text-success{% else %}text-primary{% endif %}">
                                     <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-4 h-4" alt="">
-                                    {{ match.winner }}
+                                    {{ match.winner_label }}
                                 </span>
                                 {% endif %}
                             </td>
@@ -389,16 +385,12 @@
                     </div>
                     <div class="flex items-center justify-between mb-2">
                         <div class="text-2xl font-bold">
-                            {% if match.player1 == player1 %}
                             {{ match.player1_score }} - {{ match.player2_score }}
-                            {% else %}
-                            {{ match.player2_score }} - {{ match.player1_score }}
-                            {% endif %}
                         </div>
-                        {% if match.winner %}
-                        <span class="inline-flex items-center gap-1 text-sm font-medium {% if match.winner == player1 %}text-success{% else %}text-primary{% endif %}">
+                        {% if match.winner_side %}
+                        <span class="inline-flex items-center gap-1 text-sm font-medium {% if match.player1_won %}text-success{% else %}text-primary{% endif %}">
                             <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-4 h-4" alt="">
-                            {{ match.winner.name|truncatechars:12 }}
+                            {{ match.winner_label|truncatechars:12 }}
                         </span>
                         {% endif %}
                     </div>
@@ -427,7 +419,7 @@
 </div>
 
 <!-- Chart.js -->
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="{% static 'pingpong/js/vendor/chart.umd.js' %}"></script>
 
 {% if has_data %}
 <script>

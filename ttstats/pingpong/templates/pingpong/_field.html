@@ -1,0 +1,45 @@
+{% comment %}
+Render one bound form field: label, widget, help text, every error.
+
+Usage:
+    {% include 'pingpong/_field.html' with field=form.best_of %}
+    {% include 'pingpong/_field.html' with field=form.notes help="When it was played" %}
+    {% include 'pingpong/_field.html' with field=form.player3 wrapper_class="doubles-only hidden" %}
+
+Optional context:
+    label          override the field's own label
+    help           override the field's help_text
+    wrapper_class  extra classes on the outer <div> (Alpine/JS hooks)
+    badge          small right-aligned text beside the label, e.g. "Optional"
+
+Error styling comes from Django's own `error_css_class` on the wrapper (see
+BaseStyledForm in forms.py), which app.css turns into a red border on the
+control -- the widget itself does not need to know whether it is in error.
+
+The widget renders itself, so `selected` on a <select> comes from Django's
+own logic. Hand-written <option> loops comparing `form.f.value` to a literal
+get this wrong on a bound form -- the POST value is a string, so `"7" == 7`
+is false and the user's choice silently disappears when validation fails.
+
+Every error is shown, not just `.errors.0`.
+{% endcomment %}
+<div class="space-y-2 {{ field.css_classes }} {{ wrapper_class }}">
+    {% if field.label or label %}
+    <div class="flex items-center justify-between">
+        <label class="text-sm font-medium leading-none" for="{{ field.id_for_label }}">
+            {% firstof label field.label %}{% if field.field.required %} <span class="text-destructive">*</span>{% endif %}
+        </label>
+        {% if badge %}<span class="text-xs text-muted-foreground">{{ badge }}</span>{% endif %}
+    </div>
+    {% endif %}
+
+    {{ field }}
+
+    {% if field.errors %}
+    {% for error in field.errors %}
+    <p class="text-xs md:text-sm text-destructive">{{ error }}</p>
+    {% endfor %}
+    {% elif help or field.help_text %}
+    <p class="text-xs md:text-sm text-muted-foreground">{% firstof help field.help_text %}</p>
+    {% endif %}
+</div>
