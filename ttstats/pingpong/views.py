@@ -768,10 +768,22 @@ class MatchUpdateView(LoginRequiredMixin, UpdateView):
         return super().form_valid(form)
 
 
+def is_htmx(request):
+    """True when htmx issued this request, so only a fragment is wanted."""
+    return request.headers.get("HX-Request") == "true"
+
+
 class LeaderboardView(LoginRequiredMixin, TemplateView):
     """Display player rankings and statistics"""
 
     template_name = "pingpong/leaderboard.html"
+
+    def get_template_names(self):
+        # htmx asks for just the results block; a normal load gets the page.
+        # Both render the same partial, so they cannot drift.
+        if is_htmx(self.request):
+            return ["pingpong/_leaderboard_results.html"]
+        return [self.template_name]
 
     def _leaderboard_cache_key(self, match_type, date_filter, start_date, end_date, top_x):
         """Build a cache key that includes filter params and a generation counter."""

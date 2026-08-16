@@ -16,6 +16,7 @@ from .conftest import (
     ScheduledMatchFactory,
     UserFactory,
     confirm_match,
+    confirm_match_silent,
     confirm_side,
     get_match_players,
 )
@@ -477,6 +478,53 @@ class TestMatchFormRepopulatesOnError:
         body = resp.content.decode()
         assert "Enter a valid date/time" in body
         assert "Select a valid choice" in body
+
+
+@pytest.mark.django_db
+class TestLeaderboardHtmxFragment:
+    """Changing a filter swaps the results block instead of reloading.
+
+    The three filter <select>s each had a JS listener calling form.submit().
+    """
+
+    def _seeded_client(self):
+        u = UserFactory(is_staff=True)
+        p = PlayerFactory(user=u, name="Aurelio Ranked")
+        u.profile.email_verified = True
+        u.profile.save()
+        other = PlayerFactory(with_user=True, name="Bartholomew Ranked")
+        m = MatchFactory(player1=p, player2=other)
+        for n in (1, 2, 3):
+            GameFactory(match=m, game_number=n, team1_score=11, team2_score=5)
+        m.refresh_from_db()
+        confirm_match_silent(m)
+        return _login_client(u)
+
+    def test_normal_request_returns_the_whole_page(self):
+        resp = self._seeded_client().get(reverse("pingpong:leaderboard"))
+        assert resp.status_code == 200
+        assert b"<!DOCTYPE" in resp.content
+        assert b'id="leaderboard-results"' in resp.content
+
+    def test_htmx_request_returns_only_the_results_block(self):
+        resp = self._seeded_client().get(
+            reverse("pingpong:leaderboard"), HTTP_HX_REQUEST="true"
+        )
+        assert resp.status_code == 200
+        assert b"<!DOCTYPE" not in resp.content
+        # Must carry the swap target, or hx-swap="outerHTML" replaces the
+        # block with something htmx can never target again.
+        assert b'id="leaderboard-results"' in resp.content
+        assert b"Aurelio Ranked" in resp.content
+
+    def test_filters_apply_to_the_fragment(self):
+        resp = self._seeded_client().get(
+            reverse("pingpong:leaderboard"),
+            {"match_type": "doubles"},
+            HTTP_HX_REQUEST="true",
+        )
+        assert resp.status_code == 200
+        assert b"Aurelio Ranked" not in resp.content
 
 
 # ===========================================================================
