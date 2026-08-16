@@ -50,8 +50,8 @@ docker compose -f compose.prod.yml up --build -d
 ### Stack & Configuration
 
 - **Framework:** pytest (configured in `pytest.ini` at project root)
-- **Factories:** factory-boy (`conftest.py` has `UserFactory`, `PlayerFactory`, `LocationFactory`, `TeamFactory`, `MatchFactory`, `GameFactory`, `ScheduledMatchFactory`, `ChampionshipFactory`)
-- **Settings:** `DJANGO_SETTINGS_MODULE = ttstats.settings.dev`, `pythonpath = ttstats`
+- **Factories:** factory-boy (`conftest.py` has `UserFactory`, `PlayerFactory`, `LocationFactory`, `MatchFactory`, `GameFactory`, `ScheduledMatchFactory`, `ChampionshipFactory`)
+- **Settings:** `DJANGO_SETTINGS_MODULE = ttstats.settings.test`, `pythonpath = ttstats`
 - **NEVER** use Django's `TestCase` or `manage.py test`. Always use pytest classes and functions.
 
 When adding new source code, **always create or update the corresponding test file** (convention: `test_<module>.py`).
@@ -91,26 +91,31 @@ class TestSomething:
 UserFactory(username="...", is_staff=True, ...)  # Creates User via create_user(), password="testpass123"
 PlayerFactory(name="...", with_user=True)        # with_user=True creates and links a User
 LocationFactory(name="...")
-TeamFactory(players=[p1])                        # Creates team with 1+ players
-MatchFactory(player1=p1, player2=p2, best_of=5)  # Backward-compatible, creates 1-player teams
+MatchFactory(player1=p1, player2=p2, best_of=5)  # Singles: one player per side
 MatchFactory(team1_players=[p1,p2], team2_players=[p3,p4], is_double=True)  # Doubles match
 MatchFactory(confirmed=True)                     # Auto-confirms match after creation
 GameFactory(match=m, game_number=1, team1_score=11, team2_score=5)
 ScheduledMatchFactory(player1=p1, player2=p2, scheduled_date=date, scheduled_time=time)
-ChampionshipFactory(name="...", with_participants=[t1, t2], created_by=player)  # Round-robin championship
+ChampionshipFactory(name="...", with_entries=[[p1], [p2]], created_by=player)  # Round-robin championship
 ```
 
+The `team1_players`/`team2_players` kwarg names are historical; they set side 1
+and side 2 participants. `ChampionshipFactory(with_participants=...)` is an alias
+for `with_entries` kept so older call sites keep reading naturally -- both take
+lists of player lists.
+
 Key fixtures:
-- `complete_match` - Finished singles match (3-0 player1 wins, best of 5)
-- Helper functions: `confirm_match(match)`, `confirm_match_silent(match)`, `confirm_team(team, match)`
+- `complete_match` - Finished singles match (3-0 side 1 wins, best of 5)
+- Helper functions: `confirm_match(match)`, `confirm_match_silent(match)`,
+  `create_match(side1_players, side2_players, **kwargs)` (for raw-ORM style tests)
 
 ### Known Gotchas
 
-1. **Team-based architecture.** Matches use Team model (not direct player references). Singles = 1-player teams, doubles = 2-player teams. Use `player1`/`player2` kwargs in MatchFactory for backward compatibility, or `team1_players`/`team2_players` for explicit control.
+1. **Participant-based architecture.** A match's players are `MatchParticipant(match, player, side)` rows; `side` is `Side.ONE`/`Side.TWO`. There is no Team model. Read them via `match.side1_players` / `match.side2_players` / `match.players_on(side)` / `match.all_players`, and write them via `services.set_match_sides(match, side1_players, side2_players)` -- never by touching participant rows directly. `Match.winner_side` and `Game.winner_side` are ints, not FKs; compare with `Side.ONE`. `ScheduledMatch` mirrors all of this via `ScheduledMatchParticipant`.
 2. **MatchManager filters by current user.** In view tests, `Match.objects.get(pk=...)` only returns matches the logged-in user can see. A regular user can't see matches they're not in — `get_object_or_404(Match, pk=pk)` returns 404, not 403.
 3. **Signals fire on User creation.** Every `UserFactory()` call creates a `UserProfile` with a verification token via signal. You don't need to create profiles manually.
 4. **Game.save() triggers Match.save().** Creating enough games automatically sets the match winner. Tests that check "no winner yet" must not create too many games.
-5. **Match confirmations use junction table.** Singles require 2 confirmations (both players), doubles require 4 (all players). Use `confirm=True` in MatchFactory or `confirm_match()` helper.
+5. **Match confirmations use a junction table.** Singles require 2 confirmations (both players), doubles require 4 (all players) -- but only *verified* players count. Use `confirmed=True` in MatchFactory or the `confirm_match()` helper.
 6. **Elo updates on confirmation.** Elo ratings only change when match is fully confirmed. Use `confirm_match()` or `confirm_match_silent()` in tests to trigger Elo calculation.
 7. **Manager tests need thread-local manipulation.** Import `_thread_locals` from `ttstats.middleware` and set/clear `_thread_locals.user` directly. Use an `autouse` fixture to clean up.
 8. **base.html requires user.player.pk.** Any view test where the user has no Player profile will crash during template rendering with `NoReverseMatch`. Always create a player for the test user.
@@ -163,16 +168,18 @@ These are non-obvious behaviors that aren't clear from reading individual source
 - When winner is set for the first time: if any player is unverified, auto-confirm all; if all verified, send confirmation emails
 - `match_confirmed` property: True when all verified players confirmed. Empty verified set = True (unverified players don't need confirmation)
 - Elo ratings only update when match is fully confirmed
-- `is_confirmed` denormalized field must be updated in ALL signal paths (auto-confirm AND email paths). When all players are unverified, `should_auto_confirm()` returns False because `match_confirmed` is already True.
-- Use `Match.objects.filter(pk=instance.pk).update(is_confirmed=...)` in signals to avoid re-triggering pre/post_save signals
+- **`Match.recompute()` is the single source of truth** for `winner_side`, the score caches and `is_confirmed`. It writes via a queryset `.update()` so it cannot re-enter the signal pipeline. Never set those fields by hand; call `recompute()`.
+- The pure decision functions live in `match_state.py` (no Django imports): `winner_side()`, `side_confirmed()`, `confirmation_complete()`, `should_auto_confirm()`. Test them without a DB.
 - Views should use `Match.objects.filter(is_confirmed=True)` (DB-level), not Python-level filtering
 
 ### Championship System
-- Championship matches may have winners but `is_confirmed=False` — always filter by `winner__isnull=False` for championship data, not `is_confirmed=True`
+- Championship matches may have winners but `is_confirmed=False` — always filter by `winner_side__isnull=False` for championship data, not `is_confirmed=True`
 - Use `Match.all_objects` and `ScheduledMatch.all_objects` in championship views to bypass row-level security
 - `ScheduledMatchConvertView.form_valid()` auto-sets `match.championship` FK when converting championship scheduled matches
 - `check_completion()` auto-transitions to `completed` when all scheduled matches are converted and confirmed
-- Round-robin schedule uses circle method: generates home + away rounds (andata e ritorno)
+- Round-robin pairing is a pure function in `championship_scheduling.py` (`round_robin_rounds`, `round_robin_double_rounds`) -- circle method, home + away (andata e ritorno). Test it without a DB.
+- Entrants are `ChampionshipEntry` + `ChampionshipEntryMember`, not teams. The denormalized `championship` FK on the member row lets the DB enforce one entry per player per championship. Register via `championship.register_entry(players)`.
+- **`generate_schedule()` uses `bulk_create`, which bypasses `post_save`** — it therefore builds `ScheduledMatchParticipant` rows explicitly. Any new bulk path must do the same or the schedule comes out with no participants.
 
 ### Template / Frontend
 - `base.html` unconditionally renders `{% url 'pingpong:player_detail' user.player.pk %}` — every authenticated user **must** have a linked Player profile

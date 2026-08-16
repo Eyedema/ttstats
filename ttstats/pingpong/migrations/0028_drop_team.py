@@ -3,7 +3,25 @@
 from django.db import migrations
 
 
+def _irreversible(apps, schema_editor):
+    raise RuntimeError(
+        "0028_drop_team cannot be reversed: the Team rows it depended on are "
+        "gone and team1_id/team2_id are NOT NULL. Restore a pre-0028 database "
+        "snapshot instead."
+    )
+
+
 class Migration(migrations.Migration):
+    """Contract step: Team is gone, participants are the only representation.
+
+    This migration is one-way. Reversing it would re-add the NOT NULL
+    team1_id/team2_id columns with no values to put in them, so Django's
+    auto-reverse fails partway through a table rebuild. The explicit guard
+    below turns that into a readable error. To go back, restore a database
+    snapshot taken before 0028.
+    """
+
+    atomic = True
 
     dependencies = [
         ('pingpong', '0027_backfill_championship_entries'),
@@ -40,5 +58,9 @@ class Migration(migrations.Migration):
         ),
         migrations.DeleteModel(
             name='Team',
+        ),
+        migrations.RunPython(
+            migrations.RunPython.noop,
+            _irreversible,
         ),
     ]

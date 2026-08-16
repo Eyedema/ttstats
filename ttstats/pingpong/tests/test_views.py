@@ -14,7 +14,7 @@ from .conftest import (
     ScheduledMatchFactory,
     UserFactory,
     confirm_match,
-    confirm_team,
+    confirm_side,
     get_match_players,
 )
 
@@ -864,7 +864,7 @@ class TestMatchConfirm:
         other = PlayerFactory(with_user=True)
         m = MatchFactory(player1=p, player2=other)
         # Pre-confirm the match for player p
-        confirm_team(m, 1)
+        confirm_side(m, 1)
         c = _login_client(u)
         resp = c.post(reverse("pingpong:match_confirm", args=[m.pk]))
         assert resp.status_code == 302

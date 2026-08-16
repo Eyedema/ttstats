@@ -52,13 +52,13 @@ class PlayerFactory(DjangoModelFactory):
 
 
 class MatchFactory(DjangoModelFactory):
-    """Factory for Match. Supports backwards-compatible player1/player2 kwargs.
+    """Factory for Match. Sets side-1 and side-2 participants.
 
     Usage:
-        # Original style (creates single-player teams automatically):
+        # Singles (one player per side):
         match = MatchFactory(player1=p1, player2=p2)
 
-        # Team style:
+        # Explicit sides:
         match = MatchFactory(team1_players=[p1], team2_players=[p2])
 
         # With confirmation:
@@ -114,13 +114,13 @@ class GameFactory(DjangoModelFactory):
 
 
 class ScheduledMatchFactory(DjangoModelFactory):
-    """Factory for ScheduledMatch. Supports backwards-compatible player1/player2 kwargs.
+    """Factory for ScheduledMatch. Sets side-1 and side-2 participants.
 
     Usage:
-        # Original style (creates single-player teams automatically):
+        # Singles (one player per side):
         sm = ScheduledMatchFactory(player1=p1, player2=p2)
 
-        # Team style:
+        # Explicit sides:
         sm = ScheduledMatchFactory(team1_players=[p1], team2_players=[p2])
     """
     class Meta:
@@ -153,8 +153,8 @@ class ChampionshipFactory(DjangoModelFactory):
         # Basic singles championship
         champ = ChampionshipFactory()
 
-        # With participants
-        champ = ChampionshipFactory(with_participants=[team1, team2, team3])
+        # With entries (each entry is a list of players)
+        champ = ChampionshipFactory(with_entries=[[p1], [p2], [p3]])
 
         # Private championship
         champ = ChampionshipFactory(is_public=False)
@@ -181,8 +181,8 @@ class ChampionshipFactory(DjangoModelFactory):
 
         championship = super()._create(model_class, *args, **kwargs)
 
-        # with_participants took Teams; it now takes lists of players, same as
-        # with_entries.
+        # with_participants is an alias for with_entries kept for older call
+        # sites; both take lists of player lists.
         if participants:
             entries = entries or list(participants)
 
@@ -213,8 +213,7 @@ def create_match(side1_players, side2_players, **kwargs):
 def get_match_players(match):
     """Get (player1, player2) tuple for singles matches.
 
-    Returns the first player from each team.
-    For doubles, returns (team1 first player, team2 first player).
+    Returns the first player from each side.
     """
     return match.side1_players.first(), match.side2_players.first()
 
@@ -269,17 +268,16 @@ def confirm_match_silent(match, players=None):
     return MatchConfirmation.objects.bulk_create(confirmations, ignore_conflicts=True)
 
 
-def confirm_team(match, team_num):
-    """Confirm all players from a specific team.
+def confirm_side(match, side):
+    """Confirm all players on one side of a match.
 
     Args:
         match: Match instance
-        team_num: 1 or 2 to indicate which team to confirm
+        side: 1 or 2 (or Side.ONE / Side.TWO)
 
     Returns:
         List of created MatchConfirmation records
     """
-    side = Side.ONE if team_num == 1 else Side.TWO
     return confirm_match(match, players=list(match.players_on(side)))
 
 
