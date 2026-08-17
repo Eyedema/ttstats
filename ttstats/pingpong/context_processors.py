@@ -40,9 +40,8 @@ def push_context(request):
     """Config for push.js, rendered into base.html via json_script.
 
     Kept separate from pingpong_context, which early-returns in three places
-    and would drop this on anonymous requests -- push.js runs on the login
-    page too, since re-asserting an existing subscription should not require
-    being logged in to have already happened.
+    and would drop this for any user without a Player -- leaving push.js with
+    no config on exactly the pages a half-set-up account sees.
 
     Only the *public* VAPID key goes in here. It is handed to the browser by
     design; the private key must never reach a template.

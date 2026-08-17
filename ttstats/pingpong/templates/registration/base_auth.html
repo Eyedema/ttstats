@@ -7,6 +7,22 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Table Tennis Tracker{% endblock %}</title>
 
+    <!-- PWA. Duplicated from pingpong/base.html rather than shared, because
+         this template deliberately does not extend it -- the logged-out pages
+         have their own minimal chrome.
+
+         These have to be here, not only on the app pages: a new user's first
+         visit lands on login, and that is exactly where they would tap Add to
+         Home Screen. Without the manifest they get a plain bookmark with a
+         screenshot for an icon and no standalone window -- and on iOS, no
+         standalone window means push can never be enabled at all. -->
+    <link rel="manifest" href="{% url 'manifest' %}">
+    <meta name="theme-color" content="#0f172a">
+    <link rel="apple-touch-icon" href="{% static 'pingpong/icons/app/apple-touch-icon.png' %}">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="TTStats">
+
     <link rel="stylesheet" href="{% static 'pingpong/css/app.css' %}">
 
     {% block extra_head %}{% endblock %}
