@@ -3,10 +3,14 @@ from django.db.models.signals import post_save, pre_save, post_delete
 from django.dispatch import receiver
 from django_otp_webauthn.models import WebAuthnCredential
 
+from . import notifications
 from .achievements import check_achievements_for_player
 from .cache_utils import invalidate_match_caches, invalidate_player_caches
 from .emails import send_match_confirmation_email, send_passkey_registered_email
-from .models import Game, Match, MatchConfirmation, Player, ScheduledMatch, UserProfile
+from .models import (
+    Game, Match, MatchConfirmation, NotificationPreference, Player,
+    ScheduledMatch, UserProfile,
+)
 from .elo import update_player_elo
 from .services import link_championship_entries
 
@@ -17,6 +21,10 @@ def create_user_profile(sender, instance, created, **kwargs):
         userprofile = UserProfile.objects.create(user=instance)
         userprofile.create_verification_token()
         userprofile.save()
+        # Notification defaults. NotificationPreference.for_user() also
+        # creates on demand, so a user who predates this feature is fine --
+        # this just means the row exists before anything asks for it.
+        NotificationPreference.objects.get_or_create(user=instance)
     else:
         # Ensure profile exists even for existing users
         # (in case they were created before signal was added)
@@ -74,15 +82,27 @@ def handle_match_completion(sender, instance, created, **kwargs):
         # Reload instance to get updated confirmation fields
         instance.refresh_from_db()
     else:
-        # 2. Send confirmation emails (only to verified users who need to confirm)
-        for player in instance.all_players:
+        # 2. Tell everyone who still has to confirm. Push first, then email
+        #    only the people push did not reach -- a player with the PWA
+        #    installed should get one buzz, not a buzz and a mail, while a
+        #    player who never installed it must not silently stop hearing
+        #    from us. `notify_*` returns the ids it actually delivered to,
+        #    which is what makes that a single rule.
+        already_confirmed = {c.player_id for c in instance.confirmations.all()}
+        pending = [
+            player for player in instance.all_players
             if (
-                    player.user
-                    and player.user.email
-                    and hasattr(player.user, 'profile')
-                    and player.user.profile.email_verified
-                    and player.id not in [c.player_id for c in instance.confirmations.all()]
-            ):
+                player.user
+                and player.user.email
+                and hasattr(player.user, 'profile')
+                and player.user.profile.email_verified
+                and player.id not in already_confirmed
+            )
+        ]
+
+        pushed = notifications.notify_match_confirmation_needed(instance, pending)
+        for player in pending:
+            if player.pk not in pushed:
                 send_match_confirmation_email(instance, player)
 
     # 3. Refresh the denormalized fields (winner, score caches, is_confirmed).
@@ -97,6 +117,10 @@ def handle_match_completion(sender, instance, created, **kwargs):
         all_players = list(instance.all_players)
         for p in all_players:
             check_achievements_for_player(p, instance)
+
+    # 6. Result + leaderboard pushes. Self-guarding: only the first caller
+    #    for a given match gets through (see notify_match_confirmed).
+    notifications.notify_match_confirmed(instance)
 
     # Invalidate caches
     invalidate_match_caches(instance)
@@ -121,6 +145,11 @@ def update_elo_on_confirmation(sender, instance, created, **kwargs):
     # Try to update Elo (has guards inside, safe to call anytime)
     update_player_elo(instance)
 
+    # Same here: notify_match_confirmed is a no-op unless this is the first
+    # time the match reached "confirmed, Elo applied".
+    instance.refresh_from_db()
+    notifications.notify_match_confirmed(instance)
+
 
 @receiver(post_save, sender=MatchConfirmation)
 def update_elo_on_match_confirmation(sender, instance, created, **kwargs):
@@ -139,6 +168,10 @@ def update_elo_on_match_confirmation(sender, instance, created, **kwargs):
             all_players = list(match.all_players)
             for p in all_players:
                 check_achievements_for_player(p, match)
+
+        # This is the path that fires when the last player confirms, so it is
+        # usually the one that actually sends the result push.
+        notifications.notify_match_confirmed(match)
 
         # Invalidate caches
         invalidate_match_caches(match)

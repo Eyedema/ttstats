@@ -1,0 +1,130 @@
+{% extends "pingpong/base.html" %}
+{% load static %}
+
+{% block title %}Notifications - Table Tennis Tracker{% endblock %}
+
+{% block content %}
+<div class="max-w-2xl mx-auto space-y-6">
+    <div>
+        <h2 class="text-2xl md:text-3xl font-bold tracking-tight">Notifications</h2>
+        <p class="text-muted-foreground mt-1 text-sm md:text-base">
+            Get a buzz when a match needs you, instead of an email you'll read tomorrow.
+        </p>
+    </div>
+
+    <!-- This device -------------------------------------------------------
+         Every state starts hidden and push.js reveals exactly one. That is
+         the fail-closed rule from CLAUDE.md: if the script never runs, the
+         user sees no controls rather than buttons that silently do nothing.
+    -->
+    <div class="bg-white rounded-lg border shadow-sm p-6" data-push-panel>
+        <h3 class="text-lg font-semibold mb-1">This device</h3>
+        <p class="text-muted-foreground mb-4 text-sm">
+            Notifications are per-device. Turning them on here does not turn them
+            on for your phone.
+        </p>
+
+        <div data-push-state="on" class="hidden space-y-3">
+            <p class="text-sm flex items-center gap-2">
+                <span class="inline-block w-2 h-2 rounded-full bg-green-500"></span>
+                Notifications are on for this device.
+            </p>
+            <div class="flex flex-wrap gap-2">
+                <button type="button" data-push-test
+                    class="inline-flex items-center justify-center gap-2 rounded-md border px-4 py-2.5 text-sm font-medium hover:bg-secondary transition-colors min-h-[44px]">
+                    Send a test
+                </button>
+                <button type="button" data-push-disable
+                    class="inline-flex items-center justify-center gap-2 rounded-md border px-4 py-2.5 text-sm font-medium hover:bg-secondary transition-colors min-h-[44px]">
+                    Turn off
+                </button>
+            </div>
+        </div>
+
+        <div data-push-state="off" class="hidden">
+            <button type="button" data-push-enable
+                class="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors min-h-[44px]">
+                <span class="text-lg">🔔</span>
+                Turn on notifications
+            </button>
+        </div>
+
+        <div data-push-state="denied" class="hidden p-4 bg-secondary rounded-md">
+            <p class="text-sm">
+                Your browser is blocking notifications for this site. The page cannot
+                undo that — re-allow them in the browser's site settings, then reload.
+            </p>
+        </div>
+
+        <div data-push-state="ios-install" class="hidden p-4 bg-secondary rounded-md space-y-2">
+            <p class="text-sm font-medium">Add TTStats to your Home Screen first</p>
+            <p class="text-sm text-muted-foreground">
+                On iPhone and iPad, notifications only work once the app is installed.
+                Tap <span class="font-medium">Share</span>, then
+                <span class="font-medium">Add to Home Screen</span>, and open TTStats
+                from the icon — this page will then offer to turn notifications on.
+            </p>
+        </div>
+
+        <div data-push-state="unsupported" class="hidden p-4 bg-secondary rounded-md">
+            <p class="text-sm">This browser doesn't support push notifications.</p>
+        </div>
+
+        <div data-push-state="unconfigured" class="hidden p-4 bg-secondary rounded-md">
+            <p class="text-sm">
+                Push isn't configured on this server — no VAPID keys are set. You'll
+                keep getting notifications by email.
+            </p>
+        </div>
+
+        <p data-push-status class="hidden mt-3 text-sm text-muted-foreground" role="status" aria-live="polite"></p>
+    </div>
+
+    <!-- What to send ------------------------------------------------------ -->
+    <form method="post" class="bg-white rounded-lg border shadow-sm p-6">
+        {% csrf_token %}
+        <h3 class="text-lg font-semibold mb-1">What to send</h3>
+        <p class="text-muted-foreground mb-4 text-sm">
+            These apply to all your devices. Anything you mute here still reaches
+            you by email.
+        </p>
+
+        <div class="space-y-3">
+            {% for value, label, enabled in kinds %}
+            <label class="flex items-start gap-3 cursor-pointer">
+                <input type="checkbox" name="{{ value }}" {% if enabled %}checked{% endif %}
+                    class="mt-0.5 w-5 h-5 rounded border-input text-primary focus:ring-ring">
+                <span class="text-sm">{{ label }}</span>
+            </label>
+            {% endfor %}
+        </div>
+
+        <button type="submit"
+            class="mt-5 inline-flex items-center justify-center rounded-md bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors min-h-[44px]">
+            Save preferences
+        </button>
+    </form>
+
+    <!-- Registered devices ------------------------------------------------ -->
+    {% if subscriptions %}
+    <div class="bg-white rounded-lg border shadow-sm p-6">
+        <h3 class="text-lg font-semibold mb-4">Registered devices</h3>
+        <ul class="space-y-3">
+            {% for sub in subscriptions %}
+            <li class="flex items-start justify-between gap-4 text-sm">
+                <div class="min-w-0">
+                    <p class="truncate">{{ sub.user_agent|default:"Unknown device" }}</p>
+                    <p class="text-muted-foreground text-xs">
+                        Added {{ sub.created_at|date:"j M Y" }}{% if sub.last_success_at %} · last reached {{ sub.last_success_at|date:"j M Y, H:i" }}{% endif %}
+                    </p>
+                </div>
+                {% if sub.failure_count %}
+                <span class="shrink-0 text-xs text-muted-foreground">{{ sub.failure_count }} failed</span>
+                {% endif %}
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
