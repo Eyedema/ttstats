@@ -276,7 +276,7 @@ jobs:
         env:
           E2E_PYTHON: python
           SECRET_KEY: "test-secret-key-for-ci-only"
-        run: npx playwright test --project=setup --project=iphone-safari --project=iphone-no-js --project=iphone-reduced
+        run: npx playwright test --project=setup --project=iphone-safari --project=iphone-pwa --project=iphone-no-js --project=iphone-reduced
 
       - name: Upload Playwright report
         if: >-

@@ -8,9 +8,26 @@
  * than an honest browser error, and cache invalidation for an app whose whole
  * content is live data is a real project, not a side effect of adding push.
  *
- * The fetch handler is a pass-through. It is present because installability
- * has historically required one, and because it is the hook a future offline
- * mode would go in.
+ * THERE IS DELIBERATELY NO `fetch` HANDLER. Not even an empty one.
+ *
+ * Registering any fetch listener makes this worker the network path for every
+ * request the app makes, which has two consequences and no benefit while
+ * there is nothing to cache:
+ *
+ *   1. Playwright's page.route() stops intercepting anything, because those
+ *      requests now originate from the worker rather than the page. The
+ *      scoreboard specs that abort /live/point/ to check the error toast
+ *      then silently pass their request straight through to the server, see
+ *      no error, and fail looking for a toast that was never provoked. This
+ *      shipped once and failed in CI while passing locally -- it is a race
+ *      against how fast the worker claims the page.
+ *   2. Every request in production gains a worker hop for nothing.
+ *
+ * Chrome dropped the fetch-handler requirement for installability in 89, and
+ * iOS never needed a service worker for Add to Home Screen at all. Push works
+ * without one. If an offline mode is ever added, adding the handler back is
+ * the first step -- and the scoreboard specs are the canary that will tell
+ * you the moment it starts intercepting.
  */
 
 const VERSION = 'ttstats-v1';
@@ -25,10 +42,6 @@ self.addEventListener('install', (event) => {
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(self.clients.claim());
-});
-
-self.addEventListener('fetch', (event) => {
-  // Pass-through. See the header comment.
 });
 
 self.addEventListener('push', (event) => {

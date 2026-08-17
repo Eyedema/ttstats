@@ -371,6 +371,15 @@ The app is installable and can push notifications. Two modules, deliberately spl
   "confirmed with Elo applied", and two can run concurrently when both players confirm at the same
   moment. `notify_match_confirmed` claims the match with a conditional `.update()`, so the loser
   of the race sends nothing. Never set the field by hand.
+- **A live service worker disables Playwright's `page.route`.** Requests from a page the worker
+  controls never consult the route table, so an `abort`/`delay` rule is silently ignored. The
+  scoreboard specs are built on exactly that, so `iphone-safari` sets `serviceWorkers: 'block'`
+  and the PWA specs run in their own `iphone-pwa` project where it is allowed. This is not a
+  fidelity loss: `sw.js` has **no `fetch` handler** (deliberately — see its header), so it is
+  inert with respect to app networking. **Any new spec using `page.route` belongs in a project
+  with workers blocked**, or it will pass while testing nothing. This first showed up as two
+  scoreboard failures in CI that passed locally every time — it is a race against how fast the
+  worker claims the page.
 - **`push.js` is plain JS and the panel fails closed.** Every `[data-push-state]` block starts
   `hidden` and JS reveals exactly one; with scripting off the user sees no controls rather than a
   dead enable button. Same rule as the mobile drawer.
