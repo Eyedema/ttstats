@@ -1,0 +1,41 @@
+{% load static %}{
+  "name": "{{ app_name }}",
+  "short_name": "{{ app_short_name }}",
+  "description": "{{ app_description }}",
+  "start_url": "{{ start_url }}",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "{{ theme_color }}",
+  "background_color": "{{ background_color }}",
+  "icons": [
+    {
+      "src": "{% static 'pingpong/icons/app/icon-192.png' %}",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "{% static 'pingpong/icons/app/icon-512.png' %}",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "{% static 'pingpong/icons/app/icon-maskable-512.png' %}",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Log a match",
+      "url": "{% url 'pingpong:match_add' %}"
+    },
+    {
+      "name": "Leaderboard",
+      "url": "{% url 'pingpong:leaderboard' %}"
+    }
+  ]
+}

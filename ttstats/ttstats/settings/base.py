@@ -63,6 +63,7 @@ TEMPLATES = [
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
                 'pingpong.context_processors.pingpong_context',
+                'pingpong.context_processors.push_context',
             ],
         },
     },
@@ -162,6 +163,30 @@ OTP_WEBAUTHN_RP_ID = "localhost"
 OTP_WEBAUTHN_ALLOWED_ORIGINS = [
     "http://localhost:8000",  # Must match RP_ID
 ]
+
+# Web push (VAPID)
+#
+# Generate a keypair with `python manage.py generate_vapid_keys` and put the
+# two values in the environment. Without them WEBPUSH_ENABLED is False and
+# every push call is a no-op -- the app still works, it just falls back to
+# email, which is exactly what dev and CI want.
+#
+# VAPID_PUBLIC_KEY is handed to the browser verbatim, so it is not a secret.
+# VAPID_PRIVATE_KEY is, and must never reach a template.
+VAPID_PUBLIC_KEY = os.environ.get('VAPID_PUBLIC_KEY', '')
+VAPID_PRIVATE_KEY = os.environ.get('VAPID_PRIVATE_KEY', '')
+# The `sub` claim in the VAPID JWT: how a push service contacts you when your
+# sending is misbehaving. Must be a mailto: or https: URL.
+VAPID_ADMIN_EMAIL = os.environ.get('VAPID_ADMIN_EMAIL', 'mailto:admin@localhost')
+WEBPUSH_ENABLED = bool(VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY)
+
+# PWA identity. Kept in settings rather than hardcoded in the manifest
+# template so a fork/rename does not mean editing JSON.
+PWA_APP_NAME = 'TTStats'
+PWA_APP_SHORT_NAME = 'TTStats'
+PWA_APP_DESCRIPTION = 'Table tennis matches, Elo and championships.'
+PWA_THEME_COLOR = '#0f172a'
+PWA_BACKGROUND_COLOR = '#0f172a'
 
 # Redis Cache Configuration
 REDIS_URL = os.environ.get('REDIS_URL')

@@ -7,6 +7,20 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Table Tennis Tracker{% endblock %}</title>
 
+    <!-- PWA. The manifest and service worker are served from the site root
+         (see ttstats/urls.py), not from /static/, because a worker's scope
+         defaults to the path it was served from. -->
+    <link rel="manifest" href="{% url 'manifest' %}">
+    <meta name="theme-color" content="#0f172a">
+    <link rel="apple-touch-icon" href="{% static 'pingpong/icons/app/apple-touch-icon.png' %}">
+    <!-- iOS ignores the manifest's display mode; these are how an installed
+         TTStats gets its own window and status bar instead of Safari chrome.
+         Push on iOS only works from an installed app, so this is load-bearing,
+         not decoration. -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="TTStats">
+
     <!-- Inline, not in app.css: this rule is what keeps Alpine-managed overlays
          off the screen until Alpine boots, so it must not depend on the
          stylesheet having been built, purged correctly, or fetched at all. A
@@ -45,6 +59,12 @@
             });
         }, 5000);
     </script>
+
+    <!-- Push notifications. json_script, not escapejs -- see CLAUDE.md.
+         push.js is deferred and inert on pages without the settings panel,
+         where it only re-asserts an existing subscription. -->
+    {{ push_config|json_script:"push-config" }}
+    <script defer src="{% static 'pingpong/js/push.js' %}"></script>
 
     {% block extra_css %}{% endblock %}
 </head>
@@ -161,6 +181,13 @@
                         </a>
                     </li>
                     {% endif %}
+                    <li>
+                        <a href="{% url 'pingpong:notification_settings' %}"
+                            class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors {% if request.resolver_match.url_name == 'notification_settings' %}bg-secondary text-secondary-foreground{% else %}text-muted-foreground hover:bg-secondary hover:text-secondary-foreground{% endif %}">
+                            <img src="{% static 'pingpong/icons/bell.svg' %}" class="w-5 h-5" alt="">
+                            Notifications
+                        </a>
+                    </li>
                     <li>
                         <a href="{% url 'pingpong:passkey_management' %}"
                             class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors {% if request.resolver_match.url_name == 'passkey_management' %}bg-secondary text-secondary-foreground{% else %}text-muted-foreground hover:bg-secondary hover:text-secondary-foreground{% endif %}">
@@ -304,6 +331,13 @@
                             </a>
                         </li>
                         {% endif %}
+                        <li>
+                            <a href="{% url 'pingpong:notification_settings' %}"
+                                class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors {% if request.resolver_match.url_name == 'notification_settings' %}bg-secondary text-secondary-foreground{% else %}text-muted-foreground hover:bg-secondary hover:text-secondary-foreground{% endif %}">
+                                <img src="{% static 'pingpong/icons/bell.svg' %}" class="w-5 h-5" alt="">
+                                Notifications
+                            </a>
+                        </li>
                         <li>
                             <a href="{% url 'pingpong:passkey_management' %}"
                                 class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors {% if request.resolver_match.url_name == 'passkey_management' %}bg-secondary text-secondary-foreground{% else %}text-muted-foreground hover:bg-secondary hover:text-secondary-foreground{% endif %}">

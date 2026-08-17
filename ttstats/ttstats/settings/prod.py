@@ -79,6 +79,15 @@ CSP_STYLE_SRC = (
 CSP_IMG_SRC = ("'self'", "data:")
 CSP_FONT_SRC = ("'self'",)
 CSP_CONNECT_SRC = ("'self'",)
+# The service worker. Without this, worker-src falls back to child-src and
+# then to default-src -- which is 'self' and would happen to work, but only by
+# accident. Naming it means a future default-src change cannot silently
+# unregister push for everyone.
+CSP_WORKER_SRC = ("'self'",)
+# The web app manifest. Chrome enforces manifest-src separately from
+# default-src; a blocked manifest means no install prompt and no home-screen
+# app, which on iOS means no push at all.
+CSP_MANIFEST_SRC = ("'self'",)
 CSP_FRAME_ANCESTORS = ("'none'",)
 CSP_FORM_ACTION = ("'self'",)
 

@@ -33,12 +33,12 @@ from django_ratelimit.exceptions import Ratelimited
 
 logger = logging.getLogger(__name__)
 
-from . import live_scoring
+from . import live_scoring, notifications, push
 from .forms import GameForm, MatchEditForm, MatchForm, PlayerRegistrationForm, ScheduledMatchForm, MatchConvertForm, \
     ChampionshipCreateForm, ChampionshipEditForm, ScheduledMatchEditForm
 from .achievements import get_achievement_progress
 from .elo import calculate_expected_score, get_win_probability
-from .models import Game, Location, Match, MatchParticipant, Player, UserProfile, MatchConfirmation, ScheduledMatch, ScheduledMatchParticipant, Side, Championship, EloHistory, format_side_label
+from .models import Game, Location, Match, MatchParticipant, Player, UserProfile, MatchConfirmation, ScheduledMatch, ScheduledMatchParticipant, Side, Championship, EloHistory, format_side_label, NotificationKind, NotificationPreference, PushSubscription
 from .emails import send_scheduled_match_email, send_passkey_deleted_email
 from .services import set_match_sides, set_scheduled_match_sides
 
@@ -1476,9 +1476,14 @@ class ScheduledMatchCreateView(LoginRequiredMixin, CreateView):
         scheduled_match = self.object
         set_scheduled_match_sides(scheduled_match, [player1], [player2])
 
-        # Send notification emails to both players
-        send_scheduled_match_email(scheduled_match, player1)
-        send_scheduled_match_email(scheduled_match, player2)
+        # Push first, email only whoever push did not reach. Same rule as the
+        # match-confirmation path in signals.py.
+        pushed = notifications.notify_scheduled_match(
+            scheduled_match, [player1, player2]
+        )
+        for player in (player1, player2):
+            if player.pk not in pushed:
+                send_scheduled_match_email(scheduled_match, player)
 
         # Mark notification as sent
         scheduled_match.notification_sent = True
@@ -2588,3 +2593,184 @@ class LiveUndoView(LoginRequiredMixin, View):
             match.live_state = new_state
 
         return JsonResponse(_scoreboard_payload(match))
+
+
+# ---------------------------------------------------------------------------
+# PWA + Web Push
+# ---------------------------------------------------------------------------
+
+class ServiceWorkerView(TemplateView):
+    """Serve the service worker from the site root.
+
+    This is a Django view rather than a static file on purpose. A worker's
+    default scope is the directory it was served from, so `/static/.../sw.js`
+    could only ever control `/static/` -- useless, since the app lives under
+    `/pingpong/`. Serving it from `/sw.js` gives it scope `/`, which covers
+    everything including the `/accounts/` login pages.
+    """
+
+    template_name = "pingpong/sw.js"
+    content_type = "application/javascript"
+
+
+class ManifestView(TemplateView):
+    """The web app manifest, rendered so icon URLs go through {% static %}.
+
+    Hardcoding `/static/...` here would break under prod's hashing manifest
+    storage, where every filename carries a content hash.
+    """
+
+    template_name = "pingpong/manifest.webmanifest"
+    content_type = "application/manifest+json"
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx.update({
+            "app_name": settings.PWA_APP_NAME,
+            "app_short_name": settings.PWA_APP_SHORT_NAME,
+            "app_description": settings.PWA_APP_DESCRIPTION,
+            "theme_color": settings.PWA_THEME_COLOR,
+            "background_color": settings.PWA_BACKGROUND_COLOR,
+            "start_url": reverse("pingpong:dashboard"),
+        })
+        return ctx
+
+
+def _subscription_from_request(request):
+    """Pull the browser's PushSubscription JSON out of the request body.
+
+    Returns (endpoint, p256dh, auth) or raises ValueError with a message safe
+    to hand back to the client.
+    """
+    try:
+        data = json.loads(request.body or b"{}")
+    except json.JSONDecodeError:
+        raise ValueError("Malformed JSON body")
+
+    endpoint = data.get("endpoint")
+    keys = data.get("keys") or {}
+    p256dh, auth = keys.get("p256dh"), keys.get("auth")
+
+    if not endpoint or not p256dh or not auth:
+        raise ValueError("Subscription must have an endpoint and both keys")
+    return endpoint, p256dh, auth
+
+
+@method_decorator(login_required, name="dispatch")
+class PushSubscribeView(View):
+    """Register (or re-register) this browser for push.
+
+    Upserts on `endpoint`: browsers hand back the same endpoint for the same
+    device, and re-subscribing is routine -- it happens on every page load in
+    push.js so a subscription the browser silently rotated gets repaired.
+    Creating a new row each time would leave a user with dozens of them and
+    make every notification arrive N times.
+    """
+
+    def post(self, request):
+        try:
+            endpoint, p256dh, auth = _subscription_from_request(request)
+        except ValueError as exc:
+            return JsonResponse({"error": str(exc)}, status=400)
+
+        subscription, created = PushSubscription.objects.update_or_create(
+            endpoint=endpoint,
+            defaults={
+                "user": request.user,
+                "p256dh": p256dh,
+                "auth": auth,
+                "user_agent": request.META.get("HTTP_USER_AGENT", "")[:255],
+                # A re-subscribe is a fresh start: whatever made this endpoint
+                # fail before is no longer interesting.
+                "failure_count": 0,
+            },
+        )
+        return JsonResponse({"ok": True, "created": created, "id": subscription.pk})
+
+
+@method_decorator(login_required, name="dispatch")
+class PushUnsubscribeView(View):
+    """Drop this browser's subscription. Idempotent by design.
+
+    Unsubscribing something already gone is a success, not a 404 -- the client
+    calls this after the browser has already discarded its own subscription,
+    so the two can legitimately disagree about whether the row still exists.
+    """
+
+    def post(self, request):
+        try:
+            data = json.loads(request.body or b"{}")
+        except json.JSONDecodeError:
+            return JsonResponse({"error": "Malformed JSON body"}, status=400)
+
+        endpoint = data.get("endpoint")
+        qs = PushSubscription.objects.filter(user=request.user)
+        if endpoint:
+            qs = qs.filter(endpoint=endpoint)
+        deleted, _ = qs.delete()
+        return JsonResponse({"ok": True, "deleted": deleted})
+
+
+@method_decorator(login_required, name="dispatch")
+@method_decorator(
+    ratelimit(key="user", rate="10/h", method="POST", block=True), name="dispatch"
+)
+class PushTestView(View):
+    """Send the current user a test notification.
+
+    Worth its own endpoint: "did this actually work?" is otherwise
+    unanswerable without playing a match, and permission prompts fail in
+    enough browser-specific ways that a one-tap check saves real debugging.
+
+    Ignores notification preferences -- the user pressed the button, so they
+    want this one regardless of what they have muted.
+    """
+
+    def post(self, request):
+        delivered = push.send_to_user(
+            request.user,
+            kind=NotificationKind.MATCH_RESULT,
+            title="TTStats",
+            body="Push notifications are working. \U0001F3D3",
+            url=reverse("pingpong:notification_settings"),
+            tag="test",
+            respect_preferences=False,
+        )
+        return JsonResponse({"ok": bool(delivered), "delivered": delivered})
+
+
+class NotificationSettingsView(LoginRequiredMixin, View):
+    """Enable/disable push on this device, and mute individual notifications.
+
+    The per-kind toggles are server state; whether *this browser* is
+    subscribed is browser state that only JavaScript can see. The template
+    renders both, and push.js fills in the device half on load.
+    """
+
+    template_name = "pingpong/notification_settings.html"
+
+    def _context(self, request):
+        prefs = NotificationPreference.for_user(request.user)
+        return {
+            "prefs": prefs,
+            "kinds": [
+                (kind.value, kind.label, prefs.wants(kind.value))
+                for kind in NotificationKind
+            ],
+            "subscriptions": request.user.push_subscriptions.all(),
+            "vapid_public_key": settings.VAPID_PUBLIC_KEY,
+            "webpush_enabled": push.webpush_enabled(),
+        }
+
+    def get(self, request):
+        return render(request, self.template_name, self._context(request))
+
+    def post(self, request):
+        prefs = NotificationPreference.for_user(request.user)
+        for kind in NotificationKind:
+            # An unchecked checkbox sends nothing, so absence means off. This
+            # only works because the form posts every toggle every time.
+            setattr(prefs, f"push_{kind.value}", kind.value in request.POST)
+        prefs.save()
+        messages.success(request, "Notification preferences saved")
+        return redirect("pingpong:notification_settings")

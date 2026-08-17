@@ -52,7 +52,36 @@ module.exports = defineConfig({
     {
       name: 'iphone-safari',
       dependencies: ['setup'],
-      testIgnore: [/.*\.nojs\.spec\.js/, /.*\.reduced\.spec\.js/, /.*\.desktop\.spec\.js/],
+      testIgnore: [
+        /.*\.nojs\.spec\.js/,
+        /.*\.reduced\.spec\.js/,
+        /.*\.desktop\.spec\.js/,
+        // The PWA specs need a live service worker; everything here needs it
+        // gone. See the two `serviceWorkers` settings below.
+        /pwa\.spec\.js/,
+      ],
+      use: {
+        ...devices['iPhone 13'],
+        storageState: STORAGE_STATE,
+        // Playwright's page.route() does not intercept requests from a page a
+        // service worker controls -- the abort/delay rule is simply never
+        // consulted and the request goes to the server. The scoreboard specs
+        // are built on exactly that (abort /live/point/ to provoke the error
+        // toast, delay it to prove the score moves optimistically), so with
+        // the worker live they fail, or worse, pass without testing anything.
+        //
+        // Blocking it here costs no fidelity: sw.js has no fetch handler, so
+        // it is inert with respect to everything these specs exercise. It
+        // only exists to receive push.
+        serviceWorkers: 'block',
+      },
+    },
+    {
+      // The mirror image: the specs that are *about* the service worker, so
+      // it has to be allowed to register here.
+      name: 'iphone-pwa',
+      dependencies: ['setup'],
+      testMatch: /pwa\.spec\.js/,
       use: { ...devices['iPhone 13'], storageState: STORAGE_STATE },
     },
     {

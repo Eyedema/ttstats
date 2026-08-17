@@ -19,8 +19,10 @@ from .models import (
     Location,
     Match,
     MatchConfirmation,
+    NotificationPreference,
     Player,
     PlayerAchievement,
+    PushSubscription,
     ScheduledMatch,
     UserProfile,
 )
@@ -911,3 +913,44 @@ class PlayerAchievementAdmin(admin.ModelAdmin):
     list_filter = ('achievement__group', 'achievement__tier')
     search_fields = ('player__name', 'achievement__name')
     raw_id_fields = ('player', 'match')
+
+
+@admin.register(PushSubscription)
+class PushSubscriptionAdmin(admin.ModelAdmin):
+    """Read-mostly: these rows are written by browsers, not by people.
+
+    Useful for answering "why isn't Marco getting notifications?" -- a high
+    failure_count with no last_success_at means the device registered once and
+    was never reachable again.
+    """
+
+    list_display = ('user', 'short_endpoint', 'user_agent', 'created_at',
+                    'last_success_at', 'failure_count')
+    list_filter = ('created_at',)
+    search_fields = ('user__username', 'user_agent')
+    readonly_fields = ('endpoint', 'p256dh', 'auth', 'user_agent',
+                       'created_at', 'last_success_at', 'failure_count')
+
+    def short_endpoint(self, obj):
+        # Endpoints are ~200 characters of opaque token and would make the
+        # changelist unreadable. The host is the only part worth seeing: it
+        # tells you which push service, i.e. which browser vendor.
+        from urllib.parse import urlparse
+
+        return urlparse(obj.endpoint).netloc or obj.endpoint[:40]
+
+    short_endpoint.short_description = 'Push service'
+
+    def has_add_permission(self, request):
+        # A subscription is only meaningful with keys a browser generated;
+        # one typed in by hand can never receive anything.
+        return False
+
+
+@admin.register(NotificationPreference)
+class NotificationPreferenceAdmin(admin.ModelAdmin):
+    list_display = ('user', 'push_match_confirmation', 'push_match_result',
+                    'push_scheduled_match', 'push_leaderboard_overtake')
+    list_filter = ('push_match_confirmation', 'push_match_result',
+                   'push_scheduled_match', 'push_leaderboard_overtake')
+    search_fields = ('user__username',)

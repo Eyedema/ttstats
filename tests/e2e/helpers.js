@@ -21,6 +21,13 @@ const PROD_CSP = [
   "style-src 'self' 'unsafe-inline'",
   "form-action 'self'",
   "font-src 'self'",
+  // The service worker and the web app manifest. Both would fall through to
+  // default-src and happen to work, but naming them here means a future
+  // default-src change cannot silently kill push notifications -- and on iOS,
+  // a blocked manifest means no home-screen install, which means no push at
+  // all.
+  "worker-src 'self'",
+  "manifest-src 'self'",
 ].join('; ');
 
 /** Serve every response with the production CSP. */
