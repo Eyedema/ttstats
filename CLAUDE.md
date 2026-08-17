@@ -272,23 +272,35 @@ Two shapes, both in use:
 
 ### Production sends a CSP; dev does not
 
-**`prod.py`'s `script-src` is `'self' 'unsafe-inline'` -- no `'unsafe-eval'`.**
-Alpine 3's standard build compiles every expression with `new Function()`, so
-on the live site `x-data`, `x-show`, `x-text` and `@click` **all throw**, while
-Alpine still gets far enough to strip `x-cloak`. Overlays therefore render open
-with dead dismiss controls. This is exactly how the mobile drawer shipped
-broken while pytest, a manual browser pass and the whole Playwright suite were
-green -- none of them had ever seen the header the real server sends.
+**Dev sends no CSP at all.** That asymmetry, not any particular directive, is
+the thing to remember: the mobile drawer once shipped broken to production
+while pytest, a manual browser pass and the whole Playwright suite were green,
+because none of them had ever seen the header the real server sends.
 
+**`prod.py`'s `script-src` is currently `'self' 'unsafe-inline' 'unsafe-eval'`.**
+The `'unsafe-eval'` is deliberate and load-bearing: Alpine 3's standard build
+compiles every expression with `new Function()`, so without it `x-data`,
+`x-show`, `x-text` and `@click` all throw, while Alpine still gets far enough
+to strip `x-cloak` -- overlays render open with dead dismiss controls. That is
+the failure mode above.
+
+- **`scoreboard.html` is Alpine and works in production *because* of that
+  allowance.** It is not broken; do not "fix" it. (This section previously
+  said the opposite, and stayed wrong after `'unsafe-eval'` was added.)
 - **The mobile drawer is deliberately plain JS.** Do not "modernise" it back
-  onto Alpine.
-- **`scoreboard.html` is still Alpine and is therefore non-functional in
-  production.** Fixing it means one of: adding `'unsafe-eval'` (weakens CSP,
-  though `'unsafe-inline'` is already there), switching to `@alpinejs/csp`
-  (every expression must become an `Alpine.data()` component member), or
-  rewriting it in plain JS. Unresolved -- do not assume it works in prod.
+  onto Alpine, even though eval is now permitted. The e2e suite's `PROD_CSP`
+  is deliberately **stricter** than what prod sends -- it has no
+  `'unsafe-eval'` -- precisely so the drawer, the one overlay that is
+  unrecoverable when it fails open, can never quietly regress onto a
+  framework expression.
+- Removing **both** unsafe directives means the `@alpinejs/csp` build (every
+  expression becomes an `Alpine.data()` member) alongside B.5's removal of
+  inline `<script>` blocks. Until then `'unsafe-inline'` already permits
+  injected inline scripts, so the policy's XSS value is limited either way.
 - `tests/e2e/helpers.js` exports `applyProdCSP(page)`; `csp.spec.js` asserts no
   script is blocked. Any spec covering interactive behaviour should apply it.
+- **Keep `PROD_CSP` in sync when adding a directive.** It also carries
+  `worker-src` and `manifest-src` for the service worker and web manifest.
 
 ### Fail-closed rule for JS-managed UI
 
