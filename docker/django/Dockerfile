@@ -15,8 +15,16 @@ WORKDIR /app
 #
 # --only-binary=:all: keeps it that way: adding a package that needs compiling
 # fails here, loudly, instead of silently reintroducing the toolchain.
+#
+# http-ece is the one exception, and it is a safe one: pywebpush needs it for
+# the payload encryption, and it publishes an sdist and no wheel at all. It is
+# pure Python, so building it needs setuptools and nothing else -- no
+# compiler, no apt, none of what the rule above exists to prevent. Any OTHER
+# package that wants an exception here should be treated as a red flag.
 COPY requirements.txt .
-RUN pip install --user --no-warn-script-location --only-binary=:all: -r requirements.txt
+RUN pip install --user --no-warn-script-location \
+    --only-binary=:all: --no-binary=http-ece \
+    -r requirements.txt
 
 # Asset stage: compile Tailwind. Kept separate from the Python builder so a
 # template-only change does not reinstall pip packages, and vice versa.
