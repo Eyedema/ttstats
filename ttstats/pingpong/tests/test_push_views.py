@@ -389,11 +389,41 @@ class TestPushConfigContext:
         assert response.context['push_config']['enabled'] is False
 
     def test_present_for_anonymous_users_too(self, client):
-        # push.js runs on the login page: re-asserting an existing
-        # subscription should not require being logged in.
+        # pingpong_context early-returns for anyone without a Player; this
+        # must not go missing on the same pages.
         response = client.get(reverse('pingpong:login'))
 
         assert response.context['push_config']['urls']['serviceWorker'] == '/sw.js'
+
+
+@pytest.mark.django_db
+class TestLoggedOutInstallSurface:
+    """The logged-out pages must be installable too.
+
+    registration/base_auth.html deliberately does not extend pingpong/base.html,
+    so it does not inherit the PWA tags -- and a new user's first visit lands
+    here, which is exactly where they would tap Add to Home Screen. Without the
+    manifest they get a plain bookmark, and on iOS a non-standalone bookmark can
+    never enable push at all.
+    """
+
+    @pytest.mark.parametrize('url_name', [
+        'pingpong:login',
+        'pingpong:signup',
+    ])
+    def test_auth_pages_link_the_manifest(self, client, url_name):
+        response = client.get(reverse(url_name))
+
+        assert response.status_code == 200
+        content = response.content.decode()
+        assert 'rel="manifest"' in content
+        assert reverse('manifest') in content
+
+    def test_auth_pages_carry_the_ios_install_tags(self, client):
+        content = client.get(reverse('pingpong:login')).content.decode()
+
+        assert 'apple-mobile-web-app-capable' in content
+        assert 'apple-touch-icon' in content
 
     def test_carries_a_csrf_token_because_the_cookie_is_httponly(self, client):
         logged_in(client)
