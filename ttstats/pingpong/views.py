@@ -1,5 +1,6 @@
 import json
 import logging
+from datetime import datetime
 from typing import Any
 
 from django.conf import settings
@@ -46,6 +47,21 @@ try:
     from django_otp_webauthn.models import WebAuthnCredential
 except ImportError:
     WebAuthnCredential = None
+
+
+def _parse_live_timestamp(value):
+    """ISO string from Match.live_state -> datetime, or None.
+
+    Returns None rather than raising on anything unparseable: a malformed
+    timestamp in the scoreboard's JSON should cost you the "last point"
+    line, not the whole dashboard.
+    """
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def append_widget_class(field, css):
@@ -442,7 +458,14 @@ class DashboardView(LoginRequiredMixin, TemplateView):
                     "team2_games": state.get("team2_games", 0),
                     "team1_points": state.get("team1_points", 0),
                     "team2_points": state.get("team2_points", 0),
-                    "last_point_at": state.get("last_point_at"),
+                    # Parsed to a datetime here rather than passed through as
+                    # the raw JSON string. live_state stores it as ISO text,
+                    # and Django's date/timesince filters silently no-op on a
+                    # string -- so the banner rendered the full
+                    # "2026-08-17T23:15:21.959836+00:00" at the user.
+                    "last_point_at": _parse_live_timestamp(
+                        state.get("last_point_at")
+                    ),
                     "best_of": m.best_of,
                     "resume_url": reverse(
                         "pingpong:live_scoreboard", args=[m.pk]
