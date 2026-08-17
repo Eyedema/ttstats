@@ -27,7 +27,7 @@
                         Game {{ lm.team1_games|add:lm.team2_games|add:1 }} / {{ lm.best_of }} ·
                         Games {{ lm.team1_games }}-{{ lm.team2_games }} ·
                         Current {{ lm.team1_points }}-{{ lm.team2_points }}
-                        {% if lm.last_point_at %} · last point {{ lm.last_point_at }}{% endif %}
+                        {% if lm.last_point_at %} · last point {{ lm.last_point_at|timesince }} ago{% endif %}
                     </p>
                 </div>
             </div>

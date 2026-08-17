@@ -1,7 +1,7 @@
 import re
 
 import pytest
-from datetime import date, timedelta, time
+from datetime import date, datetime, timedelta, time
 from django.core import mail
 from django.test import Client
 from django.urls import reverse
@@ -1447,3 +1447,58 @@ class TestFlashMessageMarkup:
         body = client.get(reverse("pingpong:dashboard")).content.decode()
         assert "[data-flash]" in body
         assert 'querySelectorAll(\'[role="alert"]\')' not in body
+
+
+@pytest.mark.django_db
+class TestDashboardLiveBanner:
+    """The live-match banner's timestamp.
+
+    live_state stores last_point_at as an ISO *string*, and Django's date and
+    timesince filters silently no-op on a string rather than erroring -- so
+    the banner rendered the raw "2026-08-17T23:15:21.959836+00:00" at the
+    user. The view now hands the template a datetime.
+    """
+
+    def _live_match_for(self, client):
+        from pingpong import live_scoring as ls
+        from pingpong.models import Match
+        from pingpong.services import set_match_sides
+
+        player = PlayerFactory(with_user=True)
+        opponent = PlayerFactory()
+        client.force_login(player.user)
+
+        match = Match.objects.create(best_of=5, is_live=True, scorekeeper=player)
+        set_match_sides(match, [player], [opponent])
+        state = ls.set_initial_server(ls.initial_state(5), "team1")
+        state, _ = ls.apply_point(state, "team1")
+        Match.all_objects.filter(pk=match.pk).update(live_state=state)
+        return match
+
+    def test_last_point_at_is_a_datetime_not_a_string(self, client):
+        self._live_match_for(client)
+
+        response = client.get(reverse("pingpong:dashboard"))
+
+        banner = response.context["live_matches"][0]
+        assert isinstance(banner["last_point_at"], datetime)
+
+    def test_the_raw_iso_string_never_reaches_the_page(self, client):
+        self._live_match_for(client)
+
+        content = client.get(reverse("pingpong:dashboard")).content.decode()
+
+        # The giveaway is the ISO separator between date and time.
+        assert not re.search(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", content)
+
+    def test_a_malformed_timestamp_costs_the_line_not_the_page(self, client):
+        from pingpong.models import Match
+
+        match = self._live_match_for(client)
+        state = dict(match.live_state or {}, last_point_at="not a timestamp")
+        Match.all_objects.filter(pk=match.pk).update(live_state=state)
+
+        response = client.get(reverse("pingpong:dashboard"))
+
+        assert response.status_code == 200
+        assert response.context["live_matches"][0]["last_point_at"] is None
