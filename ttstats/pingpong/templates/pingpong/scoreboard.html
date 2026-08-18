@@ -1,14 +1,34 @@
 {% extends "pingpong/base.html" %}
-{% load static %}
+{% load icon_tags %}
 
 {% block title %}Live Scoreboard{% endblock %}
 
-{% block content %}
+{% comment %}
+The live scoreboard: read from a metre away, driven one-handed.
+
+Two tap zones floor to ceiling -- the whole coloured half IS the button, so
+there is nothing to aim at while holding a paddle. Each half wears its player's
+permanent hue, so the sides are the people. The digits are the one place in the
+app where type gets to be enormous.
+
+Serve is a solid dot PLUS the word SERVING. Never colour alone, and never the
+pulse alone: reduced motion parks the animation, and the word has to survive
+that. Games won are small bars rather than a number, because bars are countable
+at a glance and "2" is not distinguishable from "3" across a room.
+
+Chrome is a 60px bar pinned above the home indicator: Undo bottom-left where a
+thumb already is, and Exit deliberately the quietest thing on screen.
+
+The JS below is unchanged and load-bearing -- optimistic scoring, the serialised
+POST queue, the no-alert error toast. Read its comments before touching it.
+{% endcomment %}
+
+{% block full_bleed %}
 {% csrf_token %}
 {{ bootstrap|json_script:"scoreboard-bootstrap" }}
 <div
   id="scoreboard"
-  class="fixed inset-0 z-50 bg-background text-foreground select-none"
+  class="fixed inset-0 z-50 flex select-none flex-col bg-court text-bone"
   x-data="scoreboardApp()"
   x-init="init()"
   data-point-url="{{ point_url }}"
@@ -20,107 +40,136 @@
   data-team1-label="{{ team1_label }}"
   data-team2-label="{{ team2_label }}"
 >
-  <!-- Initial server picker (shown until live_state.started) -->
-  <div
-    x-show="!state.started"
-    x-cloak
-    class="absolute inset-0 flex flex-col items-center justify-center gap-6 p-8 bg-background"
-  >
-    <h1 class="text-3xl font-bold">Who's serving first?</h1>
-    <div class="flex gap-6">
-      <button
-        @click="startMatch('team1')"
-        class="px-10 py-6 rounded-2xl bg-primary text-primary-foreground text-2xl font-semibold"
-      >{{ team1_label }}</button>
-      <button
-        @click="startMatch('team2')"
-        class="px-10 py-6 rounded-2xl bg-primary text-primary-foreground text-2xl font-semibold"
-      >{{ team2_label }}</button>
+  {# --- Server picker, shown until live_state.started ------------------- #}
+  <div x-show="!state.started" x-cloak
+       class="absolute inset-0 z-10 flex flex-col justify-center gap-6 bg-court p-6 pt-safe-top pb-safe-bottom">
+    <div>
+      <p class="label-cap">Before the first serve</p>
+      <span class="rule mt-2"></span>
+      <h1 class="mt-4 text-display">Who&rsquo;s serving?</h1>
     </div>
-    <a href="{% url 'pingpong:dashboard' %}" class="text-sm text-muted-foreground underline">Cancel</a>
+
+    <div class="flex flex-col gap-px">
+      <button type="button" @click="startMatch('team1')"
+              class="hue-fill {{ team1_hue_class }} flex min-h-[88px] items-center px-5 text-[22px] font-extrabold tracking-[-0.02em]">
+        {{ team1_label }}
+      </button>
+      <button type="button" @click="startMatch('team2')"
+              class="hue-fill {{ team2_hue_class }} flex min-h-[88px] items-center px-5 text-[22px] font-extrabold tracking-[-0.02em]">
+        {{ team2_label }}
+      </button>
+    </div>
+
+    <a href="{% url 'pingpong:dashboard' %}" class="btn-quiet self-start">Cancel</a>
   </div>
 
-  <!-- Active scoreboard (two tap zones) -->
-  <div
-    x-show="state.started"
-    x-cloak
-    class="grid grid-cols-2 h-full w-full"
-    :class="{ 'flex-row-reverse': state.side_switched }"
-  >
-    <!-- Team 1 tap zone. Note there is no :disabled -- a tap is never dropped
-         because a previous POST is still in flight; see addPoint(). -->
-    <button
-      type="button"
-      @click="addPoint('team1')"
-      class="tap-zone relative flex flex-col items-center justify-center bg-blue-600 text-white text-center"
-      :class="{ 'order-2': state.side_switched }"
-    >
-      <div class="absolute top-4 left-4 text-2xl font-semibold flex items-center gap-2">
-        <span x-show="currentServer === 'team1'" class="inline-block h-3 w-3 rounded-full bg-yellow-300 animate-pulse"></span>
-        <span>{{ team1_label }}</span>
-      </div>
-      <div class="absolute top-4 right-4 text-2xl font-semibold opacity-80" x-text="state.team1_games"></div>
-      <div x-ref="team1Score"
-           class="text-[18rem] leading-none tracking-tighter font-bold tabular-nums"
-           x-text="points('team1')"></div>
+  {# --- The two tap zones ------------------------------------------------ #}
+  <div x-show="state.started" x-cloak class="flex min-h-0 flex-1">
+    {% comment %}
+    There is deliberately NO :disabled here. A tap must never be dropped
+    because a previous POST is still in flight -- see addPoint().
+    {% endcomment %}
+    <button type="button" @click="addPoint('team1')"
+            :class="{ 'order-2': state.side_switched }"
+            class="tap-zone hue-fill {{ team1_hue_class }} flex flex-1 flex-col pt-[calc(52px+env(safe-area-inset-top,0px))] text-left">
+      <span class="flex flex-col gap-0.5 px-[18px]">
+        <span class="text-[19px] font-extrabold leading-tight tracking-[-0.02em]">{{ team1_label }}</span>
+        <span class="flex items-center gap-1.5">
+          <span x-show="currentServer === 'team1'" class="dot h-2.5 w-2.5 flex-none bg-current"></span>
+          <span class="text-[11px] font-extrabold uppercase tracking-[0.12em]"
+                x-text="currentServer === 'team1' ? 'serving' : 'receiving'"></span>
+        </span>
+      </span>
+
+      <span class="flex flex-1 items-center justify-center">
+        <span x-ref="team1Score" class="n text-score-hero" x-text="points('team1')"></span>
+      </span>
+
+      {# Games won, countable at a glance. #}
+      <span class="flex gap-[5px] px-[18px] pb-[18px]">
+        {% for _ in game_pips %}
+        <span class="h-1.5 w-[26px] bg-current"
+              :class="state.team1_games > {{ forloop.counter0 }} ? 'opacity-100' : 'opacity-25'"></span>
+        {% endfor %}
+      </span>
     </button>
 
-    <!-- Team 2 tap zone -->
-    <button
-      type="button"
-      @click="addPoint('team2')"
-      class="tap-zone relative flex flex-col items-center justify-center bg-red-600 text-white text-center"
-      :class="{ 'order-1': state.side_switched }"
-    >
-      <div class="absolute top-4 left-4 text-2xl font-semibold flex items-center gap-2">
-        <span x-show="currentServer === 'team2'" class="inline-block h-3 w-3 rounded-full bg-yellow-300 animate-pulse"></span>
-        <span>{{ team2_label }}</span>
-      </div>
-      <div class="absolute top-4 right-4 text-2xl font-semibold opacity-80" x-text="state.team2_games"></div>
-      <div x-ref="team2Score"
-           class="text-[18rem] leading-none tracking-tighter font-bold tabular-nums"
-           x-text="points('team2')"></div>
+    <button type="button" @click="addPoint('team2')"
+            :class="{ 'order-1': state.side_switched }"
+            class="tap-zone hue-fill {{ team2_hue_class }} flex flex-1 flex-col pt-[calc(52px+env(safe-area-inset-top,0px))] text-left">
+      <span class="flex flex-col gap-0.5 px-[18px]">
+        <span class="text-[19px] font-extrabold leading-tight tracking-[-0.02em]">{{ team2_label }}</span>
+        <span class="flex items-center gap-1.5">
+          <span x-show="currentServer === 'team2'" class="dot h-2.5 w-2.5 flex-none bg-current"></span>
+          <span class="text-[11px] font-extrabold uppercase tracking-[0.12em]"
+                x-text="currentServer === 'team2' ? 'serving' : 'receiving'"></span>
+        </span>
+      </span>
+
+      <span class="flex flex-1 items-center justify-center">
+        <span x-ref="team2Score" class="n text-score-hero" x-text="points('team2')"></span>
+      </span>
+
+      <span class="flex gap-[5px] px-[18px] pb-[18px]">
+        {% for _ in game_pips %}
+        <span class="h-1.5 w-[26px] bg-current"
+              :class="state.team2_games > {{ forloop.counter0 }} ? 'opacity-100' : 'opacity-25'"></span>
+        {% endfor %}
+      </span>
     </button>
   </div>
 
-  <!-- Error toast. Replaces the blocking browser dialog this used to raise,
-       which froze the page mid-match and read as a browser failure rather
-       than as part of the scoreboard. -->
-  <div
-    x-show="error"
-    x-cloak
-    x-transition:enter="transition ease-out duration-200"
-    x-transition:enter-start="opacity-0"
-    x-transition:enter-end="opacity-100"
-    x-transition:leave="transition ease-in duration-150"
-    x-transition:leave-start="opacity-100"
-    x-transition:leave-end="opacity-0"
-    role="alert"
-    class="absolute bottom-20 left-1/2 -translate-x-1/2 z-20 max-w-[90vw] rounded-full bg-destructive px-5 py-2 text-sm font-medium text-destructive-foreground shadow-lg"
-    x-text="error"
-  ></div>
+  {% comment %}
+  --- Error toast. Replaces the blocking browser dialog this used to
+  raise, which froze the page mid-match and read as a browser failure
+  rather than as part of the scoreboard. Carries no [data-flash], so
+  base.html's five-second sweep leaves it alone. -------------------
+  {% endcomment %}
+  <div x-show="error" x-cloak
+       x-transition:enter="transition ease-out duration-200"
+       x-transition:enter-start="opacity-0"
+       x-transition:enter-end="opacity-100"
+       x-transition:leave="transition ease-in duration-150"
+       x-transition:leave-start="opacity-100"
+       x-transition:leave-end="opacity-0"
+       role="alert"
+       class="absolute bottom-24 left-1/2 z-20 max-w-[90vw] -translate-x-1/2 border-2 border-paddle bg-court px-4 py-2.5 text-[13px] font-extrabold"
+       x-text="error"></div>
 
-  <!-- Bottom controls -->
-  <div
-    x-show="state.started"
-    x-cloak
-    class="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-3 bg-card/95 backdrop-blur rounded-full px-5 py-2 shadow-lg"
-  >
-    <button @click="undo()" :disabled="busy" class="px-4 py-2 text-sm font-medium rounded-full bg-secondary text-secondary-foreground">Undo</button>
-    <span class="text-sm text-muted-foreground">Game <span x-text="state.current_game_number"></span> / {{ match.best_of }}</span>
-    <a href="{% url 'pingpong:dashboard' %}" class="text-sm underline">Exit</a>
+  {# --- Chrome: 60px, pinned above the home indicator ------------------- #}
+  <div x-show="state.started" x-cloak
+       class="flex flex-none items-stretch border-t-2 border-court-line bg-court pb-safe-bottom">
+    <button type="button" @click="undo()" :disabled="busy"
+            class="flex min-h-[60px] min-w-[96px] items-center gap-2 border-r border-court-line px-4 text-[14px] font-extrabold disabled:opacity-40">
+      {% icon "undo-2" size="sm" %}
+      <span>Undo</span>
+    </button>
+
+    <div class="flex min-h-[60px] flex-1 flex-col items-center justify-center gap-0.5">
+      <span class="n text-[15px]"><span x-text="state.team1_games || 0"></span> – <span x-text="state.team2_games || 0"></span></span>
+      <span class="text-[10px] font-extrabold uppercase tracking-[0.12em] text-muted-foreground">
+        game <span x-text="state.current_game_number"></span> of {{ match.best_of }}
+      </span>
+    </div>
+
+    {# Deliberately the quietest control on the screen. #}
+    <a href="{% url 'pingpong:match_detail' match.pk %}"
+       class="flex min-h-[60px] min-w-[88px] items-center justify-end px-4 text-[14px] font-extrabold text-muted-foreground">
+      Exit
+    </a>
   </div>
 
-  <!-- Side-switch prompt (KAN-9) -->
-  <div
-    x-show="shouldPromptSideSwitch"
-    x-cloak
-    class="absolute inset-0 flex items-center justify-center bg-black/60 z-10"
-  >
-    <div class="bg-card text-card-foreground rounded-2xl p-8 shadow-xl text-center max-w-sm">
-      <h2 class="text-2xl font-bold mb-3">Switch sides</h2>
-      <p class="mb-6 text-muted-foreground">Deciding game has reached 5 — change ends before the next point.</p>
-      <button @click="confirmSideSwitch()" class="px-6 py-3 rounded-xl bg-primary text-primary-foreground font-semibold">Done</button>
+  {# --- Side-switch prompt (KAN-9) --------------------------------------- #}
+  <div x-show="shouldPromptSideSwitch" x-cloak class="absolute inset-0 z-30 flex items-center justify-center p-6">
+    <div class="overlay-scrim absolute inset-0"></div>
+    <div class="surface-overlay relative w-full max-w-sm p-5">
+      <p class="label-live">Deciding game</p>
+      <span class="rule my-2"></span>
+      <h2 class="text-title">Switch ends</h2>
+      <p class="mt-1 text-[13px] font-semibold leading-relaxed text-muted-foreground">
+        The deciding game has reached 5. Change ends before the next point.
+      </p>
+      <button type="button" @click="confirmSideSwitch()" class="btn-paddle mt-4 w-full">Done</button>
     </div>
   </div>
 </div>

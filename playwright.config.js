@@ -18,6 +18,11 @@ const { defineConfig, devices } = require('@playwright/test');
  *                      hidden when it does not.
  *   - `iphone-reduced` reduced motion + reduced transparency, which are OS
  *                      settings a great many iPhone users actually have on.
+ *   - `iphone-dark`    the palette's BASE. Dark is not the alternate theme in
+ *                      this design -- light is the override -- so the default
+ *                      light rendering a developer sees on a desktop is the
+ *                      variant, not the norm. A spec suite that only ever ran
+ *                      in light mode would be testing the exception.
  *   - `desktop-chrome` the wide layout, so the sidebar path stays covered.
  */
 const path = require('path');
@@ -52,7 +57,12 @@ module.exports = defineConfig({
     {
       name: 'iphone-safari',
       dependencies: ['setup'],
-      testIgnore: [/.*\.nojs\.spec\.js/, /.*\.reduced\.spec\.js/, /.*\.desktop\.spec\.js/],
+      testIgnore: [
+        /.*\.nojs\.spec\.js/,
+        /.*\.reduced\.spec\.js/,
+        /.*\.desktop\.spec\.js/,
+        /.*\.dark\.spec\.js/,
+      ],
       use: { ...devices['iPhone 13'], storageState: STORAGE_STATE },
     },
     {
@@ -74,6 +84,16 @@ module.exports = defineConfig({
         ...devices['iPhone 13'],
         storageState: STORAGE_STATE,
         reducedMotion: 'reduce',
+      },
+    },
+    {
+      name: 'iphone-dark',
+      dependencies: ['setup'],
+      testMatch: /.*\.dark\.spec\.js/,
+      use: {
+        ...devices['iPhone 13'],
+        storageState: STORAGE_STATE,
+        colorScheme: 'dark',
       },
     },
     {

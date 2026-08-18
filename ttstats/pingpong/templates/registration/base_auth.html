@@ -4,21 +4,45 @@
 
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}Table Tennis Tracker{% endblock %}</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>{% block title %}TTStats{% endblock %}</title>
+
+    <meta name="color-scheme" content="dark light">
+    <meta name="theme-color" content="#0b1220" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#f4f1ea" media="(prefers-color-scheme: light)">
+
+    <!-- Same reasoning as base.html: without this a failed stylesheet leaves
+         the page white-on-white rather than merely unstyled. The auth pages
+         are the first thing a new user sees, so they get the same floor. -->
+    <style>
+      html,body{background:#0b1220;color:#f4f1ea}
+      @media (prefers-color-scheme: light){html,body{background:#f4f1ea;color:#0f172a}}
+    </style>
+
+    <link rel="preload" as="font" type="font/woff2" crossorigin
+          href="{% static 'pingpong/fonts/archivo-800.woff2' %}">
 
     <link rel="stylesheet" href="{% static 'pingpong/css/app.css' %}">
 
     {% block extra_head %}{% endblock %}
 </head>
 
-<body class="bg-secondary">
-    <div class="min-h-screen flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
-        <div class="max-w-md w-full space-y-8">
-            <div class="text-center">
+<body class="bg-court text-bone">
+    {% comment %}
+    _messages.html renders icons from this sprite, so it has to be here too.
+    This page does not extend base.html, and leaving the include out renders
+    every icon as an empty box with no error anywhere.
+    {% endcomment %}
+    {% include 'pingpong/_icons.html' %}
+
+    <div class="flex min-h-screen items-center justify-center px-4 py-12">
+        <div class="w-full max-w-md">
+            <div class="mb-8">
                 {% block heading %}
-                <h2 class="text-3xl font-bold text-foreground">Table Tennis Tracker 🏓</h2>
-                <p class="mt-2 text-sm text-muted-foreground">{% block subheading %}{% endblock %}</p>
+                <p class="text-[10px] font-extrabold uppercase tracking-[0.14em] text-paddle">TTStats</p>
+                <span class="rule my-2"></span>
+                <h1 class="text-display">Table tennis, settled</h1>
+                <p class="mt-2 text-[13px] font-semibold text-muted-foreground">{% block subheading %}{% endblock %}</p>
                 {% endblock %}
             </div>
 

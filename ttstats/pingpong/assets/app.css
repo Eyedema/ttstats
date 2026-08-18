@@ -2,17 +2,147 @@
 @tailwind components;
 @tailwind utilities;
 
+/* --- Archivo, self-hosted -------------------------------------------------
+   OFL, copied out of node_modules by `npm run vendor` into
+   static/pingpong/fonts. No CDN reference anywhere -- prod's CSP allows no
+   external hosts, so a font from fonts.gstatic.com would simply not load.
+
+   Three weights only. The design uses 400 for body, 600 for metadata and 800
+   for everything structural; a fourth would be a fourth file for nothing.
+   `swap` because a scoreboard that renders late is worse than one that
+   renders in the fallback for 100ms. */
+@font-face {
+  font-family: 'Archivo';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('../fonts/archivo-400.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Archivo';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('../fonts/archivo-600.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Archivo';
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url('../fonts/archivo-800.woff2') format('woff2');
+}
+
+/* --- Palette --------------------------------------------------------------
+   Bare `R G B` triples so Tailwind's slash-opacity keeps working. Dark is the
+   base; light is the override, because the viewer's system setting drives it
+   and the app is used in a garage more often than at a desk.
+
+   Deliberately NOT inside @layer base: these are the substrate every layer
+   resolves against, and a layered :root would lose to a utility that happens
+   to set a custom property. */
+:root {
+  color-scheme: dark;
+
+  --court: 11 18 32;
+  --court-raised: 15 23 42;
+  --court-line: 28 41 66;
+  --court-overlay: 22 33 58;
+  --court-edge: 42 58 92;
+
+  --bone: 244 241 234;
+  --bone-dim: 207 216 230;
+  --bone-muted: 139 151 173;
+
+  --paddle: 239 68 68;
+  --paddle-600: 220 38 38;
+  --paddle-700: 185 28 28;
+  --paddle-foreground: 255 255 255;
+
+  --ball: 245 158 11;
+  --ball-foreground: 11 18 32;
+
+  --confirmed: 34 197 94;
+  --confirmed-foreground: 4 20 10;
+
+  /* The drawer scrim. Held as a variable because reduced-transparency has to
+     take it to fully opaque, and it is set in two places. */
+  --scrim: 11 18 32;
+  --scrim-opacity: 0.72;
+
+  /* The drop under an overlay. Calibrated for navy; on bone the same value
+     reads as a bruise, so light mode softens it below. The 2px red top edge
+     -- the part that actually says "this is the layer above" -- does not
+     change, because that is the signal and this is only depth. */
+  --overlay-shadow: 0 18px 40px rgb(0 0 0 / 0.55);
+}
+
+/* Only surfaces flip. Paddle, ball and every player hue are identities and are
+   byte-identical across themes -- a rivalry must not change colour because
+   someone turned on light mode. Confirmed green is the one exception: #22c55e
+   on bone fails contrast, so it darkens to #16a34a while staying the same
+   green in meaning. */
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+
+    --court: 244 241 234;
+    --court-raised: 255 255 255;
+    --court-line: 214 208 196;
+    --court-overlay: 255 255 255;
+    --court-edge: 196 188 172;
+
+    --bone: 15 23 42;
+    --bone-dim: 51 62 82;
+    --bone-muted: 90 99 118;
+
+    --confirmed: 22 163 74;
+    --confirmed-foreground: 255 255 255;
+
+    --scrim: 15 23 42;
+    --scrim-opacity: 0.45;
+
+    --overlay-shadow: 0 10px 24px rgb(15 23 42 / 0.12);
+  }
+}
+
+/* --- Player identity hues -------------------------------------------------
+   One hue each, permanent, keyed on the player's pk in player_hues.py. Each
+   class only *declares* the pair; .hue-bar / .hue-fill / .hue-text below do
+   the drawing. That split is what keeps hue out of inline style attributes,
+   and it means a row can carry `hue-3` once and colour a bar, a label and a
+   fill from the same declaration.
+
+   Kept outside @layer components so a hue always wins over the utility that
+   set the element's default background. */
+.hue-1 { --hue: #38bdf8; --hue-ink: #04121c; }
+.hue-2 { --hue: #ef4444; --hue-ink: #ffffff; }
+.hue-3 { --hue: #22c55e; --hue-ink: #04140a; }
+.hue-4 { --hue: #f97316; --hue-ink: #1a0a00; }
+.hue-5 { --hue: #ec4899; --hue-ink: #ffffff; }
+.hue-6 { --hue: #14b8a6; --hue-ink: #04140f; }
+.hue-7 { --hue: #eab308; --hue-ink: #16130a; }
+.hue-8 { --hue: #a855f7; --hue-ink: #ffffff; }
+
 @layer base {
-  /* The CDN build applied this via an inline <style>. Tailwind's preflight
-     resets borders to `currentColor`, so the app's `border` utility needs an
-     explicit default colour or every bordered element goes black. */
+  /* Tailwind's preflight resets borders to `currentColor`, so the app's
+     `border` utility needs an explicit default colour or every bordered
+     element goes black. */
   * {
     border-color: theme('colors.border');
   }
 
+  html {
+    background-color: theme('colors.court.DEFAULT');
+  }
+
   body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
-      'Helvetica Neue', Arial, sans-serif;
+    font-family: theme('fontFamily.sans');
+    background-color: theme('colors.court.DEFAULT');
+    color: theme('colors.bone.DEFAULT');
+    -webkit-font-smoothing: antialiased;
   }
 
   /* iOS zooms the viewport when a focused input's font-size is under 16px. */
@@ -31,13 +161,113 @@
 }
 
 @layer components {
-  /* The single form-control style. Replaces the INPUT_CSS / TEXTAREA_CSS
-     strings that forms.py used to paste onto ~30 widgets, and the same
-     string re-inlined by hand in the templates. */
+  /* --- Identity hue, drawn ------------------------------------------------ */
+
+  /* The identity edge on a confirmation, rivalry, fixture or standings row:
+     you read *who* before you read *what*. Stretches to the row's height; the
+     call site sets the width (4px in a list, 6px on the leaderboard). */
+  .hue-bar {
+    background: var(--hue, theme('colors.court.line'));
+    flex: none;
+    align-self: stretch;
+  }
+
+  /* A whole surface wearing a player's colour -- a scoreboard half, an
+     avatar. Sets the matching ink so text on it is never guessed at. */
+  .hue-fill {
+    background: var(--hue, theme('colors.court.line'));
+    color: var(--hue-ink, theme('colors.bone.DEFAULT'));
+  }
+
+  .hue-text {
+    color: var(--hue, theme('colors.bone.DEFAULT'));
+  }
+
+  /* --- Type specimens ----------------------------------------------------- */
+
+  /* Tabular, heavy, tight. Every number that is a *score* or a *rating* wears
+     this, so digits never reflow as they tick over during a rally. */
+  .n {
+    font-variant-numeric: tabular-nums;
+    font-weight: 800;
+    letter-spacing: -0.045em;
+  }
+
+  /* Section label: 11px/800/+0.14em uppercase, muted. Always sits directly
+     above a .rule -- the pair is the app's only section heading. */
+  .label-cap {
+    @apply text-label uppercase text-muted-foreground;
+  }
+
+  /* Live is the one thing that gets amber, and it gets it everywhere. */
+  .label-live {
+    @apply text-label uppercase text-ball;
+  }
+
+  /* The 2px organising rule. Modernist discipline: the layout is held by hard
+     lines, not by boxes and shadows. */
+  .rule {
+    @apply block h-0.5 w-full bg-court-line;
+  }
+
+  /* --- Surfaces ----------------------------------------------------------- */
+
+  /* Elevation without shadow, because in a dark theme there is nothing for a
+     shadow to fall on. Raised = a 1px outline plus a hard 2px bottom rule. */
+  .surface {
+    @apply border border-court-line bg-court-raised;
+  }
+
+  .surface-raised {
+    @apply border border-court-line bg-court-raised shadow-raised;
+  }
+
+  /* The layer above: solid, never translucent, marked by a 2px red top edge
+     rather than by a blur. */
+  .surface-overlay {
+    @apply border border-court-edge bg-court-overlay shadow-overlay;
+  }
+
+  /* --- Buttons ------------------------------------------------------------
+     Zero radius, flush-left labels even when the button is full width. A
+     centred label in a 340px-wide button reads as a banner, not a control. */
+  .btn {
+    @apply inline-flex min-h-[44px] items-center gap-2 px-4 text-[15px] font-extrabold
+      transition-[filter,background-color] duration-100;
+  }
+
+  .btn:active {
+    filter: brightness(1.12);
+  }
+
+  /* Red is the action you can take. If it is red, tapping it starts or
+     changes something. */
+  .btn-paddle {
+    @apply btn bg-paddle text-paddle-foreground;
+  }
+
+  /* Green is agreement, not an action of yours -- confirming a match is
+     assenting to what someone else already said happened. */
+  .btn-confirm {
+    @apply btn bg-confirmed text-confirmed-foreground;
+  }
+
+  .btn-ghost {
+    @apply btn border border-court-edge text-bone-dim;
+  }
+
+  .btn-quiet {
+    @apply btn text-muted-foreground;
+  }
+
+  /* --- Form controls ------------------------------------------------------
+     The single form-control style. Replaces the INPUT_CSS / TEXTAREA_CSS
+     strings that forms.py used to paste onto ~30 widgets. */
   .field-input {
-    @apply flex h-12 w-full rounded-md border border-input bg-white px-3 py-2
-      text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring
-      focus:ring-offset-2;
+    @apply flex h-12 w-full border border-input bg-court-raised px-3 py-2 text-base
+      text-foreground placeholder:text-muted-foreground focus:outline-none
+      focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-court
+      md:text-sm;
   }
 
   textarea.field-input {
@@ -50,8 +280,56 @@
     @apply border-destructive;
   }
 
-  /* Tables that collapse into stacked cards on small screens. Each <td>
-     carries a data-label attribute that becomes its heading. */
+  /* --- Live indicator -----------------------------------------------------
+     The one animation in the app. It reduces to a static full-amber dot
+     rather than vanishing: the dot is the only thing saying "live", so
+     removing it would remove the meaning along with the motion. Reduced
+     motion clamps animations to one 1ms iteration, which parks this on its
+     final frame -- hence 100% is full opacity, not the dim end. */
+  /* The only round thing in the app. `rounded-full` is 0px like every other
+     radius token, so the circle is declared here -- one place, deliberate,
+     impossible to reach by accident from a utility class. */
+  .dot {
+    border-radius: 9999px;
+  }
+
+  .live-dot {
+    @apply dot block h-2 w-2 flex-none bg-ball;
+    animation: ballpulse 1.6s ease-in-out infinite;
+  }
+
+  @keyframes ballpulse {
+    0%,
+    100% {
+      opacity: 1;
+    }
+
+    50% {
+      opacity: 0.3;
+    }
+  }
+
+  /* --- Overlays -----------------------------------------------------------
+     The drawer, the confirm sheet and the dispute modal share one contract:
+     server-rendered HTML with no JS present renders the CLOSED state, and the
+     open state is one added class. Nothing here evaluates an expression, so
+     production's CSP (no 'unsafe-eval') cannot break it.
+
+     This is the fail-closed rule. An overlay that fails *open* covers the
+     viewport with its own dismiss control inside it, and the user is stuck. */
+  .overlay {
+    display: none;
+  }
+
+  .overlay.is-open {
+    display: block;
+  }
+
+  .overlay-scrim {
+    background: rgb(var(--scrim) / var(--scrim-opacity));
+  }
+
+  /* --- Tables that collapse into stacked cards on small screens ----------- */
   @media (max-width: 768px) {
     .mobile-stack-table {
       display: block;
@@ -69,9 +347,8 @@
       display: block;
       margin-bottom: 1rem;
       border: 1px solid theme('colors.border');
-      border-radius: theme('borderRadius.lg');
       padding: 1rem;
-      background: white;
+      background: theme('colors.card.DEFAULT');
     }
 
     .mobile-stack-table td {
@@ -87,28 +364,6 @@
       margin-right: 1rem;
       color: theme('colors.muted.foreground');
     }
-  }
-
-  /* --- Translucent chrome -------------------------------------------------
-     Nav surfaces are a floating layer with content passing underneath, not an
-     opaque strip that owns its slice of the viewport. */
-  .chrome-blur {
-    background: rgb(255 255 255 / 0.72);
-    backdrop-filter: blur(20px) saturate(180%);
-    -webkit-backdrop-filter: blur(20px) saturate(180%);
-  }
-
-  /* Where floating chrome overlaps scrolling content, fade the boundary
-     instead of ruling a 1px line across it. Lives on the fixed element, so
-     the pseudo-element hangs just below its own bottom edge. */
-  .chrome-edge-bottom::after {
-    content: '';
-    position: absolute;
-    inset-inline: 0;
-    top: 100%;
-    height: 1.25rem;
-    background: linear-gradient(to bottom, rgb(15 23 42 / 0.07), transparent);
-    pointer-events: none;
   }
 
   /* --- Live scoreboard tap zones ------------------------------------------
@@ -160,10 +415,10 @@
 
 /* Reduced motion is not "no feedback" -- colour and opacity changes carry
    meaning and stay. What goes is anything that travels through space, plus
-   the indefinite loops (animate-pulse, spinners), which settle on their
-   final frame instead of oscillating. Narrowing transition-property rather
-   than zeroing the duration means elements that never declared a transition
-   do not suddenly acquire one. */
+   the indefinite loops, which settle on their final frame instead of
+   oscillating. Narrowing transition-property rather than zeroing the duration
+   means elements that never declared a transition do not suddenly acquire
+   one. */
 @media (prefers-reduced-motion: reduce) {
 
   *,
@@ -180,16 +435,13 @@
   }
 }
 
-/* Frosted surfaces go solid rather than merely less blurry -- a half-measure
-   is the worst case for legibility. */
+/* Nothing is ever conveyed by translucency alone, so the fallback is fully
+   solid rather than merely less transparent -- a half-measure is the worst
+   case for legibility. The drawer scrim in particular: at 72% you can read
+   the page behind it, at 90% you cannot, and "somewhere in between" is the
+   only genuinely unreadable option. */
 @media (prefers-reduced-transparency: reduce) {
-  .chrome-blur {
-    background: white;
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-  }
-
-  .chrome-edge-bottom::after {
-    display: none;
+  :root {
+    --scrim-opacity: 1;
   }
 }

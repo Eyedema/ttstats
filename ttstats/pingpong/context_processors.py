@@ -1,33 +1,97 @@
 # pingpong/context_processors.py
 from django.core.cache import cache
-from django.db import models
 
-from .models import Match
+from .models import Championship, Match, Player
+
+# --- The navigation spine ---------------------------------------------------
+# Nine identical sidebar links became four daily destinations in a bottom tab
+# bar -- Today, Play, Table, Cups -- with everything occasional in the drawer.
+# Play is a button, not a page of links to browse: it is the only thing in the
+# app that *starts* something.
+#
+# The mapping is by url_name rather than by path prefix so that a URL moving
+# does not silently unhighlight its tab. A destination that is not a tab (the
+# drawer's Calendar, Head to head, Everyone, All matches) deliberately
+# highlights nothing -- claiming a tab the user did not tap is worse than
+# showing no selection at all.
+TAB_FOR_URL_NAME = {
+    'dashboard': 'today',
+
+    'play': 'play',
+    'match_add': 'play',
+    'match_edit': 'play',
+    'match_schedule': 'play',
+    'game_add': 'play',
+    'live_scoreboard': 'play',
+    'scheduled_match_convert': 'play',
+    'scheduled_match_edit': 'play',
+
+    'leaderboard': 'table',
+
+    'championship_list': 'cups',
+    'championship_detail': 'cups',
+    'championship_create': 'cups',
+    'championship_edit': 'cups',
+}
 
 
 def pingpong_context(request):
+    """Badge counts and the active tab, for every authenticated page render."""
+    empty = {
+        'pending_matches_count': 0,
+        'live_matches_count': 0,
+        'nav_tab': None,
+        'nav_player': None,
+        'nav_player_rank': None,
+        'live_championships_count': 0,
+    }
+
+    resolver = getattr(request, 'resolver_match', None)
+    nav_tab = TAB_FOR_URL_NAME.get(resolver.url_name) if resolver else None
+
     if not request.user.is_authenticated:
-        return {'pending_matches_count': 0}
+        return {**empty, 'nav_tab': nav_tab}
 
     player = getattr(request.user, 'player', None)
     if not player:
-        return {'pending_matches_count': 0}
+        return {**empty, 'nav_tab': nav_tab}
 
-    # Try cache first (5 minute TTL)
     cache_key = f'pending_matches_{player.pk}'
-    cached_count = cache.get(cache_key)
+    pending_matches_count = cache.get(cache_key)
+    if pending_matches_count is None:
+        # Denormalized is_confirmed, so this filters in the DB rather than in
+        # Python over every match the user can see.
+        pending_matches_count = Match.objects.filter(
+            participants__player=player,
+            is_confirmed=False,
+            winner_side__isnull=False,
+        ).distinct().count()
+        cache.set(cache_key, pending_matches_count, 300)
 
-    if cached_count is not None:
-        return {'pending_matches_count': cached_count}
-
-    # Cache miss - use denormalized is_confirmed field for DB-level filtering
-    pending_matches_count = Match.objects.filter(
-        participants__player=player,
-        is_confirmed=False,
-        winner_side__isnull=False,
+    # Not cached: amber means live *right now*, and a five-minute-stale amber
+    # dot is worse than none. It is one indexed boolean lookup.
+    live_matches_count = Match.live_objects.filter(
+        participants__player=player, is_live=True
     ).distinct().count()
 
-    # Cache for 5 minutes
-    cache.set(cache_key, pending_matches_count, 300)
+    live_championships_count = cache.get('live_championships_count')
+    if live_championships_count is None:
+        live_championships_count = Championship.all_objects.filter(
+            status=Championship.Status.IN_PROGRESS
+        ).count()
+        cache.set('live_championships_count', live_championships_count, 300)
 
-    return {'pending_matches_count': pending_matches_count}
+    rank_key = f'player_rank_{player.pk}'
+    rank = cache.get(rank_key)
+    if rank is None:
+        rank = Player.objects.filter(elo_rating__gt=player.elo_rating).count() + 1
+        cache.set(rank_key, rank, 300)
+
+    return {
+        'pending_matches_count': pending_matches_count,
+        'live_matches_count': live_matches_count,
+        'nav_tab': nav_tab,
+        'nav_player': player,
+        'nav_player_rank': rank,
+        'live_championships_count': live_championships_count,
+    }

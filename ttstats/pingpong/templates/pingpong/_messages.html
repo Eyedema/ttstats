@@ -1,21 +1,44 @@
-{% load static %}
+{% load icon_tags %}
+{% comment %}
+Flash messages.
+
+`data-flash` is the hook base.html's five-second sweep keys on -- NOT
+`role="alert"`. A long-lived alert raised by a screen (the scoreboard's error
+toast) is not a flash message and must not be ripped out of the DOM five
+seconds after load, which is what the old selector did. Any new flash partial
+must carry the attribute.
+
+A 4px left bar in the semantic colour, matching the identity bars everywhere
+else: the app's one way of saying "this row is about X" is a coloured edge.
+{% endcomment %}
 {% if messages %}
-    <div class="mb-4 space-y-2">
-        {% for message in messages %}
-        <div
-        class="rounded-lg border px-4 py-3 {% if message.tags == 'success' %}bg-success/10 border-success text-black{% elif message.tags == 'error' %}bg-destructive/10 border-destructive text-black{% elif message.tags == 'warning' %}bg-warning/10 border-warning text-black{% else %}bg-secondary border-border{% endif %}"
-        role="alert" data-flash>
-            <div class="flex items-center gap-2">
-                {% if message.tags == 'success' %}
-                    <img src="{% static 'pingpong/icons/award.svg' %}" class="w-5 h-5" alt="">
-                {% elif message.tags == 'error' %}
-                    <img src="{% static 'pingpong/icons/circle-alert.svg' %}" class="w-5 h-5" alt="">
-                {% else %}
-                    <img src="{% static 'pingpong/icons/info.svg' %}" class="w-5 h-5" alt="">
-                {% endif %}
-                <span class="font-medium">{{ message }}</span>
-            </div>
-        </div>
-        {% endfor %}
-    </div>
+<div class="mb-4 space-y-2">
+  {% for message in messages %}
+  <div role="alert" data-flash
+       class="flex items-stretch border
+              {% if message.tags == 'success' %}border-confirmed/40 bg-confirmed/10
+              {% elif message.tags == 'error' %}border-paddle/40 bg-paddle/10
+              {% elif message.tags == 'warning' %}border-ball/40 bg-ball/10
+              {% else %}border-court-line bg-court-raised{% endif %}">
+    <span aria-hidden="true"
+          class="w-1 flex-none
+                 {% if message.tags == 'success' %}bg-confirmed
+                 {% elif message.tags == 'error' %}bg-paddle
+                 {% elif message.tags == 'warning' %}bg-ball
+                 {% else %}bg-court-edge{% endif %}"></span>
+    <span class="flex flex-1 items-center gap-2 px-3 py-2.5">
+      {% if message.tags == 'success' %}
+        {% icon "check" size="sm" css="flex-none text-confirmed" %}
+      {% elif message.tags == 'error' %}
+        {% icon "circle-alert" size="sm" css="flex-none text-paddle" %}
+      {% elif message.tags == 'warning' %}
+        {% icon "triangle-alert" size="sm" css="flex-none text-ball" %}
+      {% else %}
+        {% icon "info" size="sm" css="flex-none text-muted-foreground" %}
+      {% endif %}
+      <span class="text-[13.5px] font-semibold">{{ message }}</span>
+    </span>
+  </div>
+  {% endfor %}
+</div>
 {% endif %}

@@ -1,0 +1,30 @@
+{% load icon_tags nav_tags %}
+{% comment %}
+One row of the tiered navigation menu. Included by _nav_menu.html.
+
+Context:
+  url         -- destination (already reversed by the caller)
+  icon_name   -- sprite name
+  label       -- visible text
+  match_tab   -- highlight when the page's nav_tab equals this
+  match_urls  -- space-separated url_names that also highlight this row
+  badge       -- optional count, flush right
+  badge_tone  -- 'ball' for live, anything else for the paddle red default
+
+Active is a fill PLUS a 4px red left edge PLUS an 800 weight: three signals, so
+the row survives greyscale, colour blindness and a stylesheet that never
+arrived. Inactive rows are indented by exactly the edge's width, so the labels
+line up whichever state a row is in.
+{% endcomment %}
+
+{% nav_active match_tab match_urls as is_active %}
+
+<a href="{{ url }}"
+   {% if is_active %}aria-current="page"{% endif %}
+   class="flex min-h-[44px] items-center gap-3 py-2 pr-4 {% if is_active %}border-l-4 border-paddle bg-court-line pl-3 font-extrabold text-bone{% else %}pl-5 font-semibold text-bone-dim hover:bg-court-line{% endif %} text-[15px]">
+  {% icon icon_name css=is_active|yesno:"text-bone,text-muted-foreground" size="sm" %}
+  <span>{{ label }}</span>
+  {% if badge %}
+    <span class="n ml-auto text-[11px] {% if badge_tone == 'ball' %}text-ball{% else %}text-paddle{% endif %}">{{ badge }}</span>
+  {% endif %}
+</a>

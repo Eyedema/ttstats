@@ -1,7 +1,9 @@
 {% extends "pingpong/base.html" %}
 {% load static %}
+{% load icon_tags %}
 
 {% block title %}Edit Scheduled Match - Table Tennis Tracker{% endblock %}
+{% block nav_title %}Edit fixture{% endblock %}
 
 {% block content %}
 <div class="max-w-3xl mx-auto space-y-6">
@@ -9,23 +11,23 @@
     <div>
         {% if scheduled_match.championship %}
         <a href="{% url 'pingpong:championship_detail' scheduled_match.championship.pk %}" class="inline-flex items-center gap-2 text-sm font-medium hover:underline">
-            <img src="{% static 'pingpong/icons/arrow-left.svg' %}" class="w-4 h-4" alt="">
+            {% icon "arrow-left" css="w-4 h-4" %}
             Back to {{ scheduled_match.championship.name }}
         </a>
         {% else %}
         <a href="{% url 'pingpong:scheduled_match_detail' scheduled_match.pk %}" class="inline-flex items-center gap-2 text-sm font-medium hover:underline">
-            <img src="{% static 'pingpong/icons/arrow-left.svg' %}" class="w-4 h-4" alt="">
+            {% icon "arrow-left" css="w-4 h-4" %}
             Back to Scheduled Match
         </a>
         {% endif %}
     </div>
 
     <!-- Form Card -->
-    <div class="rounded-lg border bg-white">
+    <div class="rounded-lg border bg-card">
         <div class="p-4 md:p-6">
             <div class="flex items-center gap-4 mb-6 pb-6 border-b">
                 <div class="w-12 h-12 rounded-full bg-primary text-primary-foreground flex items-center justify-center">
-                    <img src="{% static 'pingpong/icons/calendar.svg' %}" class="w-5 h-5 invert" alt="">
+                    {% icon "calendar" css="w-5 h-5" %}
                 </div>
                 <div>
                     <h2 class="text-xl md:text-2xl font-bold">Edit Scheduled Match</h2>
@@ -80,18 +82,18 @@
                 <div class="flex justify-end gap-3 pt-4 border-t">
                     {% if scheduled_match.championship %}
                     <a href="{% url 'pingpong:championship_detail' scheduled_match.championship.pk %}"
-                       class="inline-flex items-center justify-center gap-2 rounded-md border bg-white px-4 py-2.5 text-sm font-medium hover:bg-secondary transition-colors min-h-[44px]">
+                       class="inline-flex items-center justify-center gap-2 rounded-md border bg-card px-4 py-2.5 text-sm font-medium hover:bg-secondary transition-colors min-h-[44px]">
                         Cancel
                     </a>
                     {% else %}
                     <a href="{% url 'pingpong:scheduled_match_detail' scheduled_match.pk %}"
-                       class="inline-flex items-center justify-center gap-2 rounded-md border bg-white px-4 py-2.5 text-sm font-medium hover:bg-secondary transition-colors min-h-[44px]">
+                       class="inline-flex items-center justify-center gap-2 rounded-md border bg-card px-4 py-2.5 text-sm font-medium hover:bg-secondary transition-colors min-h-[44px]">
                         Cancel
                     </a>
                     {% endif %}
                     <button type="submit"
                             class="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors min-h-[44px]">
-                        <img src="{% static 'pingpong/icons/check.svg' %}" class="w-4 h-4 invert" alt="">
+                        {% icon "check" css="w-4 h-4" %}
                         Save Changes
                     </button>
                 </div>

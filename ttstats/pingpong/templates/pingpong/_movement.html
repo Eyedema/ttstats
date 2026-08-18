@@ -1,0 +1,18 @@
+{% comment %}
+Elo movement over the last week, as an arrow PLUS a signed number.
+
+Colour is never the only signal here. A green ▲ 41 and a red ▼ 22 look
+identical in greyscale, on a projector, in a screenshot someone has run through
+a filter, and to a deuteranope -- the glyph and the sign are what actually
+carry it. That is also why zero gets an em dash rather than simply going grey:
+"no change" is a state, not an absence.
+
+Context: `movement` (signed int), `size_class` (a Tailwind text size).
+{% endcomment %}
+{% if movement > 0 %}
+  <span class="n block font-semibold {{ size_class }} text-confirmed">&#9650; {{ movement }}</span>
+{% elif movement < 0 %}
+  <span class="n block font-semibold {{ size_class }} text-paddle">&#9660; {{ movement|stringformat:"d"|cut:"-" }}</span>
+{% else %}
+  <span class="n block font-semibold {{ size_class }} text-muted-foreground">&mdash; 0</span>
+{% endif %}

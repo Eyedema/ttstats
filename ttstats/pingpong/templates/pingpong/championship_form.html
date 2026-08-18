@@ -1,7 +1,9 @@
 {% extends "pingpong/base.html" %}
 {% load static %}
+{% load icon_tags %}
 
 {% block title %}{% if object %}Edit Championship{% else %}Create Championship{% endif %} - Table Tennis Tracker{% endblock %}
+{% block nav_title %}New cup{% endblock %}
 
 {% block content %}
 <div class="max-w-3xl mx-auto space-y-6">
@@ -9,21 +11,21 @@
     <div>
         <a href="{% if object %}{% url 'pingpong:championship_detail' object.pk %}{% else %}{% url 'pingpong:championship_list' %}{% endif %}"
            class="inline-flex items-center gap-2 text-sm font-medium hover:underline min-h-[44px]">
-            <img src="{% static 'pingpong/icons/arrow-left.svg' %}" class="w-4 h-4" alt="">
+            {% icon "arrow-left" css="w-4 h-4" %}
             Back to {% if object %}Championship{% else %}Championships{% endif %}
         </a>
     </div>
 
     <!-- Form Card -->
-    <div class="rounded-lg border bg-white">
+    <div class="rounded-lg border bg-card">
         <div class="p-4 md:p-6">
             <!-- Header -->
             <div class="flex items-center gap-4 mb-6 pb-6 border-b">
                 <div class="w-12 h-12 md:w-14 md:h-14 rounded-full bg-primary text-primary-foreground flex items-center justify-center flex-shrink-0">
                     {% if object %}
-                    <img src="{% static 'pingpong/icons/pencil.svg' %}" class="w-5 h-5 md:w-6 md:h-6 invert" alt="">
+                    {% icon "pencil" css="w-5 h-5 md:w-6 md:h-6" %}
                     {% else %}
-                    <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-5 h-5 md:w-6 md:h-6 invert" alt="">
+                    {% icon "trophy" css="w-5 h-5 md:w-6 md:h-6" %}
                     {% endif %}
                 </div>
                 <div>
@@ -40,7 +42,7 @@
             {% if form.non_field_errors %}
             <div class="rounded-lg border border-destructive bg-destructive/10 p-4 mb-6">
                 <div class="flex items-start gap-3">
-                    <img src="{% static 'pingpong/icons/circle-alert.svg' %}" class="w-5 h-5 text-destructive flex-shrink-0" alt="">
+                    {% icon "circle-alert" css="w-5 h-5 text-destructive flex-shrink-0" %}
                     <span class="font-medium text-sm text-destructive">{{ form.non_field_errors }}</span>
                 </div>
             </div>
@@ -215,12 +217,12 @@
                 <div class="border-t pt-6"></div>
                 <div class="flex flex-col sm:flex-row gap-3 justify-end">
                     <a href="{% if object %}{% url 'pingpong:championship_detail' object.pk %}{% else %}{% url 'pingpong:championship_list' %}{% endif %}"
-                       class="inline-flex items-center justify-center gap-2 rounded-md border bg-white px-4 py-2 text-sm font-medium hover:bg-secondary transition-colors min-h-[44px]">
-                        <img src="{% static 'pingpong/icons/x.svg' %}" class="w-4 h-4" alt="">
+                       class="inline-flex items-center justify-center gap-2 rounded-md border bg-card px-4 py-2 text-sm font-medium hover:bg-secondary transition-colors min-h-[44px]">
+                        {% icon "x" css="w-4 h-4" %}
                         Cancel
                     </a>
                     <button type="submit" class="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors min-h-[44px]">
-                        <img src="{% static 'pingpong/icons/check.svg' %}" class="w-4 h-4 invert" alt="">
+                        {% icon "check" css="w-4 h-4" %}
                         {% if object %}Update Championship{% else %}Create Championship{% endif %}
                     </button>
                 </div>
@@ -231,7 +233,7 @@
     <!-- Help Card -->
     <div class="rounded-lg border border-primary/20 bg-primary/5 p-4">
         <div class="flex gap-3">
-            <img src="{% static 'pingpong/icons/info.svg' %}" class="w-5 h-5 text-primary flex-shrink-0" alt="">
+            {% icon "info" css="w-5 h-5 text-primary flex-shrink-0" %}
             <div>
                 <h3 class="font-semibold text-sm mb-1">Championship Tips</h3>
                 <ul class="text-sm text-muted-foreground space-y-1 list-disc list-inside">

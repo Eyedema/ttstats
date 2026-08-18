@@ -1,26 +1,45 @@
-{% load static %}
+{% load static humanize icon_tags %}
 <!DOCTYPE html>
 <html lang="en">
 
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>{% block title %}Table Tennis Tracker{% endblock %}</title>
 
-    <!-- Inline, not in app.css: this rule is what keeps Alpine-managed overlays
-         off the screen until Alpine boots, so it must not depend on the
-         stylesheet having been built, purged correctly, or fetched at all. A
-         drawer that fails open is unclosable, because its close button is also
-         Alpine. This shipped once already. -->
+    <!-- Dark is the base palette, light is the override, and the viewer's
+         system setting drives it. Declaring both here means form controls and
+         scrollbars follow the page instead of staying light on navy. -->
+    <meta name="color-scheme" content="dark light">
+    <meta name="theme-color" content="#0b1220" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#f4f1ea" media="(prefers-color-scheme: light)">
+
+    <!-- Inline, not in app.css. These are the rules that keep overlays OFF the
+         screen, so they must not depend on the stylesheet having been built,
+         purged correctly, or fetched at all. An overlay that fails open covers
+         the viewport with its own dismiss control inside it, and the user is
+         stuck. This shipped once already.
+
+         The court background is here too: without it a failed stylesheet gives
+         white-on-white text rather than merely unstyled text. -->
     <style>
+      html,body{background:#0b1220;color:#f4f1ea}
+      @media (prefers-color-scheme: light){html,body{background:#f4f1ea;color:#0f172a}}
       [x-cloak]{display:none !important}
-      /* The drawer's closed state must not depend on app.css arriving. It is
-         the only element on the page that is unrecoverable when it renders by
-         mistake -- it covers the viewport and its dismiss control is inside
-         it -- so its one critical rule is inlined rather than trusted to a
-         build step, a purge pass and a network fetch. */
-      #mobile-menu-scrim.hidden{display:none !important}
+      /* The one contract every overlay in the app shares: closed is the
+         static, JS-free render, and open is one added class. */
+      .overlay{display:none}
+      .overlay.is-open{display:block}
     </style>
+
+    <!-- Archivo is self-hosted (OFL) and the whole design is set in it, so the
+         two structural weights are worth a preload; 600 is metadata and can
+         arrive with the stylesheet. crossorigin is required on font preloads
+         even same-origin, or the browser fetches the file twice. -->
+    <link rel="preload" as="font" type="font/woff2" crossorigin
+          href="{% static 'pingpong/fonts/archivo-800.woff2' %}">
+    <link rel="preload" as="font" type="font/woff2" crossorigin
+          href="{% static 'pingpong/fonts/archivo-400.woff2' %}">
 
     <link rel="stylesheet" href="{% static 'pingpong/css/app.css' %}">
 
@@ -49,299 +68,137 @@
     {% block extra_css %}{% endblock %}
 </head>
 
-<body class="bg-background text-foreground"
+<body class="min-h-screen bg-court text-bone"
       hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
 
-    <div class="flex min-h-screen">
-        <!-- Sidebar -->
-        <aside
-            class="hidden lg:flex lg:flex-col lg:w-64 lg:fixed lg:inset-y-0 lg:left-0 border-r chrome-blur lg:overflow-y-auto">
-            <!-- Logo/Title -->
-            <div class="p-6 border-b">
-                <h1 class="text-2xl font-bold flex items-center gap-2">
-                    <span class="text-3xl">🏓</span>
-                    <span>Table Tennis</span>
-                </h1>
-                <p class="text-sm text-muted-foreground mt-1">Track your matches</p>
-            </div>
+    {# The Lucide sprite. Once per page, before anything that <use>s it. #}
+    {% include 'pingpong/_icons.html' %}
 
-            <!-- User info -->
-            <div class="p-4 border-b">
-                <a href="{% url 'pingpong:player_detail' user.player.pk %}"
-                    class="flex items-center gap-3 p-3 bg-secondary rounded-lg hover:bg-secondary/80 transition-colors cursor-pointer">
-                    <div
-                        class="w-10 h-10 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-semibold">
-                        {{ user.username|slice:":1"|upper }}
-                    </div>
-                    <div class="flex-1 min-w-0">
-                        <p class="font-semibold truncate text-sm">{{ user.username }}</p>
-                        <p class="text-xs text-muted-foreground truncate">{{ user.email }}</p>
-                    </div>
-                    <img src="{% static 'pingpong/icons/chevron-right.svg' %}" class="w-4 h-4 text-muted-foreground"
-                        alt="">
+    {# ------------------------------------------------------------------ #}
+    {# Desktop sidebar (lg+). Same menu file as the drawer, so the two     #}
+    {# cannot drift.                                                       #}
+    {# ------------------------------------------------------------------ #}
+    <aside class="hidden lg:fixed lg:inset-y-0 lg:left-0 lg:flex lg:w-64 lg:flex-col lg:overflow-y-auto
+                  border-r-2 border-court-line bg-court-raised">
+        <a href="{% url 'pingpong:dashboard' %}" class="block border-b-2 border-court-line px-4 py-5">
+            <p class="text-[10px] font-extrabold uppercase tracking-[0.14em] text-paddle">Table tennis</p>
+            <h1 class="text-title">TTStats</h1>
+        </a>
+
+        {% if nav_player %}
+        <a href="{% url 'pingpong:player_detail' nav_player.pk %}"
+           class="flex items-center gap-3 border-b-2 border-court-line px-4 py-3 hover:bg-court-line">
+            <span class="hue-fill {{ nav_player.hue_class }} flex h-11 w-11 flex-none items-center justify-center text-[19px] font-extrabold">
+                {{ nav_player.name|slice:":1"|upper }}
+            </span>
+            <span class="min-w-0 flex-1">
+                <span class="block truncate text-[16px] font-extrabold leading-tight">{{ nav_player.name }}</span>
+                <span class="n block text-[12px] font-semibold text-muted-foreground">
+                    {{ nav_player.elo_rating }} Elo{% if nav_player_rank %} · {{ nav_player_rank|ordinal }}{% endif %}
+                </span>
+            </span>
+        </a>
+        {% endif %}
+
+        <div class="flex-1 overflow-y-auto">
+            {% include 'pingpong/_nav_menu.html' %}
+        </div>
+    </aside>
+
+    {# ------------------------------------------------------------------ #}
+    {# Mobile header. Solid, not translucent: nothing in this design is    #}
+    {# see-through without a solid fallback, and a nav bar is the last     #}
+    {# place to spend legibility on an effect.                             #}
+    {# ------------------------------------------------------------------ #}
+    <header class="fixed inset-x-0 top-0 z-30 border-b-2 border-court-line bg-court-raised pt-safe-top lg:hidden">
+        <div class="flex items-center gap-3 px-4 py-3">
+            <button id="mobile-menu-open" type="button" aria-label="Open menu"
+                    aria-expanded="false" aria-controls="mobile-menu-panel"
+                    class="-ml-2.5 flex h-11 w-11 flex-none items-center justify-center">
+                {% icon "menu" size="lg" %}
+            </button>
+            <span class="mr-auto text-heading">{% block nav_title %}TTStats{% endblock %}</span>
+            {% if live_matches_count %}
+            {% comment %}
+            Amber, and amber appears nowhere else in the app. If this dot is
+            lit, something is being scored right now.
+            {% endcomment %}
+            <span class="live-dot" role="status" aria-label="A match is live"></span>
+            {% endif %}
+        </div>
+    </header>
+
+    {# ------------------------------------------------------------------ #}
+    {# Main content. The top and bottom offsets are the header and tab bar #}
+    {# heights plus their safe areas -- pb-tabbar is a single token so the #}
+    {# padding and the bar can never disagree about how tall the bar is.   #}
+    {# ------------------------------------------------------------------ #}
+    <main class="lg:ml-64 pt-[calc(60px+env(safe-area-inset-top,0px))] pb-tabbar lg:pt-0 lg:pb-0">
+        {% block full_bleed %}
+        <div class="p-4 lg:p-6">
+            {% include 'pingpong/_messages.html' %}
+            {% block content %}{% endblock %}
+        </div>
+        {% endblock %}
+    </main>
+
+    {% include 'pingpong/_tab_bar.html' %}
+
+    {# ------------------------------------------------------------------ #}
+    {# Mobile drawer.                                                      #}
+    {#                                                                     #}
+    {# Deliberately NOT Alpine. Production sends a CSP whose script-src has #}
+    {# no 'unsafe-eval', and Alpine 3 compiles every expression with        #}
+    {# new Function() -- so on the live site x-data/x-show/@click all throw #}
+    {# while Alpine still strips x-cloak, leaving this drawer rendered open #}
+    {# with a dead close button. That is exactly what shipped once.        #}
+    {#                                                                     #}
+    {# `.overlay` (no `.is-open`) is the static, JS-free render, and its    #}
+    {# one critical rule is inlined in <head> above. Fail closed, never    #}
+    {# fail open.                                                          #}
+    {# ------------------------------------------------------------------ #}
+    <div id="mobile-menu-scrim" class="overlay fixed inset-0 z-40 lg:hidden">
+        <div class="overlay-scrim absolute inset-0"></div>
+
+        <div id="mobile-menu-panel" role="dialog" aria-modal="true" aria-label="Menu"
+             class="absolute inset-y-0 left-0 flex w-[312px] max-w-[85vw] flex-col overflow-y-auto
+                    border-r-2 border-paddle bg-court-overlay pt-safe-top pb-safe-bottom">
+            <div class="flex items-center gap-3 border-b-2 border-court-edge px-4 py-4">
+                {% if nav_player %}
+                <a href="{% url 'pingpong:player_detail' nav_player.pk %}" class="flex min-w-0 flex-1 items-center gap-3">
+                    <span class="hue-fill {{ nav_player.hue_class }} flex h-11 w-11 flex-none items-center justify-center text-[19px] font-extrabold">
+                        {{ nav_player.name|slice:":1"|upper }}
+                    </span>
+                    <span class="min-w-0">
+                        <span class="block truncate text-[16px] font-extrabold leading-tight">{{ nav_player.name }}</span>
+                        <span class="n block text-[12px] font-semibold text-muted-foreground">{{ nav_player.elo_rating }} Elo{% if nav_player_rank %} · {{ nav_player_rank|ordinal }}{% endif %}</span>
+                    </span>
                 </a>
-            </div>
-
-
-            <!-- Navigation Menu -->
-            <nav class="flex-1 p-4">
-                <ul class="space-y-1">
-                    <li>
-                        <a href="{% url 'pingpong:dashboard' %}"
-                            class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors {% if request.resolver_match.url_name == 'dashboard' %}bg-secondary text-secondary-foreground{% else %}text-muted-foreground hover:bg-secondary hover:text-secondary-foreground{% endif %}">
-                            <img src="{% static 'pingpong/icons/layout-dashboard.svg' %}" class="w-5 h-5" alt="">
-                            Dashboard
-                        </a>
-                    </li>
-                    <li>
-                        <a href="{% url 'pingpong:player_list' %}"
-                            class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors {% if request.resolver_match.url_name == 'player_list' or request.resolver_match.url_name == 'player_detail' %}bg-secondary text-secondary-foreground{% else %}text-muted-foreground hover:bg-secondary hover:text-secondary-foreground{% endif %}">
-                            <img src="{% static 'pingpong/icons/users.svg' %}" class="w-5 h-5" alt="">
-                            Players
-                        </a>
-                    </li>
-                    <li>
-                    </li>
-                    <li>
-                        <a href="{% url 'pingpong:match_list' %}"
-                            class="flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors {% if request.resolver_match.url_name == 'match_list' or request.resolver_match.url_name == 'match_detail' %}bg-secondary text-secondary-foreground{% else %}text-muted-foreground hover:bg-secondary hover:text-secondary-foreground{% endif %}">
-                            <span class="flex items-center gap-3">
-                                <img src="{% static 'pingpong/icons/clipboard-list.svg' %}" class="w-5 h-5" alt="">
-                                <span>Matches</span>
-                            </span>
-                            {% if pending_matches_count %}
-                            <span
-                                class="inline-flex items-center justify-center rounded-full bg-destructive/10 text-destructive min-w-[20px] h-5 px-1.5 text-xs font-semibold">
-                                {{ pending_matches_count }}
-                            </span>
-                            {% endif %}
-                        </a>
-                    </li>
-                    <li>
-                        <a href="{% url 'pingpong:championship_list' %}"
-                            class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors {% if request.resolver_match.url_name == 'championship_list' or request.resolver_match.url_name == 'championship_detail' or request.resolver_match.url_name == 'championship_create' or request.resolver_match.url_name == 'championship_edit' %}bg-secondary text-secondary-foreground{% else %}text-muted-foreground hover:bg-secondary hover:text-secondary-foreground{% endif %}">
-                            <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-5 h-5" alt="">
-                            Championships
-                        </a>
-                    </li>
-                    <li>
-                        <a href="{% url 'pingpong:calendar' %}"
-                            class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors {% if request.resolver_match.url_name == 'calendar' or request.resolver_match.url_name == 'match_schedule' %}bg-secondary text-secondary-foreground{% else %}text-muted-foreground hover:bg-secondary hover:text-secondary-foreground{% endif %}">
-                            <img src="{% static 'pingpong/icons/calendar.svg' %}" class="w-5 h-5" alt="">
-                            Calendar
-                        </a>
-                    </li>
-                    <li>
-                        <a href="{% url 'pingpong:leaderboard' %}"
-                            class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors {% if request.resolver_match.url_name == 'leaderboard' %}bg-secondary text-secondary-foreground{% else %}text-muted-foreground hover:bg-secondary hover:text-secondary-foreground{% endif %}">
-                            <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-5 h-5" alt="">
-                            Leaderboard
-                        </a>
-                    </li>
-                    <li>
-                        <a href="{% url 'pingpong:head_to_head' %}"
-                            class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors {% if request.resolver_match.url_name == 'head_to_head' %}bg-secondary text-secondary-foreground{% else %}text-muted-foreground hover:bg-secondary hover:text-secondary-foreground{% endif %}">
-                            <img src="{% static 'pingpong/icons/chart-spline.svg' %}" class="w-5 h-5" alt="">
-                            Head to Head
-                        </a>
-                    </li>
-
-                </ul>
-            </nav>
-
-            <!-- Bottom actions -->
-            <div class="p-4 border-t">
-                <ul class="space-y-1">
-                    {% if user.is_staff %}
-                    <li>
-                        <a href="{% url 'admin:index' %}"
-                            class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium text-muted-foreground hover:bg-secondary hover:text-secondary-foreground transition-colors">
-                            <img src="{% static 'pingpong/icons/settings.svg' %}" class="w-5 h-5" alt="">
-                            Admin
-                        </a>
-                    </li>
-                    {% endif %}
-                    <li>
-                        <a href="{% url 'pingpong:passkey_management' %}"
-                            class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors {% if request.resolver_match.url_name == 'passkey_management' %}bg-secondary text-secondary-foreground{% else %}text-muted-foreground hover:bg-secondary hover:text-secondary-foreground{% endif %}">
-                            <img src="{% static 'pingpong/icons/key.svg' %}" class="w-5 h-5" alt="">
-                            Passkeys
-                        </a>
-                    </li>
-                    <li>
-                        <form method="post" action="{% url 'logout' %}" class="w-full">
-                            {% csrf_token %}
-                            <button type="submit"
-                                class="w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium text-muted-foreground hover:bg-secondary hover:text-secondary-foreground transition-colors text-left">
-                                <img src="{% static 'pingpong/icons/log-out.svg' %}" class="w-5 h-5" alt="">
-                                Logout
-                            </button>
-                        </form>
-                    </li>
-
-                </ul>
-            </div>
-        </aside>
-
-        <!-- Mobile header. Translucent, with content passing underneath as it
-             scrolls; the boundary is a soft edge rather than a hard rule. -->
-        <div class="lg:hidden fixed top-0 left-0 right-0 chrome-blur chrome-edge-bottom z-10">
-            <div class="flex items-center p-4">
-                <button id="mobile-menu-open" type="button" aria-label="Open menu"
-                        aria-expanded="false" aria-controls="mobile-menu-panel"
-                        class="p-2 hover:bg-secondary active:bg-secondary/80 rounded-md transition-colors">
-                    <img src="{% static 'pingpong/icons/menu.svg' %}" class="w-6 h-6" alt="Menu">
+                {% else %}
+                <span class="mr-auto text-[16px] font-extrabold">{{ user.username }}</span>
+                {% endif %}
+                <button id="mobile-menu-close" type="button" aria-label="Close menu"
+                        class="-mr-2.5 flex h-11 w-11 flex-none items-center justify-center text-muted-foreground">
+                    {% icon "x" size="md" %}
                 </button>
-                <a href="{% url 'pingpong:dashboard' %}">
-                    <h1 class="text-xl font-bold flex items-center gap-2">
-                        <span class="text-2xl">🏓</span>
-                        <span>Table Tennis</span>
-                    </h1>
-                </a>
+            </div>
+
+            <div class="flex-1">
+                {% include 'pingpong/_nav_menu.html' %}
             </div>
         </div>
-
-        <!-- Mobile menu overlay.
-             Deliberately NOT Alpine. Production sends a CSP whose script-src
-             has no 'unsafe-eval', and Alpine 3 compiles every expression with
-             new Function() -- so on the live site x-data/x-show/@click all
-             throw while Alpine still strips x-cloak, leaving this drawer
-             rendered open with a dead close button. That is exactly what
-             shipped. Plain listeners need no eval.
-
-             `hidden` is a static class, so with no JS at all the drawer is
-             closed. Fail closed, never fail open.
-
-             The panel still enters from the left and leaves the same way; the
-             classes are toggled rather than evaluated. -->
-        <div id="mobile-menu-scrim"
-             class="lg:hidden fixed inset-0 bg-black/50 z-20 hidden opacity-0 transition-opacity duration-200">
-            <div id="mobile-menu-panel"
-                 class="fixed inset-y-0 left-0 w-64 bg-white border-r overflow-y-auto -translate-x-full opacity-0 transition duration-300 ease-out">
-                <div class="p-4 border-b flex justify-between items-center">
-                    <h2 class="font-semibold">Menu</h2>
-                    <button id="mobile-menu-close" type="button" aria-label="Close menu"
-                            class="p-2 hover:bg-secondary active:bg-secondary/80 rounded-md transition-colors">
-                        <img src="{% static 'pingpong/icons/x.svg' %}" class="w-5 h-5" alt="Close">
-                    </button>
-                </div>
-
-                <div class="p-4 border-b">
-                <a href="{% url 'pingpong:player_detail' user.player.pk %}"
-                    class="flex items-center gap-3 p-3 bg-secondary rounded-lg hover:bg-secondary/80 transition-colors cursor-pointer">
-                    <div class="flex items-center gap-3 p-3 bg-secondary rounded-lg">
-                        <div
-                            class="w-10 h-10 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-semibold">
-                            {{ user.username|slice:":1"|upper }}
-                        </div>
-                        <div>
-                            <p class="font-semibold text-sm break-all">{{ user.username }}</p>
-                            <p class="text-xs text-muted-foreground break-all">{{ user.email }}</p>
-                        </div>
-                    </div>
-                </a>
-                </div>
-
-                <nav class="p-4">
-                    <ul class="space-y-1">
-                        <li>
-                            <a href="{% url 'pingpong:dashboard' %}"
-                                class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium hover:bg-secondary">
-                                <img src="{% static 'pingpong/icons/layout-dashboard.svg' %}" class="w-5 h-5" alt="">
-                                Dashboard
-                            </a>
-                        </li>
-                        <li>
-                            <a href="{% url 'pingpong:player_list' %}"
-                                class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium hover:bg-secondary">
-                                <img src="{% static 'pingpong/icons/users.svg' %}" class="w-5 h-5" alt="">
-                                Players
-                            </a>
-                        </li>
-                        <li>
-                        </li>
-                        <li>
-                            <a href="{% url 'pingpong:match_list' %}"
-                                class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium hover:bg-secondary">
-                                <img src="{% static 'pingpong/icons/clipboard-list.svg' %}" class="w-5 h-5" alt="">
-                                Matches
-                            </a>
-                        </li>
-                        <li>
-                            <a href="{% url 'pingpong:championship_list' %}"
-                                class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium hover:bg-secondary">
-                                <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-5 h-5" alt="">
-                                Championships
-                            </a>
-                        </li>
-                        <li>
-                            <a href="{% url 'pingpong:calendar' %}"
-                                class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium hover:bg-secondary">
-                                <img src="{% static 'pingpong/icons/calendar.svg' %}" class="w-5 h-5" alt="">
-                                Calendar
-                            </a>
-                        </li>
-                        <li>
-                            <a href="{% url 'pingpong:leaderboard' %}"
-                                class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors {% if request.resolver_match.url_name == 'leaderboard' %}bg-secondary text-secondary-foreground{% else %}text-muted-foreground hover:bg-secondary hover:text-secondary-foreground{% endif %}">
-                                <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-5 h-5" alt="">
-                                Leaderboard
-                            </a>
-                        </li>
-                        <li>
-                            <a href="{% url 'pingpong:head_to_head' %}"
-                                class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors {% if request.resolver_match.url_name == 'head_to_head' %}bg-secondary text-secondary-foreground{% else %}text-muted-foreground hover:bg-secondary hover:text-secondary-foreground{% endif %}">
-                                <img src="{% static 'pingpong/icons/chart-spline.svg' %}" class="w-5 h-5" alt="">
-                                Head to Head
-                            </a>
-                        </li>
-                        {% if user.is_staff %}
-                        <li>
-                            <a href="{% url 'admin:index' %}"
-                                class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium hover:bg-secondary">
-                                <img src="{% static 'pingpong/icons/settings.svg' %}" class="w-5 h-5" alt="">
-                                Admin
-                            </a>
-                        </li>
-                        {% endif %}
-                        <li>
-                            <a href="{% url 'pingpong:passkey_management' %}"
-                                class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors {% if request.resolver_match.url_name == 'passkey_management' %}bg-secondary text-secondary-foreground{% else %}text-muted-foreground hover:bg-secondary hover:text-secondary-foreground{% endif %}">
-                                <img src="{% static 'pingpong/icons/key.svg' %}" class="w-5 h-5" alt="">
-                                Passkeys
-                            </a>
-                        </li>
-                        <li>
-                            <form method="post" action="{% url 'logout' %}" class="w-full">
-                                {% csrf_token %}
-                                <button type="submit"
-                                    class="w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium text-muted-foreground hover:bg-secondary hover:text-secondary-foreground transition-colors text-left">
-                                    <img src="{% static 'pingpong/icons/log-out.svg' %}" class="w-5 h-5" alt="">
-                                    Logout
-                                </button>
-                            </form>
-                        </li>
-
-                    </ul>
-                </nav>
-            </div>
-        </div>
-
-        <!-- Main content -->
-        <main class="flex-1 lg:ml-64 bg-muted/30 mt-16 lg:mt-0">
-            <div class="p-6">
-                <!-- Messages -->
-                {% include 'pingpong/_messages.html' %}
-
-                {% block content %}{% endblock %}
-            </div>
-        </main>
     </div>
 
     <script>
         // Mobile drawer. Plain listeners on purpose: production's CSP has no
         // 'unsafe-eval', so anything that evaluates markup expressions is dead
         // on the live site while working perfectly in dev.
+        //
+        // Open/close is one class on one element -- `.is-open` -- which is the
+        // same contract every other overlay in the app uses. There is no
+        // transition to wait on and therefore no timer that can strand the
+        // drawer as an invisible tap-blocking layer, which the previous
+        // translate-based version needed a 320ms guard for.
         (function () {
             var scrim = document.getElementById('mobile-menu-scrim');
             var panel = document.getElementById('mobile-menu-panel');
@@ -349,43 +206,26 @@
             var closeBtn = document.getElementById('mobile-menu-close');
             if (!scrim || !panel || !openBtn) return;
 
-            // Must outlast the 300ms panel transition. The close path does not
-            // wait on transitionend: reduced motion strips the transition
-            // entirely, the event would never fire, and the drawer would stay
-            // in the DOM as an invisible tap-blocking layer.
-            var LEAVE_MS = 320;
-            var leaveTimer = null;
-
             function open() {
-                clearTimeout(leaveTimer);
-                scrim.classList.remove('hidden');
+                scrim.classList.add('is-open');
                 openBtn.setAttribute('aria-expanded', 'true');
-                // Next frame, so the browser paints the closed state first and
-                // actually animates from it.
-                requestAnimationFrame(function () {
-                    scrim.classList.remove('opacity-0');
-                    panel.classList.remove('-translate-x-full', 'opacity-0');
-                });
+                if (closeBtn) closeBtn.focus();
             }
 
             function close() {
-                scrim.classList.add('opacity-0');
-                panel.classList.add('-translate-x-full', 'opacity-0');
+                scrim.classList.remove('is-open');
                 openBtn.setAttribute('aria-expanded', 'false');
-                clearTimeout(leaveTimer);
-                leaveTimer = setTimeout(function () {
-                    scrim.classList.add('hidden');
-                }, LEAVE_MS);
+                openBtn.focus();
             }
 
             openBtn.addEventListener('click', open);
             if (closeBtn) closeBtn.addEventListener('click', close);
             // Taps on the scrim itself, not on the panel sitting inside it.
             scrim.addEventListener('click', function (e) {
-                if (e.target === scrim) close();
+                if (!panel.contains(e.target)) close();
             });
             document.addEventListener('keydown', function (e) {
-                if (e.key === 'Escape' && !scrim.classList.contains('hidden')) close();
+                if (e.key === 'Escape' && scrim.classList.contains('is-open')) close();
             });
         })();
     </script>

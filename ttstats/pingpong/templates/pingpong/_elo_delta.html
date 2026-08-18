@@ -1,0 +1,15 @@
+{% comment %}
+A side's Elo change, signed and coloured.
+
+`pending` means nobody has agreed to this result yet, so the number is a
+projection rather than a record. It still gets shown -- it is precisely the
+figure the viewer is being asked to accept -- but it says so, because a number
+that later turns out to be different is worse than no number at all.
+
+Context: `delta` (signed int), `pending` (bool).
+{% endcomment %}
+{% if delta %}
+<span class="n block text-[11.5px] font-semibold {% if delta > 0 %}text-confirmed{% else %}text-paddle{% endif %}">
+  {{ delta|stringformat:"+d" }} Elo{% if pending %} <span class="font-semibold text-muted-foreground">if agreed</span>{% endif %}
+</span>
+{% endif %}

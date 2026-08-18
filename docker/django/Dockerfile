@@ -64,6 +64,11 @@ COPY --from=assets /build/ttstats/pingpong/static/pingpong/css/ \
      /app/pingpong/static/pingpong/css/
 COPY --from=assets /build/ttstats/pingpong/static/pingpong/js/vendor/ \
      /app/pingpong/static/pingpong/js/vendor/
+# Archivo. app.css url()s these; prod's manifest storage resolves every url()
+# at collectstatic time and entrypoint.sh runs it under `set -e`, so a missing
+# font file fails the deploy rather than just the page.
+COPY --from=assets /build/ttstats/pingpong/static/pingpong/fonts/ \
+     /app/pingpong/static/pingpong/fonts/
 
 # Copy and make entrypoint executable
 COPY docker/django/entrypoint.sh /entrypoint.sh

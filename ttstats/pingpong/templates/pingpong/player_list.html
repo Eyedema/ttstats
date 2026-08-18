@@ -1,7 +1,9 @@
 {% extends "pingpong/base.html" %}
 {% load static %}
+{% load icon_tags %}
 
 {% block title %}Players - Table Tennis Tracker{% endblock %}
+{% block nav_title %}Everyone{% endblock %}
 
 {% block content %}
 <div class="max-w-7xl mx-auto space-y-6">
@@ -13,14 +15,14 @@
         </div>
         {% if user.is_staff %}
         <a href="{% url 'pingpong:player_add' %}" class="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors min-h-[44px]">
-            <img src="{% static 'pingpong/icons/plus.svg' %}" class="w-4 h-4 invert" alt="">
+            {% icon "plus" css="w-4 h-4" %}
             Add Player
         </a>
         {% endif %}
     </div>
 
     <!-- Stats Card -->
-    <div class="rounded-lg border bg-white p-4 md:p-6">
+    <div class="rounded-lg border bg-card p-4 md:p-6">
         <div class="flex items-center justify-between">
             <div>
                 <p class="text-sm font-medium text-muted-foreground">Total Players</p>
@@ -28,14 +30,14 @@
                 <p class="text-xs text-muted-foreground mt-1">Registered in the system</p>
             </div>
             <div class="w-10 h-10 md:w-12 md:h-12 bg-primary/10 rounded-full flex items-center justify-center flex-shrink-0">
-                <img src="{% static 'pingpong/icons/users.svg' %}" class="w-5 h-5 md:w-6 md:h-6" alt="">
+                {% icon "users" css="w-5 h-5 md:w-6 md:h-6" %}
             </div>
         </div>
     </div>
 
     <!-- Players Table -->
     {% if players %}
-    <div class="rounded-lg border bg-white overflow-hidden">
+    <div class="rounded-lg border bg-card overflow-hidden">
         <!-- Desktop Table (hidden on mobile/tablet) -->
         <div class="hidden md:block overflow-x-auto">
             <table class="w-full">
@@ -91,12 +93,12 @@
                         <td class="px-6 py-4 whitespace-nowrap text-right">
                             <div class="inline-flex gap-2">
                                 <a href="{% url 'pingpong:player_detail' player.pk %}" class="inline-flex items-center gap-1 px-3 py-1.5 text-sm font-medium hover:bg-secondary rounded-md transition-colors">
-                                    <img src="{% static 'pingpong/icons/eye.svg' %}" class="w-4 h-4" alt="">
+                                    {% icon "eye" css="w-4 h-4" %}
                                     View
                                 </a>
                                 {% if user.is_staff %}
                                 <a href="{% url 'pingpong:player_edit' player.pk %}" class="inline-flex items-center gap-1 px-3 py-1.5 text-sm font-medium hover:bg-secondary rounded-md transition-colors">
-                                    <img src="{% static 'pingpong/icons/pencil.svg' %}" class="w-4 h-4" alt="">
+                                    {% icon "pencil" css="w-4 h-4" %}
                                     Edit
                                 </a>
                                 {% endif %}
@@ -155,11 +157,11 @@
                 <!-- Action Buttons -->
                 <div class="flex gap-2">
                     <a href="{% url 'pingpong:player_detail' player.pk %}" class="flex-1 inline-flex items-center justify-center gap-1 px-3 py-2 text-sm font-medium hover:bg-secondary rounded-md transition-colors border min-h-[44px]">
-                        <img src="{% static 'pingpong/icons/eye.svg' %}" class="w-4 h-4" alt="">
+                        {% icon "eye" css="w-4 h-4" %}
                         View Profile
                     </a>
                     <a href="{% url 'pingpong:player_edit' player.pk %}" class="flex-1 inline-flex items-center justify-center gap-1 px-3 py-2 text-sm font-medium hover:bg-secondary rounded-md transition-colors border min-h-[44px]">
-                        <img src="{% static 'pingpong/icons/pencil.svg' %}" class="w-4 h-4" alt="">
+                        {% icon "pencil" css="w-4 h-4" %}
                         Edit
                     </a>
                 </div>
@@ -168,18 +170,18 @@
         </div>
     </div>
     {% else %}
-    <div class="rounded-lg border bg-white p-8 md:p-12 text-center">
-        <img src="{% static 'pingpong/icons/info.svg' %}" class="w-12 h-12 mx-auto text-muted-foreground mb-4 opacity-50" alt="">
+    <div class="rounded-lg border bg-card p-8 md:p-12 text-center">
+        {% icon "info" css="w-12 h-12 mx-auto text-muted-foreground mb-4 opacity-50" %}
         <p class="text-muted-foreground text-sm md:text-base">No players found. <a href="{% url 'pingpong:player_add' %}" class="font-medium hover:underline">Add your first player</a></p>
     </div>
     {% endif %}
     
     <!-- Pagination -->
     {% if is_paginated %}
-    <div class="flex items-center justify-between border-t bg-white px-4 py-3 rounded-lg">
+    <div class="flex items-center justify-between border-t bg-card px-4 py-3 rounded-lg">
         <div class="flex flex-1 justify-between sm:hidden">
             {% if page_obj.has_previous %}
-            <a href="?page={{ page_obj.previous_page_number }}" class="inline-flex items-center rounded-md border bg-white px-4 py-2.5 text-sm font-medium hover:bg-secondary min-h-[44px]">
+            <a href="?page={{ page_obj.previous_page_number }}" class="inline-flex items-center rounded-md border bg-card px-4 py-2.5 text-sm font-medium hover:bg-secondary min-h-[44px]">
                 Previous
             </a>
             {% else %}
@@ -188,7 +190,7 @@
             </span>
             {% endif %}
             {% if page_obj.has_next %}
-            <a href="?page={{ page_obj.next_page_number }}" class="ml-3 inline-flex items-center rounded-md border bg-white px-4 py-2.5 text-sm font-medium hover:bg-secondary min-h-[44px]">
+            <a href="?page={{ page_obj.next_page_number }}" class="ml-3 inline-flex items-center rounded-md border bg-card px-4 py-2.5 text-sm font-medium hover:bg-secondary min-h-[44px]">
                 Next
             </a>
             {% else %}
@@ -206,8 +208,8 @@
             <div>
                 <nav class="inline-flex -space-x-px rounded-md shadow-sm" aria-label="Pagination">
                     {% if page_obj.has_previous %}
-                    <a href="?page={{ page_obj.previous_page_number }}" class="inline-flex items-center rounded-l-md border bg-white px-2 py-2 text-sm font-medium hover:bg-secondary">
-                        <img src="{% static 'pingpong/icons/chevron-left.svg' %}" class="w-5 h-5" alt="Previous">
+                    <a href="?page={{ page_obj.previous_page_number }}" class="inline-flex items-center rounded-l-md border bg-card px-2 py-2 text-sm font-medium hover:bg-secondary">
+                        {% icon "chevron-left" css="w-5 h-5" label="Previous" %}
                     </a>
                     {% endif %}
                     
@@ -217,15 +219,15 @@
                             {{ num }}
                         </span>
                         {% elif num > page_obj.number|add:'-3' and num < page_obj.number|add:'3' %}
-                        <a href="?page={{ num }}" class="inline-flex items-center border bg-white px-4 py-2 text-sm font-medium hover:bg-secondary">
+                        <a href="?page={{ num }}" class="inline-flex items-center border bg-card px-4 py-2 text-sm font-medium hover:bg-secondary">
                             {{ num }}
                         </a>
                         {% endif %}
                     {% endfor %}
                     
                     {% if page_obj.has_next %}
-                    <a href="?page={{ page_obj.next_page_number }}" class="inline-flex items-center rounded-r-md border bg-white px-2 py-2 text-sm font-medium hover:bg-secondary">
-                        <img src="{% static 'pingpong/icons/chevron-right.svg' %}" class="w-5 h-5" alt="Next">
+                    <a href="?page={{ page_obj.next_page_number }}" class="inline-flex items-center rounded-r-md border bg-card px-2 py-2 text-sm font-medium hover:bg-secondary">
+                        {% icon "chevron-right" css="w-5 h-5" label="Next" %}
                     </a>
                     {% endif %}
                 </nav>

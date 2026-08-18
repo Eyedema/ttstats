@@ -1,8 +1,10 @@
 {% extends "pingpong/base.html" %}
 {% load static %}
+{% load icon_tags %}
 
 
 {% block title %}{% if object %}Edit Match{% else %}Record New Match{% endif %} - Table Tennis Tracker{% endblock %}
+{% block nav_title %}New match{% endblock %}
 
 
 {% block extra_css %}
@@ -144,7 +146,7 @@
     <!-- Back button -->
     <div>
         <a href="{% if object %}{% url 'pingpong:match_detail' object.pk %}{% else %}{% url 'pingpong:match_list' %}{% endif %}" class="inline-flex items-center gap-2 text-sm font-medium hover:underline min-h-[44px]">
-            <img src="{% static 'pingpong/icons/arrow-left.svg' %}" class="w-4 h-4" alt="">
+            {% icon "arrow-left" css="w-4 h-4" %}
             Back to {% if object %}Match{% else %}Matches{% endif %}
         </a>
     </div>
@@ -153,7 +155,7 @@
     {% if not object and not is_staff and user_player %}
     <div class="rounded-lg border-l-4 border-primary bg-primary/10 p-4">
         <div class="flex items-start gap-3">
-            <img src="{% static 'pingpong/icons/info.svg' %}" class="w-5 h-5 text-primary mt-0.5 flex-shrink-0" alt="">
+            {% icon "info" css="w-5 h-5 text-primary mt-0.5 flex-shrink-0" %}
             <div>
                 <p class="text-sm font-semibold text-primary mb-1">
                     Creating match as: {{ user_player.name }}
@@ -168,7 +170,7 @@
     {% elif not object and not user_player %}
     <div class="rounded-lg border-l-4 border-destructive bg-destructive/10 p-4">
         <div class="flex items-start gap-3">
-            <img src="{% static 'pingpong/icons/circle-alert.svg' %}" class="w-5 h-5 text-destructive mt-0.5 flex-shrink-0" alt="">
+            {% icon "circle-alert" css="w-5 h-5 text-destructive mt-0.5 flex-shrink-0" %}
             <div>
                 <p class="text-sm font-semibold text-destructive mb-1">
                     No Player Profile Found
@@ -182,15 +184,15 @@
     {% endif %}
 
     <!-- Form Card -->
-    <div class="rounded-lg border bg-white">
+    <div class="rounded-lg border bg-card">
         <div class="p-4 md:p-6">
             <!-- Header -->
             <div class="flex items-center gap-4 mb-6 pb-6 border-b">
                 <div class="w-12 h-12 md:w-14 md:h-14 rounded-full bg-primary text-primary-foreground flex items-center justify-center flex-shrink-0">
                     {% if object %}
-                    <img src="{% static 'pingpong/icons/pencil.svg' %}" class="w-5 h-5 md:w-6 md:h-6 invert" alt="">
+                    {% icon "pencil" css="w-5 h-5 md:w-6 md:h-6" %}
                     {% else %}
-                    <img src="{% static 'pingpong/icons/clipboard-list.svg' %}" class="w-5 h-5 md:w-6 md:h-6 invert" alt="">
+                    {% icon "clipboard-list" css="w-5 h-5 md:w-6 md:h-6" %}
                     {% endif %}
                 </div>
                 <div>
@@ -208,7 +210,7 @@
             {% if is_complete %}
             <div class="rounded-lg border border-warning/20 bg-warning/5 p-4 mb-6">
                 <div class="flex items-start gap-3">
-                    <img src="{% static 'pingpong/icons/lock.svg' %}" class="w-5 h-5 text-warning flex-shrink-0" alt="">
+                    {% icon "lock" css="w-5 h-5 text-warning flex-shrink-0" %}
                     <div class="text-warning">
                         <p class="font-semibold text-sm md:text-base">This match is complete</p>
                         <p class="text-xs md:text-sm mt-1">You can only edit the location and notes. Player and match details are locked.</p>
@@ -222,7 +224,7 @@
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                         <p class="text-xs md:text-sm font-medium text-muted-foreground mb-1">Players</p>
-                        <p class="font-semibold text-sm md:text-base">{{ object.player1 }} vs {{ object.player2 }}</p>
+                        <p class="font-semibold text-sm md:text-base">{{ object.side1_label }} vs {{ object.side2_label }}</p>
                     </div>
                     <div>
                         <p class="text-xs md:text-sm font-medium text-muted-foreground mb-1">Final Score</p>
@@ -239,8 +241,8 @@
                     <div class="sm:col-span-2">
                         <p class="text-xs md:text-sm font-medium text-muted-foreground mb-1">Winner</p>
                         <p class="font-semibold text-sm md:text-base text-success flex items-center gap-1">
-                            <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-4 h-4" alt="">
-                            {{ object.winner }}
+                            {% icon "trophy" css="w-4 h-4" %}
+                            {{ object.winner_label }}
                         </p>
                     </div>
                 </div>
@@ -252,7 +254,7 @@
             {% if form.non_field_errors %}
             <div class="rounded-lg border border-destructive bg-destructive/10 p-4 mb-6">
                 <div class="flex items-start gap-3">
-                    <img src="{% static 'pingpong/icons/circle-alert.svg' %}" class="w-5 h-5 text-destructive flex-shrink-0" alt="">
+                    {% icon "circle-alert" css="w-5 h-5 text-destructive flex-shrink-0" %}
                     <span class="font-medium text-sm text-destructive">{{ form.non_field_errors }}</span>
                 </div>
             </div>
@@ -276,7 +278,7 @@
                 <!-- Players Section -->
                 <div class="space-y-4">
                     <h3 class="text-base md:text-lg font-semibold flex items-center gap-2">
-                        <img src="{% static 'pingpong/icons/users.svg' %}" class="w-5 h-5" alt="">
+                        {% icon "users" css="w-5 h-5" %}
                         Players
                     </h3>
 
@@ -354,7 +356,7 @@
                 <!-- Match Details Section -->
                 <div class="space-y-4">
                     <h3 class="text-base md:text-lg font-semibold flex items-center gap-2">
-                        <img src="{% static 'pingpong/icons/file-text.svg' %}" class="w-5 h-5" alt="">
+                        {% icon "file-text" css="w-5 h-5" %}
                         Match Details
                     </h3>
 
@@ -382,12 +384,12 @@
                 <div class="space-y-4">
                     {% if is_complete %}
                     <h3 class="text-base md:text-lg font-semibold flex items-center gap-2">
-                        <img src="{% static 'pingpong/icons/pencil.svg' %}" class="w-5 h-5" alt="">
+                        {% icon "pencil" css="w-5 h-5" %}
                         Editable Details
                     </h3>
                     {% else %}
                     <h3 class="text-base md:text-lg font-semibold flex items-center gap-2">
-                        <img src="{% static 'pingpong/icons/map-pin.svg' %}" class="w-5 h-5" alt="">
+                        {% icon "map-pin" css="w-5 h-5" %}
                         Additional Details
                     </h3>
                     {% endif %}
@@ -407,17 +409,17 @@
 
                 <!-- Form Actions -->
                 <div class="flex flex-col sm:flex-row gap-3 sm:justify-end">
-                    <a href="{% if object %}{% url 'pingpong:match_detail' object.pk %}{% else %}{% url 'pingpong:match_list' %}{% endif %}" class="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 rounded-md border bg-white px-4 py-3 text-sm font-medium hover:bg-secondary transition-colors min-h-[48px]">
-                        <img src="{% static 'pingpong/icons/x.svg' %}" class="w-4 h-4" alt="">
+                    <a href="{% if object %}{% url 'pingpong:match_detail' object.pk %}{% else %}{% url 'pingpong:match_list' %}{% endif %}" class="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 rounded-md border bg-card px-4 py-3 text-sm font-medium hover:bg-secondary transition-colors min-h-[48px]">
+                        {% icon "x" css="w-4 h-4" %}
                         Cancel
                     </a>
-                    <button type="submit" class="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 rounded-md border bg-white px-4 py-3 text-sm font-medium hover:bg-secondary transition-colors min-h-[48px]">
-                        <img src="{% static 'pingpong/icons/check.svg' %}" class="w-4 h-4" alt="">
+                    <button type="submit" class="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 rounded-md border bg-card px-4 py-3 text-sm font-medium hover:bg-secondary transition-colors min-h-[48px]">
+                        {% icon "check" css="w-4 h-4" %}
                         {% if object %}Update Match{% else %}Create Match{% endif %}
                     </button>
                     {% if not object %}
                     <button type="submit" name="start_live" value="1" class="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-3 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors min-h-[48px]">
-                        <img src="{% static 'pingpong/icons/check.svg' %}" class="w-4 h-4 invert" alt="">
+                        {% icon "check" css="w-4 h-4" %}
                         Score live
                     </button>
                     {% endif %}
@@ -430,7 +432,7 @@
     <!-- Help Card -->
     <div class="rounded-lg border border-primary/20 bg-primary/5 p-4">
         <div class="flex gap-3">
-            <img src="{% static 'pingpong/icons/info.svg' %}" class="w-5 h-5 text-primary flex-shrink-0" alt="">
+            {% icon "info" css="w-5 h-5 text-primary flex-shrink-0" %}
             <div>
                 <h3 class="font-semibold text-sm mb-1">Quick Tips</h3>
                 <ul class="text-xs md:text-sm text-muted-foreground space-y-1 list-disc list-inside">

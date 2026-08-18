@@ -30,7 +30,7 @@ test.describe('live scoreboard', () => {
     // to have committed to one branch before asking which it picked -- probing
     // isVisible() mid-navigation just returns false and silently skips the
     // picker, leaving every later assertion staring at a hidden scoreboard.
-    const picker = page.getByRole('heading', { name: /serving first/i });
+    const picker = page.getByRole('heading', { name: /serving/i });
     await expect(picker.or(team1Score(page)).first()).toBeVisible();
 
     if (await picker.isVisible()) {
@@ -40,8 +40,9 @@ test.describe('live scoreboard', () => {
   });
 
   test('the giant numerals fit the viewport', async ({ page }) => {
-    // text-[18rem] is 288px per column on a 390px-wide screen split in two.
-    // This is the check that was flagged in review but never actually run.
+    // The score-hero specimen is 150px per column on a 390px-wide screen split
+    // in two. Enormous type is the point of this screen, so the guard that it
+    // does not push the page sideways has to be a real measurement.
     const overflow = await page.evaluate(
       () => document.documentElement.scrollWidth - document.documentElement.clientWidth
     );

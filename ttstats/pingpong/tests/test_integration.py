@@ -128,7 +128,9 @@ class TestRegistrationToLogin:
             reverse("pingpong:player_detail", args=[player.pk]).encode()
             in dashboard.content
         )
-        assert b"returner" in dashboard.content
+        # The nav identifies you by your Player, which is what every other
+        # screen shows. The old "Welcome back, <username>" banner is gone.
+        assert player.name.encode() in dashboard.content
 
 
 # ---------------------------------------------------------------------------

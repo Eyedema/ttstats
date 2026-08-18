@@ -12,6 +12,9 @@ urlpatterns = [
 
     # Core pages
     path("", views.DashboardView.as_view(), name="dashboard"),
+    # Play is a tab, not a link in a list: the one screen that starts a
+    # match. See PlayView and TAB_FOR_URL_NAME.
+    path("play/", views.PlayView.as_view(), name="play"),
     path("leaderboard/", views.LeaderboardView.as_view(), name="leaderboard"),
     path("head-to-head/", views.HeadToHeadStatsView.as_view(), name="head_to_head"),
     path("calendar/", views.CalendarView.as_view(), name="calendar"),

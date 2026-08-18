@@ -14,8 +14,9 @@
 ```bash
 # Frontend assets (required for a styled, working page)
 npm install                                        # Once, after cloning
-npm run build                                      # Vendor JS + compile CSS
+npm run build                                      # Vendor JS + fonts, compile CSS
 npm run watch:css                                  # Rebuild CSS on template change
+npm run icons                                      # Rebuild the inlined Lucide sprite (output is COMMITTED)
 python scripts/check_css_coverage.py               # Classes used in templates but absent from the build
 
 # End-to-end (real WebKit at iPhone size -- see the frontend-verification skill)
@@ -194,6 +195,33 @@ These are non-obvious behaviors that aren't clear from reading individual source
   `common_final_scores()` via `json_script`. **Don't re-type scorelines anywhere** -- they were
   previously written out in three places.
 
+### What the overhauled screens promise
+
+- **Today shows only what can need you.** "Waiting on you" excludes matches you
+  have already confirmed -- a match waiting on the *other* player is not
+  waiting on you, and listing it under that heading is how a dashboard teaches
+  people to stop reading the block. `total_players` / `total_matches` are gone
+  on purpose: neither is actionable and neither changes between two visits.
+- **`elo.projected_elo_changes()` is the number the user is asked to agree to**
+  ("-16 Elo if true" on Today, "+14 Elo if agreed" on match detail) *and* the
+  number `update_player_elo` writes -- it returns the K-factors too, so even
+  the recorded `EloHistory.k_factor` comes from the same call. Never compute a
+  preview separately; a figure that turns out different is the app lying about
+  a decision it asked the user to make.
+- **Rivalries are ordered by recency, not volume.** A rivalry is live because
+  it is ongoing. Only confirmed matches count -- an unconfirmed result is a
+  claim, not a record.
+- **The leaderboard's weekly movement is derived in both cache paths.** The
+  page is cached per filter set; `_presentation_context()` exists so the hit
+  and the miss cannot produce different context, and so the htmx fragment gets
+  everything it renders.
+- **Movement is an arrow PLUS a signed number**, and zero is an em dash rather
+  than absence. Colour is never the only signal anywhere in this design.
+- **Match detail resolves the viewer's position once**, in `_viewer_context`.
+  The old template asked `{% if user.player in match.side1_players %}` in four
+  duplicated places and they had come to disagree about whether an
+  already-confirmed side still sees a Confirm button.
+
 ### Championship System
 - Championship matches may have winners but `is_confirmed=False` — always filter by `winner_side__isnull=False` for championship data, not `is_confirmed=True`
 - Use `Match.all_objects` and `ScheduledMatch.all_objects` in championship views to bypass row-level security
@@ -202,6 +230,92 @@ These are non-obvious behaviors that aren't clear from reading individual source
 - Round-robin pairing is a pure function in `championship_scheduling.py` (`round_robin_rounds`, `round_robin_double_rounds`) -- circle method, home + away (andata e ritorno). Test it without a DB.
 - Entrants are `ChampionshipEntry` + `ChampionshipEntryMember`, not teams. The denormalized `championship` FK on the member row lets the DB enforce one entry per player per championship. Register via `championship.register_entry(players)`.
 - **`generate_schedule()` uses `bulk_create`, which bypasses `post_save`** — it therefore builds `ScheduledMatchParticipant` rows explicitly. Any new bulk path must do the same or the schedule comes out with no participants.
+
+### The design system
+
+The app was overhauled onto a single palette and type scale. The rules below
+are the ones that break something invisible if ignored.
+
+- **Colour resolves through CSS custom properties**, not literal hexes.
+  `tailwind.config.js` maps every colour to `rgb(var(--token) / <alpha-value>)`
+  and `app.css` declares the triples. **Dark is the base and light is the
+  override**, because the viewer's system setting drives it. Only *surfaces*
+  flip; paddle red, ball amber, confirmed green and the eight player hues are
+  identities and hold the same value in both themes.
+- **Three colours carry meaning and never drift.** Red is the action you can
+  take. **Amber means live right now and appears nowhere else** -- not on
+  warnings, not on "pending". Green means confirmed, i.e. agreed by both sides.
+- The **semantic aliases** (`background`, `card`, `muted`, `primary`, ...) are
+  kept and remapped rather than replaced, which is why the screens the overhaul
+  did not re-lay-out still re-skin correctly. Do not reintroduce literal
+  palette classes: `bg-white` is white-on-white on the navy court, and a
+  hardcoded `blue-100` chip cannot flip with the theme.
+- **Radius is 0 everywhere, `rounded-full` included.** The one exception is the
+  live ball, which gets its circle from `.dot` in app.css rather than from a
+  utility, so the table in the config can stay absolute.
+- **Player hues** come from `player_hues.py` (pure, no Django), keyed on the
+  player's pk so a hue survives a rename and two people never swap. Templates
+  use `{{ player|hue }}` (or `player.hue_class`) plus `.hue-bar` / `.hue-fill` /
+  `.hue-text`; hue never goes into an inline `style`.
+- **Type comes from named specimens** (`text-display`, `text-title`,
+  `text-heading`, `text-score-hero`, `.label-cap`, `.n`) which carry size,
+  leading, tracking and weight together. There is no such thing as a 34px
+  display in a different weight.
+- **Archivo is self-hosted** (OFL, vendored from `@fontsource/archivo` by
+  `npm run vendor` into `static/pingpong/fonts`). Prod's CSP allows no external
+  hosts, so a Google Fonts link would silently not load and the whole design
+  would fall back to system-ui. The Dockerfile copies the fonts, and prod's
+  manifest storage resolves the `url()`s at collectstatic time -- a missing
+  font file fails the deploy.
+
+### Icons are inlined symbols, not `<img>`
+
+`{% icon "name" %}` (templatetags/icon_tags.py) emits `<use href="#i-name">`
+against the sprite in `pingpong/_icons.html`, included once at the top of
+`<body>`.
+
+- **`<img src=...svg>` cannot work here.** Every Lucide file declares
+  `stroke="currentColor"`, and an `<img>` is its own document with no inherited
+  colour -- so every icon resolved to black. Survivable on white, invisible on
+  navy, and it made an amber or red icon impossible.
+- **The sprite is generated but COMMITTED** (`npm run icons`). It is a template
+  partial, not a build artefact: templates must render from a fresh clone with
+  no npm step.
+- **A symbol that is not in the sheet renders an empty box, silently** -- no
+  error, no failed request. `tests/test_navigation.py::TestIconSprite` is the
+  guard, and it covers both `{% icon "literal" %}` call sites and the
+  data-driven achievement glyphs, which cannot be found by scanning templates.
+- Any page that does not extend `base.html` must include the sprite itself.
+  `registration/base_auth.html` does, because `_messages.html` renders icons.
+
+### The navigation spine
+
+Nine identical sidebar links became four tab destinations -- **Today, Play,
+Table, Cups** -- plus a tiered drawer.
+
+- **Play is a tab because it is the only thing that starts something**, and it
+  is deliberately absent from the drawer menu: it is a button, not a place you
+  browse to.
+- The active tab is resolved by `context_processors.TAB_FOR_URL_NAME` and the
+  `{% nav_active %}` tag. **It is a tag rather than an inline comparison
+  because `{% include with %}` cannot evaluate one**: `active=nav_tab == 'today'`
+  passes the truthy *string* and every row lights up at once, with no error.
+- A destination that is not a tab (Calendar, Head to head, Everyone, All
+  matches) highlights nothing. Claiming a tab the user did not tap is worse
+  than showing no selection.
+- The drawer and the desktop sidebar render **the same `_nav_menu.html`**. They
+  used to be two hand-maintained copies and had already diverged.
+- `pb-tabbar` on `<main>` and the bar's own height both come from the
+  `spacing.tabbar` token, so the padding and the bar cannot disagree about how
+  tall the bar is and hide the last row of a list.
+
+### Django comments: `{# #}` is single-line ONLY
+
+Django's tag regex has no `DOTALL`, so a multi-line `{# ... #}` is **not a
+comment**. Its text renders into the page, and if it happens to contain a `{%`
+the template fails to compile with a confusing "Invalid block tag" pointing at
+a line inside what looks like a comment. Use `{% comment %}` for anything over
+one line. Eight of these were shipping their text into the HTML.
 
 ### Frontend Build
 - Tailwind is **compiled**, not loaded from a CDN. Source `pingpong/assets/app.css` (kept outside `static/` so collectstatic never copies the raw `@tailwind` source), output `static/pingpong/css/app.css` (gitignored). Config in `tailwind.config.js` at the repo root.
@@ -288,6 +402,11 @@ green -- none of them had ever seen the header the real server sends.
   rewriting it in plain JS. Unresolved -- do not assume it works in prod.
 - `tests/e2e/helpers.js` exports `applyProdCSP(page)`; `csp.spec.js` asserts no
   script is blocked. Any spec covering interactive behaviour should apply it.
+- **`iphone-dark` is a Playwright project, and it matters.** Dark is the
+  palette's base, so the light rendering a developer sees on a desktop is the
+  *variant*. `palette.dark.spec.js` asserts the media query actually reached
+  the page before asserting anything else -- without that check the whole file
+  would pass in light mode for entirely the wrong reason.
 
 ### Fail-closed rule for JS-managed UI
 

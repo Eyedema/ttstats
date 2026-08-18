@@ -1,0 +1,63 @@
+{% extends "pingpong/base.html" %}
+{% load icon_tags %}
+
+{% block title %}Start something - TTStats{% endblock %}
+{% block nav_title %}Start something{% endblock %}
+
+{% comment %}
+Play: the only screen in the app that starts something.
+
+It is a tab rather than a menu item because starting a match is the app's
+reason to exist, and every previous way in was two taps down a sidebar full of
+things you look at rather than do. There are exactly three ways to begin, so
+this is a fork in the road, not a list -- it holds no data and makes no queries.
+
+The live option is red and twice the height of the others. That is the ranking:
+scoring live is the thing you are standing next to a table holding a phone to
+do; the other two are admin you could equally do on the sofa afterwards.
+{% endcomment %}
+
+{% block content %}
+<div class="mx-auto max-w-3xl">
+  <h2 class="label-cap mb-2 block">Start something</h2>
+  <span class="rule mb-3"></span>
+
+  <div class="space-y-3">
+    <a href="{% url 'pingpong:match_add' %}?live=1"
+       class="block min-h-[88px] bg-paddle p-4 text-paddle-foreground">
+      <span class="block text-[20px] font-extrabold leading-tight">Score a game live</span>
+      <span class="mt-1 block text-[13px] font-semibold text-paddle-foreground/80">
+        Prop the phone up and tap to score
+      </span>
+    </a>
+
+    <a href="{% url 'pingpong:match_add' %}" class="surface flex items-center gap-3 p-4">
+      {% icon "clipboard-list" size="md" css="flex-none text-muted-foreground" %}
+      <span class="min-w-0">
+        <span class="block text-heading">Log a finished match</span>
+        <span class="mt-0.5 block text-[13px] font-semibold text-muted-foreground">
+          Enter the games, they confirm it
+        </span>
+      </span>
+    </a>
+
+    <a href="{% url 'pingpong:match_schedule' %}" class="surface flex items-center gap-3 p-4">
+      {% icon "calendar-plus" size="md" css="flex-none text-muted-foreground" %}
+      <span class="min-w-0">
+        <span class="block text-heading">Schedule a match</span>
+        <span class="mt-0.5 block text-[13px] font-semibold text-muted-foreground">
+          Pick an opponent and a night
+        </span>
+      </span>
+    </a>
+  </div>
+
+  {% if user.is_staff %}
+  <span class="rule my-6"></span>
+  <a href="{% url 'pingpong:player_add' %}" class="btn-ghost w-full">
+    {% icon "user-plus" size="sm" %}
+    <span>Add a player</span>
+  </a>
+  {% endif %}
+</div>
+{% endblock %}
