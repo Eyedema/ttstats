@@ -1,0 +1,29 @@
+{% load icon_tags nav_tags %}
+{% comment %}
+The bottom tab bar: Today, Play, Table, Cups.
+
+Nine identical sidebar links became four destinations you actually visit daily.
+Play is one of them because starting a match is the app's reason to exist --
+every other way in was two taps down a menu.
+
+Active is a fill plus a 2px red top edge, and the edge is drawn by pulling the
+tab up over the bar's own 2px top rule (`-mt-0.5`) rather than by stacking a
+second border, so the two never end up 4px tall together.
+
+Plain links. No JavaScript is involved in rendering or highlighting this bar,
+so it works identically under production's CSP, with Alpine dead, and with the
+stylesheet missing.
+{% endcomment %}
+
+<nav aria-label="Primary" class="fixed inset-x-0 bottom-0 z-30 border-t-2 border-court-line bg-court-raised pb-safe-bottom lg:hidden">
+  <div class="flex">
+    {% url 'pingpong:dashboard' as u %}
+    {% include 'pingpong/_tab.html' with url=u icon_name='layout-grid' label='Today' match_tab='today' %}
+    {% url 'pingpong:play' as u %}
+    {% include 'pingpong/_tab.html' with url=u icon_name='plus' label='Play' match_tab='play' %}
+    {% url 'pingpong:leaderboard' as u %}
+    {% include 'pingpong/_tab.html' with url=u icon_name='chart-column' label='Table' match_tab='table' %}
+    {% url 'pingpong:championship_list' as u %}
+    {% include 'pingpong/_tab.html' with url=u icon_name='trophy' label='Cups' match_tab='cups' %}
+  </div>
+</nav>

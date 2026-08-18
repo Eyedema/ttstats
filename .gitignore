@@ -28,6 +28,7 @@ node_modules/
 ttstats/pingpong/static/pingpong/css/app.css
 ttstats/pingpong/static/pingpong/js/vendor/
 ttstats/pingpong/static/pingpong/css/vendor/
+ttstats/pingpong/static/pingpong/fonts/
 
 # Docker
 docker-compose.override.yml

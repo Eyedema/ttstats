@@ -20,6 +20,9 @@ from django.urls import reverse
 from django.views.decorators.http import require_POST
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse_lazy
+from datetime import timedelta
+
+from django.utils import timezone
 from django.utils.decorators import method_decorator
 from django.views import View
 from django.views.generic import (
@@ -38,7 +41,12 @@ from . import live_scoring, notifications, push
 from .forms import GameForm, MatchEditForm, MatchForm, PlayerRegistrationForm, ScheduledMatchForm, MatchConvertForm, \
     ChampionshipCreateForm, ChampionshipEditForm, ScheduledMatchEditForm
 from .achievements import get_achievement_progress
-from .elo import calculate_expected_score, get_win_probability
+from .elo import (
+    calculate_expected_score,
+    get_win_probability,
+    projected_elo_change_for,
+    projected_elo_changes,
+)
 from .models import Game, Location, Match, MatchParticipant, Player, UserProfile, MatchConfirmation, ScheduledMatch, ScheduledMatchParticipant, Side, Championship, EloHistory, format_side_label, NotificationKind, NotificationPreference, PushSubscription
 from .emails import send_scheduled_match_email, send_passkey_deleted_email
 from .services import set_match_sides, set_scheduled_match_sides
@@ -260,7 +268,109 @@ class MatchDetailView(LoginRequiredMixin, DetailView):
         context['team1_win_pct'] = t1_pct
         context['team2_win_pct'] = t2_pct
 
+        context.update(self._elo_deltas(match, context))
+        context.update(self._viewer_context(match))
+        game_rows = self._game_rows(match)
+        context['game_rows'] = game_rows
+        context['long_games_note'] = self._long_games_note(game_rows)
+
         return context
+
+    @staticmethod
+    def _elo_deltas(match, context):
+        """What each side's rating did, or will do once both sides agree.
+
+        A match awaiting confirmation has no EloHistory yet, and showing
+        nothing there is the wrong answer: the number is exactly what the
+        viewer is being asked to agree to. So the page shows the projection,
+        clearly marked as pending, and swaps to the recorded figure once it is
+        real. Both come from the same arithmetic (see elo.projected_elo_changes)
+        so the pending number is never a different number.
+        """
+        applied_1 = context.get('player1_elo_change')
+        applied_2 = context.get('player2_elo_change')
+        if applied_1 or applied_2:
+            return {
+                'side1_elo_delta': applied_1.rating_change if applied_1 else 0,
+                'side2_elo_delta': applied_2.rating_change if applied_2 else 0,
+                'elo_is_pending': False,
+            }
+
+        projection = projected_elo_changes(match)
+        return {
+            'side1_elo_delta': projection.side1_change,
+            'side2_elo_delta': projection.side2_change,
+            'elo_is_pending': True,
+        }
+
+    def _viewer_context(self, match):
+        """Where the person reading this page stands in it.
+
+        The old template worked this out inline with a chain of
+        `{% if user.player in match.side1_players %}` branches duplicated
+        across a desktop layout and a mobile one -- four copies of the same
+        question, which is how they came to disagree about whether a confirmed
+        side should still show a Confirm button.
+        """
+        player = getattr(self.request.user, 'player', None)
+        if player is None:
+            return {'viewer_side': None, 'viewer_can_confirm': False, 'viewer_has_confirmed': False}
+
+        side = None
+        if any(p.pk == player.pk for p in match.side1_players):
+            side = Side.ONE
+        elif any(p.pk == player.pk for p in match.side2_players):
+            side = Side.TWO
+
+        has_confirmed = (
+            side is not None
+            and MatchConfirmation.objects.filter(match=match, player=player).exists()
+        )
+        return {
+            'viewer_side': side,
+            'viewer_can_confirm': (
+                side is not None and match.winner_side is not None and not has_confirmed
+            ),
+            'viewer_has_confirmed': has_confirmed,
+        }
+
+    @staticmethod
+    def _game_rows(match):
+        """Per-game rows carrying the share of points side one took.
+
+        The design replaces two score boxes with a single proportional bar,
+        because two boxes only say who won -- which the scoreline already says
+        -- while the bar says whether it was close. A 14-16 and a 3-11 are the
+        same "loss" in boxes and obviously different here.
+        """
+        rows = []
+        for game in match.games.all():
+            total = (game.team1_score or 0) + (game.team2_score or 0)
+            rows.append({
+                'game': game,
+                # Integer percent: the bar is 300px wide, so a fractional
+                # percentage buys nothing and makes the style attribute noisy.
+                'side1_share': round((game.team1_score or 0) / total * 100) if total else 50,
+                'went_long': max(game.team1_score or 0, game.team2_score or 0) > live_scoring.WIN_POINTS,
+            })
+        return rows
+
+    @staticmethod
+    def _long_games_note(game_rows):
+        """One editorial line under the games, or nothing.
+
+        A 3-1 that contained two deuce games is a different match from a 3-1
+        that did not, and the scoreline cannot say so. When no game went past
+        11 there is nothing worth saying, so nothing is said -- a line that
+        appears every time stops being read.
+        """
+        long_games = sum(1 for row in game_rows if row['went_long'])
+        if not long_games or not game_rows:
+            return ''
+        return (
+            f"{long_games} of {len(game_rows)} games went past "
+            f"{live_scoring.WIN_POINTS}. It was closer than the scoreline."
+        )
 
 
 class PlayerDetailView(LoginRequiredMixin, DetailView):
@@ -328,12 +438,22 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
         # Add p1_score, p2_score, and player_won to each match from player's perspective
         for match in confirmed_matches_page.object_list:
             cache_side_players(match)
+            # Everything below is from the viewer's perspective: the template
+            # must not re-derive it, because the legacy `match.player1` it used
+            # to compare against no longer exists and silently reads as empty.
             if _player_side(player, match) == Side.ONE:
                 match.p1_score = match.team1_score
                 match.p2_score = match.team2_score
+                match.opponent_players = match.cached_team2_players
+                match.opponent_label = match.cached_side2_label
             else:
                 match.p1_score = match.team2_score
                 match.p2_score = match.team1_score
+                match.opponent_players = match.cached_team1_players
+                match.opponent_label = match.cached_side1_label
+            match.opponent_player = (
+                match.opponent_players[0] if match.opponent_players else None
+            )
 
             # Check if player won (works for both 1v1 and 2v2)
             match.player_won = _player_won(player, match)
@@ -410,54 +530,70 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
 
 
 class DashboardView(LoginRequiredMixin, TemplateView):
-    """Main dashboard view with statistics"""
+    """Today: the three things that might need you, in that order.
+
+    The old dashboard led with Total Matches and Active Players. Neither is
+    something you can act on, and neither changes between two visits a minute
+    apart, so they are gone. What replaces them is ranked by whether it needs
+    you: a match you are scoring right now, a result somebody is waiting for
+    you to agree to, then the rivalries and fixtures that are merely
+    interesting.
+    """
 
     template_name = "pingpong/dashboard.html"
 
+    # How many of each block to show. Past this, the block hands off to its
+    # own screen rather than growing -- a dashboard that scrolls is a list.
+    CONFIRMATION_LIMIT = 4
+    RIVALRY_LIMIT = 3
+    FIXTURE_LIMIT = 3
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
+        player = getattr(self.request.user, "player", None)
 
-        # Cache total players (15 min TTL)
-        total_players = cache.get('dashboard_total_players')
-        if total_players is None:
-            total_players = Player.objects.count()
-            cache.set('dashboard_total_players', total_players, 900)
+        context.update(
+            {
+                "live_matches": self._live_matches(player),
+                "pending_confirmations": self._pending_confirmations(player),
+                "rivalries": self._rivalries(player),
+                "fixtures": self._fixtures(player),
+                "recent_matches": self._recent_matches(),
+            }
+        )
+        return context
 
-        # Cache total confirmed matches using denormalized field (10 min TTL)
-        total_matches = cache.get('dashboard_total_matches')
-        if total_matches is None:
-            total_matches = Match.objects.filter(is_confirmed=True).count()
-            cache.set('dashboard_total_matches', total_matches, 600)
+    # --- Live now -----------------------------------------------------------
 
-        # Recent matches (5 min TTL)
-        recent_matches = cache.get('dashboard_recent_matches')
-        if recent_matches is None:
-            recent_matches = list(Match.objects.all().order_by("-date_played")[:5])
-            cache.set('dashboard_recent_matches', recent_matches, 300)
+    def _live_matches(self, player):
+        """Matches this user is scorekeeping right now.
 
-        # Live matches I'm scorekeeping right now (KAN-11). Not cached —
-        # this needs to stay fresh as the user scores points.
-        live_matches = []
-        try:
-            user_player = self.request.user.player
-            live_qs = Match.live_objects.filter(
-                scorekeeper=user_player, is_live=True
-            ).prefetch_related(participants_prefetch())
-            for m in live_qs:
-                state = m.live_state or {}
-                cache_side_players(m)
-                live_matches.append({
+        Never cached: amber means live *this second*, and the whole point of
+        the block is that the score is current.
+        """
+        if player is None:
+            return []
+
+        live_qs = Match.live_objects.filter(
+            scorekeeper=player, is_live=True
+        ).prefetch_related(participants_prefetch())
+
+        live = []
+        for m in live_qs:
+            state = m.live_state or {}
+            cache_side_players(m)
+            opponents = [p for p in m.cached_team2_players]
+            live.append(
+                {
                     "pk": m.pk,
-                    "opponent": " & ".join(
-                        p.name for p in m.cached_team2_players
-                    ),
-                    "team1_label": " & ".join(
-                        p.name for p in m.cached_team1_players
-                    ),
+                    "opponent": " & ".join(p.name for p in opponents),
+                    "opponent_player": opponents[0] if opponents else None,
+                    "team1_label": " & ".join(p.name for p in m.cached_team1_players),
                     "team1_games": state.get("team1_games", 0),
                     "team2_games": state.get("team2_games", 0),
                     "team1_points": state.get("team1_points", 0),
                     "team2_points": state.get("team2_points", 0),
+                    "game_number": state.get("team1_games", 0) + state.get("team2_games", 0) + 1,
                     # Parsed to a datetime here rather than passed through as
                     # the raw JSON string. live_state stores it as ISO text,
                     # and Django's date/timesince filters silently no-op on a
@@ -467,24 +603,177 @@ class DashboardView(LoginRequiredMixin, TemplateView):
                         state.get("last_point_at")
                     ),
                     "best_of": m.best_of,
-                    "resume_url": reverse(
-                        "pingpong:live_scoreboard", args=[m.pk]
-                    ),
-                })
-        except (AttributeError, Player.DoesNotExist):
-            pass
+                    "resume_url": reverse("pingpong:live_scoreboard", args=[m.pk]),
+                }
+            )
+        return live
 
-        context.update(
-            {
-                "total_players": total_players,
-                "total_matches": total_matches,
-                "recent_matches": recent_matches,
-                "live_matches": live_matches,
-            }
+    # --- Waiting on you -----------------------------------------------------
+
+    def _pending_confirmations(self, player):
+        """Finished matches this player has not yet agreed to.
+
+        Only matches *they* still have to act on: a match waiting on the other
+        player is not waiting on you, and putting it in a block headed "waiting
+        on you" is how a dashboard teaches people to ignore it.
+        """
+        if player is None:
+            return []
+
+        qs = (
+            Match.objects.filter(
+                participants__player=player,
+                winner_side__isnull=False,
+                is_confirmed=False,
+            )
+            .exclude(matchconfirmation__player=player)
+            .distinct()
+            .prefetch_related(participants_prefetch())
+            .order_by("-date_played")[: self.CONFIRMATION_LIMIT]
         )
 
-        return context
+        rows = []
+        for match in qs:
+            cache_side_players(match)
+            mine, theirs = self._sides_relative_to(match, player)
+            opponent = theirs[0] if theirs else None
+            rows.append(
+                {
+                    "match": match,
+                    "opponent": opponent,
+                    "opponent_label": " & ".join(p.name for p in theirs) or "Unknown",
+                    "my_score": match.team1_score_cache
+                    if self._is_side_one(match, player)
+                    else match.team2_score_cache,
+                    "their_score": match.team2_score_cache
+                    if self._is_side_one(match, player)
+                    else match.team1_score_cache,
+                    # Signed, and shown before you agree: this is what saying
+                    # yes costs. It is the same arithmetic that will be
+                    # written when both of you have confirmed.
+                    "elo_if_true": projected_elo_change_for(match, player),
+                    "waiting_since": match.date_played,
+                }
+            )
+        return rows
 
+    # --- Live rivalries -----------------------------------------------------
+
+    def _rivalries(self, player):
+        """The people you actually play, with the head-to-head that stings.
+
+        Ordered by how recently you played them rather than by volume: a
+        rivalry is live because it is ongoing, not because it was busy in
+        2024.
+        """
+        if player is None:
+            return []
+
+        recent = (
+            Match.objects.filter(
+                participants__player=player,
+                is_confirmed=True,
+                winner_side__isnull=False,
+            )
+            .distinct()
+            .prefetch_related(participants_prefetch())
+            .order_by("-date_played")[:40]
+        )
+
+        # {opponent_pk: {"player":, "wins":, "losses":, "last":}}
+        tally = {}
+        for match in recent:
+            cache_side_players(match)
+            mine, theirs = self._sides_relative_to(match, player)
+            if not theirs:
+                continue
+            i_won = self._is_side_one(match, player) == (match.winner_side == Side.ONE)
+            for opponent in theirs:
+                row = tally.setdefault(
+                    opponent.pk,
+                    {"player": opponent, "wins": 0, "losses": 0, "last": match.date_played},
+                )
+                row["wins" if i_won else "losses"] += 1
+                row["last"] = max(row["last"], match.date_played)
+
+        rows = sorted(tally.values(), key=lambda r: r["last"], reverse=True)
+        for row in rows:
+            row["played"] = row["wins"] + row["losses"]
+            row["leading"] = row["wins"] > row["losses"]
+            row["elo_gap"] = row["player"].elo_rating - player.elo_rating
+        return rows[: self.RIVALRY_LIMIT]
+
+    # --- On the calendar ----------------------------------------------------
+
+    def _fixtures(self, player):
+        """Your next few scheduled matches, unconverted ones only."""
+        if player is None:
+            return []
+
+        today = timezone.localdate()
+        qs = (
+            ScheduledMatch.objects.filter(
+                participants__player=player,
+                scheduled_date__gte=today,
+                match__isnull=True,
+            )
+            .distinct()
+            .prefetch_related("participants__player")
+            .order_by("scheduled_date", "scheduled_time")[: self.FIXTURE_LIMIT]
+        )
+
+        rows = []
+        for sm in qs:
+            theirs = [
+                p.player
+                for p in sm.participants.all()
+                if p.player_id != player.pk
+            ]
+            rows.append(
+                {
+                    "scheduled_match": sm,
+                    "opponent": theirs[0] if theirs else None,
+                    "opponent_label": " & ".join(p.name for p in theirs) or "TBC",
+                    "is_championship": sm.championship_id is not None,
+                }
+            )
+        return rows
+
+    # --- Shared helpers -----------------------------------------------------
+
+    def _recent_matches(self):
+        recent_matches = cache.get("dashboard_recent_matches")
+        if recent_matches is None:
+            recent_matches = list(Match.objects.all().order_by("-date_played")[:5])
+            cache.set("dashboard_recent_matches", recent_matches, 300)
+        return recent_matches
+
+    @staticmethod
+    def _is_side_one(match, player):
+        return any(p.pk == player.pk for p in match.cached_team1_players)
+
+    @classmethod
+    def _sides_relative_to(cls, match, player):
+        """(my side's players, their side's players) -- never (side1, side2).
+
+        Every row on this screen is written from the reader's point of view
+        ("Casper says he beat you 3-1"), so the template must never have to
+        work out which column it is in.
+        """
+        if cls._is_side_one(match, player):
+            return list(match.cached_team1_players), list(match.cached_team2_players)
+        return list(match.cached_team2_players), list(match.cached_team1_players)
+
+
+class PlayView(LoginRequiredMixin, TemplateView):
+    """Play: the only screen in the app that starts something.
+
+    Play is a tab because starting a match is the app's reason to exist, and a
+    button rather than a list because there are exactly three ways to begin
+    one. It holds no data and makes no queries -- it is a fork in the road.
+    """
+
+    template_name = "pingpong/play.html"
 
 class PlayerCreateView(LoginRequiredMixin, CreateView):
     """View to create a new player"""
@@ -832,12 +1121,11 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
         cached_data = cache.get(cache_key)
 
         if cached_data is not None:
-            context["player_stats"] = cached_data
-            context["top_x"] = top_x
-            context["match_type"] = match_type
-            context["date_filter"] = date_filter
-            context["start_date"] = start_date
-            context["end_date"] = end_date
+            context.update(
+                self._presentation_context(
+                    cached_data, top_x, match_type, date_filter, start_date, end_date
+                )
+            )
             return context
 
         # Calculate date range
@@ -959,17 +1247,71 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
         except (ValueError, TypeError):
             player_stats = player_stats[:10]
 
+        self._annotate_weekly_movement(player_stats)
+
         # Cache for 10 minutes
         cache.set(cache_key, player_stats, 600)
 
-        context["player_stats"] = player_stats
-        context["top_x"] = top_x
-        context["match_type"] = match_type
-        context["date_filter"] = date_filter
-        context["start_date"] = start_date
-        context["end_date"] = end_date
-
+        context.update(
+            self._presentation_context(
+                player_stats, top_x, match_type, date_filter, start_date, end_date
+            )
+        )
         return context
+
+    @staticmethod
+    def _presentation_context(player_stats, top_x, match_type, date_filter, start_date, end_date):
+        """Everything the template reads, derived once for both cache paths.
+
+        `biggest_mover` is the editorial line at the foot of the table -- the
+        sentence somebody would actually type when they share the screenshot.
+        It is only interesting when somebody has in fact moved, so a week where
+        nothing happened produces no line rather than "Nobody, +0".
+        """
+        movers = [row for row in player_stats if row.get("movement")]
+        biggest_mover = (
+            max(movers, key=lambda row: abs(row["movement"])) if movers else None
+        )
+
+        return {
+            "player_stats": player_stats,
+            "top_x": top_x,
+            "match_type": match_type,
+            "date_filter": date_filter,
+            "start_date": start_date,
+            "end_date": end_date,
+            "biggest_mover": biggest_mover,
+            "leaderboard_week": timezone.localdate().isocalendar().week,
+        }
+
+    MOVEMENT_WINDOW_DAYS = 7
+
+    @classmethod
+    def _annotate_weekly_movement(cls, player_stats):
+        """Add this week's net Elo change to each row.
+
+        The leaderboard is meant to be screenshotted into the group chat, and a
+        column of static ratings gives nobody a reason to. Movement is the part
+        that makes it worth sending: it is the only number on the screen that
+        says something happened *since last time*.
+
+        Rendered as an arrow PLUS a signed integer, never colour alone, so it
+        survives greyscale and colour blindness.
+        """
+        if not player_stats:
+            return
+
+        since = timezone.now() - timedelta(days=cls.MOVEMENT_WINDOW_DAYS)
+        deltas = dict(
+            EloHistory.objects.filter(
+                player_id__in=[row["player"].pk for row in player_stats],
+                created_at__gte=since,
+            )
+            .values_list("player_id")
+            .annotate(total=Sum("rating_change"))
+        )
+        for row in player_stats:
+            row["movement"] = deltas.get(row["player"].pk, 0)
 
 
 class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
@@ -2420,10 +2762,28 @@ class LiveScoreboardView(LoginRequiredMixin, View):
 
         cache_side_players(match)
 
+        # Games needed to take the match. The scoreboard shows them as that
+        # many small bars rather than a "2/3" fraction, because the whole
+        # screen is read from a metre away while holding a paddle -- bars are
+        # countable at a glance and a fraction is not.
+        games_to_win = match.best_of // 2 + 1
+
         context = {
             "match": match,
             "team1_label": " & ".join(p.name for p in match.cached_team1_players),
             "team2_label": " & ".join(p.name for p in match.cached_team2_players),
+            # Each half of the scoreboard wears its player's permanent hue, so
+            # the two sides are the two people rather than "left" and "right".
+            "team1_hue_class": (
+                match.cached_team1_players[0].hue_class
+                if match.cached_team1_players else "hue-1"
+            ),
+            "team2_hue_class": (
+                match.cached_team2_players[0].hue_class
+                if match.cached_team2_players else "hue-2"
+            ),
+            "games_to_win": games_to_win,
+            "game_pips": range(games_to_win),
             "bootstrap": _scoreboard_payload(match),
             "point_url": reverse("pingpong:live_point", args=[pk]),
             "start_url": reverse("pingpong:live_start", args=[pk]),

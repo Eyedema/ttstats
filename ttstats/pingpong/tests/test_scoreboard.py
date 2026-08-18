@@ -666,7 +666,8 @@ class TestScoreboardPage:
         assert resp.status_code == 200
         assert b'id="scoreboard"' in resp.content
         assert b'id="scoreboard-bootstrap"' in resp.content
-        assert b"Who's serving" in resp.content
+        # The heading uses a typographic apostrophe, so match the stable half.
+        assert b"s serving?" in resp.content
         # tap zones present
         assert b'addPoint(' in resp.content
         # wake lock acquisition in client JS

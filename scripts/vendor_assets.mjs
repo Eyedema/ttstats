@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const vendorJs = join(root, 'ttstats/pingpong/static/pingpong/js/vendor');
 const vendorCss = join(root, 'ttstats/pingpong/static/pingpong/css/vendor');
+const vendorFonts = join(root, 'ttstats/pingpong/static/pingpong/fonts');
 
 // Source maps are not optional extras here. WhiteNoise's manifest storage
 // resolves every sourceMappingURL a vendored file declares, and hard-fails
@@ -37,10 +38,19 @@ const assets = [
     vendorCss,
     'tom-select.bootstrap5.min.css.map',
   ],
+  // Archivo (OFL), the app's only typeface. Self-hosted because prod's CSP
+  // allows no external hosts at all -- a Google Fonts link would silently not
+  // load and the whole design would fall back to system-ui. Three weights,
+  // matching the type scale in tailwind.config.js; app.css @font-face's them
+  // from ../fonts relative to the compiled stylesheet.
+  ['@fontsource/archivo/files/archivo-latin-400-normal.woff2', vendorFonts, 'archivo-400.woff2'],
+  ['@fontsource/archivo/files/archivo-latin-600-normal.woff2', vendorFonts, 'archivo-600.woff2'],
+  ['@fontsource/archivo/files/archivo-latin-800-normal.woff2', vendorFonts, 'archivo-800.woff2'],
 ];
 
 mkdirSync(vendorJs, { recursive: true });
 mkdirSync(vendorCss, { recursive: true });
+mkdirSync(vendorFonts, { recursive: true });
 
 for (const [source, destDir, name] of assets) {
   const from = join(root, 'node_modules', source);

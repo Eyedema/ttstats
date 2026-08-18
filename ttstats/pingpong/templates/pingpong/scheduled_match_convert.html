@@ -1,27 +1,29 @@
 {% extends "pingpong/base.html" %}
 {% load static %}
+{% load icon_tags %}
 
 {% block title %}Record Match Results - {{ scheduled_match.side1_label }} vs {{ scheduled_match.side2_label }}{% endblock %}
+{% block nav_title %}Record the result{% endblock %}
 
 {% block content %}
 <div class="max-w-3xl mx-auto space-y-6">
     <!-- Back button -->
     <div>
         <a href="{% url 'pingpong:scheduled_match_detail' scheduled_match.pk %}" class="inline-flex items-center gap-2 text-sm font-medium hover:underline min-h-[44px]">
-            <img src="{% static 'pingpong/icons/arrow-left.svg' %}" class="w-4 h-4" alt="">
+            {% icon "arrow-left" css="w-4 h-4" %}
             Back to Scheduled Match
         </a>
     </div>
 
     <!-- Info Banner -->
-    <div class="rounded-lg border-l-4 border-blue-600 bg-blue-50 dark:bg-blue-950/30 p-4">
+    <div class="rounded-lg border-l-4 border-primary bg-primary/10 dark:bg-primary/10 p-4">
         <div class="flex items-start gap-3">
-            <img src="{% static 'pingpong/icons/info.svg' %}" class="w-5 h-5 text-blue-600 dark:text-blue-400 mt-0.5 flex-shrink-0" alt="">
+            {% icon "info" css="w-5 h-5 text-primary dark:text-primary mt-0.5 flex-shrink-0" %}
             <div>
-                <p class="text-sm font-semibold text-blue-900 dark:text-blue-100 mb-1">
+                <p class="text-sm font-semibold text-foreground dark:text-foreground mb-1">
                     Recording Results for Scheduled Match
                 </p>
-                <p class="text-xs text-blue-800 dark:text-blue-200">
+                <p class="text-xs text-foreground dark:text-muted-foreground">
                     Players and date/time have been pre-filled from the scheduled match. Fill in the match type and best-of settings, then add game scores on the next page.
                 </p>
             </div>
@@ -29,12 +31,12 @@
     </div>
 
     <!-- Form Card -->
-    <div class="rounded-lg border bg-white dark:bg-card">
+    <div class="rounded-lg border bg-card dark:bg-card">
         <div class="p-6">
             <!-- Header -->
             <div class="flex items-center gap-4 mb-6 pb-6 border-b">
                 <div class="w-14 h-14 rounded-full bg-primary text-primary-foreground flex items-center justify-center flex-shrink-0">
-                    <img src="{% static 'pingpong/icons/clipboard-list.svg' %}" class="w-6 h-6 invert" alt="">
+                    {% icon "clipboard-list" css="w-6 h-6" %}
                 </div>
                 <div>
                     <h2 class="text-2xl font-bold">Record Match Results</h2>
@@ -217,7 +219,7 @@
                 {% if form.non_field_errors %}
                 <div class="rounded-lg border border-destructive/20 bg-destructive/5 p-4">
                     <div class="flex items-start gap-3">
-                        <img src="{% static 'pingpong/icons/circle-alert.svg' %}" class="w-5 h-5 text-destructive flex-shrink-0" alt="">
+                        {% icon "circle-alert" css="w-5 h-5 text-destructive flex-shrink-0" %}
                         <div>
                             {% for error in form.non_field_errors %}
                             <p class="text-sm text-destructive">{{ error }}</p>
@@ -230,7 +232,7 @@
                 <!-- Action Buttons -->
                 <div class="flex flex-col sm:flex-row gap-3 pt-4">
                     <button type="submit" class="flex-1 inline-flex items-center justify-center gap-2 rounded-md bg-primary text-primary-foreground px-6 py-3 text-sm font-medium hover:bg-primary/90 transition-colors min-h-[44px]">
-                        <img src="{% static 'pingpong/icons/save.svg' %}" class="w-4 h-4 invert" alt="">
+                        {% icon "save" css="w-4 h-4" %}
                         Record Match & Add Games
                     </button>
                     <a href="{% url 'pingpong:scheduled_match_detail' scheduled_match.pk %}" class="flex-1 inline-flex items-center justify-center gap-2 rounded-md border border-input bg-background px-6 py-3 text-sm font-medium hover:bg-accent hover:text-accent-foreground transition-colors min-h-[44px]">
@@ -245,7 +247,7 @@
     <div class="rounded-lg border bg-muted/30">
         <div class="p-4">
             <h3 class="text-sm font-semibold mb-2 flex items-center gap-2">
-                <img src="{% static 'pingpong/icons/lightbulb.svg' %}" class="w-4 h-4" alt="">
+                {% icon "lightbulb" css="w-4 h-4" %}
                 Next Steps
             </h3>
             <ul class="space-y-1 text-xs text-muted-foreground">

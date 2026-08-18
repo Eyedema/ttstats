@@ -1,14 +1,16 @@
 {% extends "pingpong/base.html" %}
 {% load static %}
+{% load icon_tags %}
 
 {% block title %}Add Game Score - {{ match }} - Table Tennis Tracker{% endblock %}
+{% block nav_title %}Add a game{% endblock %}
 
 {% block content %}
 <div class="max-w-2xl mx-auto space-y-6">
     <!-- Back button -->
     <div>
         <a href="{% url 'pingpong:match_detail' match.pk %}" class="inline-flex items-center gap-2 text-sm font-medium hover:underline">
-            <img src="{% static 'pingpong/icons/arrow-left.svg' %}" class="w-4 h-4" alt="">
+            {% icon "arrow-left" css="w-4 h-4" %}
             Back to Match
         </a>
     </div>
@@ -39,12 +41,12 @@
     </div>
 
     <!-- Form Card -->
-    <div class="rounded-lg border bg-white">
+    <div class="rounded-lg border bg-card">
         <div class="p-6">
             <!-- Header -->
             <div class="flex items-center gap-4 mb-6 pb-6 border-b">
                 <div class="w-14 h-14 rounded-full bg-primary text-primary-foreground flex items-center justify-center">
-                    <img src="{% static 'pingpong/icons/circle-plus.svg' %}" class="w-6 h-6 invert" alt="">
+                    {% icon "circle-plus" css="w-6 h-6" %}
                 </div>
                 <div>
                     <h3 class="text-2xl font-bold">Add Game Score</h3>
@@ -56,7 +58,7 @@
             {% if form.non_field_errors %}
             <div class="rounded-lg border border-destructive bg-destructive/10 p-4 mb-6">
                 <div class="flex items-center gap-2 text-destructive">
-                    <img src="{% static 'pingpong/icons/circle-alert.svg' %}" class="w-5 h-5" alt="">
+                    {% icon "circle-alert" css="w-5 h-5" %}
                     <span class="font-medium">{{ form.non_field_errors }}</span>
                 </div>
             </div>
@@ -72,7 +74,7 @@
                 <!-- Score Section -->
                 <div class="space-y-4">
                     <h4 class="text-lg font-semibold flex items-center gap-2">
-                        <img src="{% static 'pingpong/icons/hash.svg' %}" class="w-5 h-5" alt="">
+                        {% icon "hash" css="w-5 h-5" %}
                         Game Score
                     </h4>
 
@@ -97,7 +99,7 @@
                                 value="{{ form.team1_score.value|default:'0' }}"
                                 min="0"
                                 max="99"
-                                class="flex h-16 w-full rounded-md border border-input bg-white px-4 py-2 text-3xl font-bold text-center focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.team1_score.errors %}border-destructive{% endif %}"
+                                class="flex h-16 w-full rounded-md border border-input bg-card px-4 py-2 text-3xl font-bold text-center focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.team1_score.errors %}border-destructive{% endif %}"
                                 required
                                 autofocus
                             />
@@ -128,7 +130,7 @@
                                 value="{{ form.team2_score.value|default:'0' }}"
                                 min="0"
                                 max="99"
-                                class="flex h-16 w-full rounded-md border border-input bg-white px-4 py-2 text-3xl font-bold text-center focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.team2_score.errors %}border-destructive{% endif %}"
+                                class="flex h-16 w-full rounded-md border border-input bg-card px-4 py-2 text-3xl font-bold text-center focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.team2_score.errors %}border-destructive{% endif %}"
                                 required
                             />
                             {% if form.team2_score.errors %}
@@ -141,7 +143,7 @@
 
                     <div class="rounded-lg bg-muted/50 p-4 text-sm text-muted-foreground">
                         <div class="flex items-center gap-2">
-                            <img src="{% static 'pingpong/icons/info.svg' %}" class="w-4 h-4" alt="">
+                            {% icon "info" css="w-4 h-4" %}
                             <span>Standard table tennis games are played to 11 points (must win by 2)</span>
                         </div>
                     </div>
@@ -163,7 +165,7 @@
                         min="1"
                         max="300"
                         placeholder="How long did this game take?"
-                        class="flex h-10 w-full rounded-md border border-input bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.duration_minutes.errors %}border-destructive{% endif %}" 
+                        class="flex h-10 w-full rounded-md border border-input bg-card px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.duration_minutes.errors %}border-destructive{% endif %}" 
                     />
                     {% if form.duration_minutes.errors %}
                     {% for error in form.duration_minutes.errors %}
@@ -178,16 +180,16 @@
 
                 <!-- Form Actions -->
                 <div class="flex gap-3 justify-end">
-                    <a href="{% url 'pingpong:match_detail' match.pk %}" class="inline-flex items-center justify-center gap-2 rounded-md border bg-white px-4 py-2 text-sm font-medium hover:bg-secondary transition-colors">
-                        <img src="{% static 'pingpong/icons/x.svg' %}" class="w-4 h-4" alt="">
+                    <a href="{% url 'pingpong:match_detail' match.pk %}" class="inline-flex items-center justify-center gap-2 rounded-md border bg-card px-4 py-2 text-sm font-medium hover:bg-secondary transition-colors">
+                        {% icon "x" css="w-4 h-4" %}
                         Cancel
                     </a>
-                    <button type="submit" name="add_another" value="1" class="inline-flex items-center justify-center gap-2 rounded-md border border-primary bg-white px-4 py-2 text-sm font-medium text-primary hover:bg-secondary transition-colors">
-                        <img src="{% static 'pingpong/icons/chevron-last.svg' %}" class="w-4 h-4" alt="">
+                    <button type="submit" name="add_another" value="1" class="inline-flex items-center justify-center gap-2 rounded-md border border-primary bg-card px-4 py-2 text-sm font-medium text-primary hover:bg-secondary transition-colors">
+                        {% icon "chevron-last" css="w-4 h-4" %}
                         Save & Add Next
                     </button>
                     <button type="submit" class="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors">
-                        <img src="{% static 'pingpong/icons/check.svg' %}" class="w-4 h-4 invert" alt="">
+                        {% icon "check" css="w-4 h-4" %}
                         Save & Finish
                     </button>
                 </div>
@@ -198,7 +200,7 @@
     <!-- Help Card -->
     <div class="rounded-lg border border-primary/20 bg-primary/5 p-4">
         <div class="flex gap-3">
-            <img src="{% static 'pingpong/icons/lightbulb.svg' %}" class="w-5 h-5 text-primary flex-shrink-0" alt="">
+            {% icon "lightbulb" css="w-5 h-5 text-primary flex-shrink-0" %}
             <div>
                 <h3 class="font-semibold text-sm mb-1">Quick Tips</h3>
                 <ul class="text-sm text-muted-foreground space-y-1 list-disc list-inside">
@@ -275,7 +277,7 @@
     helpText.className = 'mt-4 text-xs text-muted-foreground';
     helpText.innerHTML = `
         <div class="flex items-center gap-2 mb-1">
-            <img src="{% static 'pingpong/icons/keyboard.svg' %}" class="w-4 h-4" alt="">
+            {% icon "keyboard" css="w-4 h-4" %}
             <span class="font-semibold">Keyboard Shortcuts:</span>
         </div>
         <ul class="space-y-0.5 ml-6">

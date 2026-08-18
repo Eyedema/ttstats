@@ -1,529 +1,211 @@
 {% extends "pingpong/base.html" %}
-{% load static %}
-{% load player_tags %}
+{% load icon_tags player_tags %}
 
-{% block title %}{% if match.is_double %}{{ match.side1_label }} vs {{ match.side2_label }}{% else %}{{ match.side1_label }} vs {{ match.side2_label }}{% endif %} - Table Tennis Tracker{% endblock %}
+{% block title %}{{ match.side1_label }} vs {{ match.side2_label }} - TTStats{% endblock %}
+{% block nav_title %}Match{% endblock %}
+
+{% comment %}
+Match detail.
+
+The scoreline is 44px tabular with each side's hue as a 6px bar, mirrored --
+left and right are *people*, not columns, so the bar sits on the outside of
+each name. Elo sits under the name, signed and coloured, and reads as pending
+until both sides have agreed.
+
+Per-game rows use one proportional bar instead of two score boxes. Boxes only
+say who won, which the scoreline already said; the bar says whether it was
+close, and a 14-16 and a 3-11 stop looking like the same result.
+
+The confirm bar is a pinned footer with a 2px red top edge -- the design's
+overlay marker -- so on a phone the action is under your thumb rather than
+above four screens of game rows. It only renders when there is something for
+*this* viewer to do; every other state (already confirmed, not a participant,
+no winner yet) is stated in words instead.
+{% endcomment %}
 
 {% block content %}
-<div class="max-w-7xl mx-auto space-y-6">
-    <!-- Back button -->
-    <div>
-        <a href="{% url 'pingpong:match_list' %}" class="inline-flex items-center gap-2 text-sm font-medium hover:underline min-h-[44px]">
-            <img src="{% static 'pingpong/icons/arrow-left.svg' %}" class="w-4 h-4" alt="">
-            Back to Matches
-        </a>
+<div class="mx-auto max-w-3xl {% if viewer_can_confirm %}pb-24{% endif %}">
+
+  <a href="{% url 'pingpong:match_list' %}" class="mb-3 inline-flex min-h-[44px] items-center gap-2 text-[13px] font-extrabold text-muted-foreground">
+    {% icon "arrow-left" size="sm" %}
+    All matches
+  </a>
+
+  {# ---------------------------------------------------------------- #}
+  {# The scoreline.                                                    #}
+  {# ---------------------------------------------------------------- #}
+  <section class="border-b-2 border-court-line pb-4">
+    <p class="mb-2 flex flex-wrap items-center gap-x-1.5 text-[12px] font-semibold text-muted-foreground">
+      <span>{{ match.date_played|date:"D j M" }} · {{ match.date_played|date:"H:i" }}</span>
+      {% if match.location %}<span>· {{ match.location }}</span>{% endif %}
+      <span>· {{ match.get_match_type_display|lower }}</span>
+      <span>· best of {{ match.best_of }}</span>
+      {% if match.championship %}
+      <a href="{% url 'pingpong:championship_detail' match.championship.pk %}" class="text-ball">· {{ match.championship.name }}</a>
+      {% endif %}
+      {% if match.winner_side and not match.is_confirmed %}
+      <span class="ml-auto text-[10px] font-extrabold uppercase tracking-[0.12em] text-ball">unconfirmed</span>
+      {% endif %}
+    </p>
+
+    <div class="mb-3 flex items-stretch">
+      {# Side one: bar on the left, text left-aligned. #}
+      <div class="flex min-w-0 flex-1 items-center gap-2.5">
+        <span class="{{ match.side1_players.0|hue }} hue-bar w-1.5 h-12"></span>
+        <span class="min-w-0">
+          {% player_link match.side1_players.0 css="block truncate text-heading" label=match.side1_label %}
+          {% if match.winner_side == 1 %}<span class="{{ match.side1_players.0|hue }} hue-text block text-[10px] font-extrabold uppercase tracking-[0.12em]">WINNER</span>{% endif %}
+          {% include 'pingpong/_elo_delta.html' with delta=side1_elo_delta pending=elo_is_pending %}
+        </span>
+      </div>
+
+      <div class="flex flex-none items-center gap-3 px-2">
+        <span class="n text-score {% if match.winner_side == 2 %}text-muted-foreground{% endif %}">{{ match.team1_score }}</span>
+        <span class="text-[20px] font-extrabold text-muted-foreground">–</span>
+        <span class="n text-score {% if match.winner_side == 1 %}text-muted-foreground{% endif %}">{{ match.team2_score }}</span>
+      </div>
+
+      {# Side two: mirrored -- text right-aligned, bar on the right. #}
+      <div class="flex min-w-0 flex-1 items-center justify-end gap-2.5 text-right">
+        <span class="min-w-0">
+          {% player_link match.side2_players.0 css="block truncate text-heading" label=match.side2_label %}
+          {% if match.winner_side == 2 %}<span class="{{ match.side2_players.0|hue }} hue-text block text-[10px] font-extrabold uppercase tracking-[0.12em]">WINNER</span>{% endif %}
+          {% include 'pingpong/_elo_delta.html' with delta=side2_elo_delta pending=elo_is_pending %}
+        </span>
+        <span class="{{ match.side2_players.0|hue }} hue-bar w-1.5 h-12"></span>
+      </div>
     </div>
 
-    <!-- Match Header -->
-    <div class="rounded-lg border bg-gradient-to-r from-primary to-primary/90 text-primary-foreground overflow-hidden">
-        <div class="p-4 md:p-6">
-            <div class="flex flex-col gap-4">
-                <div>
-                    <p class="text-xs md:text-sm opacity-80 mb-2">
-                        {{ match.date_played|date:"F d, Y" }} at {{ match.date_played|date:"H:i" }}
-                        {% if match.location %} • {{ match.location }}{% endif %}
-                    </p>
-                    <h1 class="text-xl md:text-3xl font-bold mb-2">
-                        {% if match.is_double %}
-                            {{ match.side1_label }} vs {{ match.side2_label }}
-                        {% else %}
-                            {{ match.side1_label }} vs {{ match.side2_label }}
-                        {% endif %}
-                    </h1>
-                    {% if match.is_double %}
-                    <p class="text-xs md:text-sm opacity-70">
-                        {% for p in match.side1_players %}{{ p.name }}{% if not forloop.last %} & {% endif %}{% endfor %}
-                        vs
-                        {% for p in match.side2_players %}{{ p.name }}{% if not forloop.last %} & {% endif %}{% endfor %}
-                    </p>
-                    {% endif %}
-                    <div class="flex gap-2 flex-wrap">
-                        {% if match.match_type == 'tournament' %}
-                        <span class="inline-flex items-center rounded-md bg-white/20 px-2 md:px-3 py-1 text-xs md:text-sm font-medium">Tournament</span>
-                        {% elif match.match_type == 'practice' %}
-                        <span class="inline-flex items-center rounded-md bg-white/20 px-2 md:px-3 py-1 text-xs md:text-sm font-medium">Practice</span>
-                        {% else %}
-                        <span class="inline-flex items-center rounded-md bg-white/20 px-2 md:px-3 py-1 text-xs md:text-sm font-medium">Casual</span>
-                        {% endif %}
-                        <span class="inline-flex items-center rounded-md bg-white/20 px-2 md:px-3 py-1 text-xs md:text-sm font-medium">Best of {{ match.best_of }}</span>
-                        {% if match.championship %}
-                        <a href="{% url 'pingpong:championship_detail' match.championship.pk %}" class="inline-flex items-center rounded-md bg-white/20 px-2 md:px-3 py-1 text-xs md:text-sm font-medium hover:bg-white/30 transition-colors">
-                            <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-3 h-3 mr-1 invert" alt="">
-                            {{ match.championship.name }}
-                        </a>
-                        {% endif %}
-                    </div>
-                </div>
-                <div class="flex flex-col sm:flex-row gap-2">
-                    {% if not match.winner_side %}
-                    <a href="{% url 'pingpong:game_add' match.pk %}" class="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 rounded-md bg-white text-primary px-4 py-2.5 text-sm font-medium hover:bg-white/90 transition-colors min-h-[44px]">
-                        <img src="{% static 'pingpong/icons/plus.svg' %}" class="w-4 h-4" alt="">
-                        Add Game Score
-                    </a>
-                    {% else %}
-                    <span class="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 rounded-md bg-white/50 text-primary/50 px-4 py-2.5 text-sm font-medium cursor-not-allowed">
-                        <img src="{% static 'pingpong/icons/award.svg' %}" class="w-4 h-4" alt="">
-                        Match Complete
-                    </span>
-                    {% endif %}
-                    <!-- Confirm Button (only for players in the match) -->
-                    {% if user.is_authenticated and user.player and match.winner_side %}
-                        {% if user.player in match.side1_players %}
-                            {% if match.team1_confirmed %}
-                                <span class="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 rounded-md border-2 border-white/30 bg-white/50 text-primary/70 px-4 py-2.5 text-sm font-medium cursor-not-allowed min-h-[44px]">
-                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
-                                    </svg>
-                                    Confirmed
-                                </span>
-                            {% else %}
-                                <form method="post" action="{% url 'pingpong:match_confirm' match.pk %}" class="flex-1 sm:flex-none">
-                                    {% csrf_token %}
-                                    <button type="submit" class="w-full inline-flex items-center justify-center gap-2 rounded-md border-2 border-white/30 bg-white/10 px-4 py-2.5 text-sm font-medium hover:bg-white/20 transition-colors min-h-[44px]">
-                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
-                                        </svg>
-                                        Confirm Match
-                                    </button>
-                                </form>
-                            {% endif %}
-                        {% elif user.player in match.side2_players %}
-                            {% if match.team2_confirmed %}
-                                <span class="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 rounded-md border-2 border-white/30 bg-white/50 text-primary/70 px-4 py-2.5 text-sm font-medium cursor-not-allowed min-h-[44px]">
-                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
-                                    </svg>
-                                    Confirmed
-                                </span>
-                            {% else %}
-                                <form method="post" action="{% url 'pingpong:match_confirm' match.pk %}" class="flex-1 sm:flex-none">
-                                    {% csrf_token %}
-                                    <button type="submit" class="w-full inline-flex items-center justify-center gap-2 rounded-md border-2 border-white/30 bg-white/10 px-4 py-2.5 text-sm font-medium hover:bg-white/20 transition-colors min-h-[44px]">
-                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
-                                        </svg>
-                                        Confirm Match
-                                    </button>
-                                </form>
-                            {% endif %}
-                        {% endif %}
-                    {% endif %}
-                    <a href="{% url 'pingpong:match_edit' match.pk %}" class="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 rounded-md border-2 border-white/30 bg-white/10 px-4 py-2.5 text-sm font-medium hover:bg-white/20 transition-colors min-h-[44px]">
-                        <img src="{% static 'pingpong/icons/pencil.svg' %}" class="w-4 h-4 invert" alt="">
-                        Edit Match
-                    </a>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Win Probability -->
-    {% if team1_win_pct is not None %}
-    <div class="rounded-lg border bg-white p-4">
-        <div class="flex items-center justify-between mb-2">
-            <span class="text-xs font-medium text-muted-foreground">
-                {% if match.winner_side %}Pre-Match Prediction{% else %}Win Probability{% endif %}
-            </span>
-            {% if match.winner_side %}
-                {% if team1_win_pct > team2_win_pct and match.winner_side == 2 or team2_win_pct > team1_win_pct and match.winner_side == 1 %}
-                <span class="inline-flex items-center rounded-md bg-destructive/10 px-2 py-0.5 text-xs font-medium text-destructive">Upset!</span>
-                {% elif team1_win_pct == team2_win_pct %}
-                {% else %}
-                <span class="inline-flex items-center rounded-md bg-success/10 px-2 py-0.5 text-xs font-medium text-success">Expected</span>
-                {% endif %}
-            {% endif %}
-        </div>
-        <div class="flex justify-between text-sm font-medium mb-1.5">
-            <span>{{ match.side1_label }} {{ team1_win_pct }}%</span>
-            <span>{{ team2_win_pct }}% {{ match.side2_label }}</span>
-        </div>
-        <div class="flex h-2.5 rounded-full overflow-hidden">
-            <div class="bg-primary transition-all" style="width: {{ team1_win_pct }}%"></div>
-            <div class="bg-destructive transition-all" style="width: {{ team2_win_pct }}%"></div>
-        </div>
-    </div>
+    {% if match.is_double %}
+    <p class="mb-3 text-[12px] font-semibold text-muted-foreground">
+      {% for p in match.side1_players %}{{ p.name }}{% if not forloop.last %} &amp; {% endif %}{% endfor %}
+      vs
+      {% for p in match.side2_players %}{{ p.name }}{% if not forloop.last %} &amp; {% endif %}{% endfor %}
+    </p>
     {% endif %}
 
-    <!-- Score Card -->
-    <div class="grid grid-cols-1 gap-4">
-        <!-- Desktop Layout -->
-        {% if match.is_double %}
-        <!-- 2v2 Layout (2 columns) -->
-        <div class="hidden md:grid md:grid-cols-2 gap-6">
-            <!-- Team 1 -->
-            <div class="rounded-lg border bg-white p-6">
-                <div class="mb-4">
-                    <h3 class="text-lg font-bold mb-2">{{ match.side1_label }}</h3>
-                    <div class="space-y-1">
-                        {% for player in match.side1_players %}
-                        {% player_link player css="block text-sm hover:underline" label=player.name %}
-                        {% endfor %}
-                    </div>
-                </div>
-                <div class="text-5xl font-bold">{{ match.team1_score }}</div>
-                <p class="text-sm text-muted-foreground mt-1">Games won</p>
-                {% if match.winner_side == 1 %}
-                <div class="flex items-center gap-1 text-sm text-success mt-3">
-                    <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-4 h-4" alt="">
-                    Winner
-                </div>
-                {% endif %}
-            </div>
-
-            <!-- Team 2 -->
-            <div class="rounded-lg border bg-white p-6">
-                <div class="mb-4">
-                    <h3 class="text-lg font-bold mb-2">{{ match.side2_label }}</h3>
-                    <div class="space-y-1">
-                        {% for player in match.side2_players %}
-                        {% player_link player css="block text-sm hover:underline" label=player.name %}
-                        {% endfor %}
-                    </div>
-                </div>
-                <div class="text-5xl font-bold">{{ match.team2_score }}</div>
-                <p class="text-sm text-muted-foreground mt-1">Games won</p>
-                {% if match.winner_side == 2 %}
-                <div class="flex items-center gap-1 text-sm text-success mt-3">
-                    <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-4 h-4" alt="">
-                    Winner
-                </div>
-                {% endif %}
-            </div>
-        </div>
-        <!-- Match Status Badge for 2v2 -->
-        <div class="hidden md:flex justify-center">
-            {% if match.winner_side %}
-            <span class="inline-flex items-center rounded-md bg-success/10 px-3 py-1 text-sm font-medium text-success">Match Complete</span>
-            {% else %}
-            <span class="inline-flex items-center rounded-md bg-warning/10 px-3 py-1 text-sm font-medium text-warning">In Progress</span>
-            {% endif %}
-        </div>
-        {% else %}
-        <!-- 1v1 Layout (3 columns) -->
-        <div class="hidden md:grid md:grid-cols-3 gap-6">
-            <!-- Player 1 -->
-            <div class="rounded-lg border bg-white p-6">
-                <div class="flex items-center gap-3 mb-4">
-                    <div class="w-12 h-12 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-semibold">
-                        {{ match.side1_players.0.name|slice:":1"|upper }}
-                    </div>
-                    <div>
-                        {% player_link match.side1_players.0 css="font-semibold hover:underline" label=match.side1_label %}
-                        {% if match.winner_side == 1 %}
-                        <div class="flex items-center gap-1 text-xs text-success">
-                            <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-3 h-3" alt="">
-                            Winner
-                        </div>
-                        {% endif %}
-                        {% if player1_elo_change %}
-                        <div class="flex items-center gap-1 text-xs {% if player1_elo_change.rating_change > 0 %}text-success{% else %}text-destructive{% endif %} mt-1">
-                            <span class="font-semibold">{% if player1_elo_change.rating_change > 0 %}+{% endif %}{{ player1_elo_change.rating_change }}</span>
-                            Elo
-                        </div>
-                        {% endif %}
-                    </div>
-                </div>
-                <div class="text-5xl font-bold">{{ match.team1_score }}</div>
-                <p class="text-sm text-muted-foreground mt-1">Games won</p>
-            </div>
-
-            <!-- VS -->
-            <div class="rounded-lg border bg-muted/30 flex items-center justify-center p-6">
-                <div class="text-center">
-                    <div class="text-6xl font-bold text-muted-foreground opacity-30">VS</div>
-                    {% if match.winner_side %}
-                    <div class="mt-4">
-                        <span class="inline-flex items-center rounded-md bg-success/10 px-3 py-1 text-sm font-medium text-success">Match Complete</span>
-                    </div>
-                    {% else %}
-                    <div class="mt-4">
-                        <span class="inline-flex items-center rounded-md bg-warning/10 px-3 py-1 text-sm font-medium text-warning">In Progress</span>
-                    </div>
-                    {% endif %}
-                </div>
-            </div>
-
-            <!-- Player 2 -->
-            <div class="rounded-lg border bg-white p-6">
-                <div class="flex items-center gap-3 mb-4">
-                    <div class="w-12 h-12 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-semibold">
-                        {{ match.side2_players.0.name|slice:":1"|upper }}
-                    </div>
-                    <div>
-                        {% player_link match.side2_players.0 css="font-semibold hover:underline" label=match.side2_label %}
-                        {% if match.winner_side == 2 %}
-                        <div class="flex items-center gap-1 text-xs text-success">
-                            <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-3 h-3" alt="">
-                            Winner
-                        </div>
-                        {% endif %}
-                        {% if player2_elo_change %}
-                        <div class="flex items-center gap-1 text-xs {% if player2_elo_change.rating_change > 0 %}text-success{% else %}text-destructive{% endif %} mt-1">
-                            <span class="font-semibold">{% if player2_elo_change.rating_change > 0 %}+{% endif %}{{ player2_elo_change.rating_change }}</span>
-                            Elo
-                        </div>
-                        {% endif %}
-                    </div>
-                </div>
-                <div class="text-5xl font-bold">{{ match.team2_score }}</div>
-                <p class="text-sm text-muted-foreground mt-1">Games won</p>
-            </div>
-        </div>
+    {% comment %}
+    What the state of this match actually means, in a sentence. The old page
+    had three separate badges saying "In Progress" / "Match Complete" /
+    "Unconfirmed" and left the reader to work out the consequence.
+    {% endcomment %}
+    <div class="surface-overlay p-3">
+      {% if not match.winner_side %}
+      <p class="text-[14px] font-extrabold leading-snug">Still going.</p>
+      <p class="mt-0.5 text-[12px] font-semibold leading-relaxed text-muted-foreground">
+        Add the games as they finish. Nothing moves until somebody wins.
+      </p>
+      {% elif match.is_confirmed %}
+      <p class="flex items-center gap-1.5 text-[14px] font-extrabold leading-snug text-confirmed">
+        {% icon "check" size="sm" %} Agreed by both sides.
+      </p>
+      <p class="mt-0.5 text-[12px] font-semibold leading-relaxed text-muted-foreground">
+        Elo has been applied. {% if team1_win_pct %}The winner was a {% if match.winner_side == 1 %}{{ team1_win_pct }}{% else %}{{ team2_win_pct }}{% endif %}% favourite going in.{% endif %}
+      </p>
+      {% elif viewer_can_confirm %}
+      <p class="text-[14px] font-extrabold leading-snug">
+        {{ match.winner_label }} says they won it. Your call.
+      </p>
+      <p class="mt-0.5 text-[12px] font-semibold leading-relaxed text-muted-foreground">
+        Elo only moves once you both agree.
+        {% if team1_win_pct %}
+          The winner was a {% if match.winner_side == 1 %}{{ team1_win_pct }}{% else %}{{ team2_win_pct }}{% endif %}% favourite, so they will be telling people about it either way.
         {% endif %}
-
-        <!-- Mobile Layout (Stacked) -->
-        <div class="md:hidden space-y-4">
-            {% if match.is_double %}
-            <!-- Team 1 Card -->
-            <div class="rounded-lg border bg-white p-4 {% if match.winner_side == 1 %}ring-2 ring-success{% endif %}">
-                <div class="flex items-center justify-between mb-2">
-                    <div>
-                        <div class="font-bold mb-1">{{ match.side1_label }}</div>
-                        <div class="space-y-0.5">
-                            {% for player in match.side1_players %}
-                            {% player_link player css="block text-sm hover:underline" label=player.name %}
-                            {% endfor %}
-                        </div>
-                        {% if match.winner_side == 1 %}
-                        <div class="flex items-center gap-1 text-xs text-success font-bold mt-2">
-                            <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-3 h-3" alt="">
-                            WINNER
-                        </div>
-                        {% endif %}
-                    </div>
-                    <div class="text-4xl font-bold {% if match.winner_side == 1 %}text-success{% endif %}">
-                        {{ match.team1_score }}
-                    </div>
-                </div>
-            </div>
-
-            <!-- Team 2 Card -->
-            <div class="rounded-lg border bg-white p-4 {% if match.winner_side == 2 %}ring-2 ring-success{% endif %}">
-                <div class="flex items-center justify-between mb-2">
-                    <div>
-                        <div class="font-bold mb-1">{{ match.side2_label }}</div>
-                        <div class="space-y-0.5">
-                            {% for player in match.side2_players %}
-                            {% player_link player css="block text-sm hover:underline" label=player.name %}
-                            {% endfor %}
-                        </div>
-                        {% if match.winner_side == 2 %}
-                        <div class="flex items-center gap-1 text-xs text-success font-bold mt-2">
-                            <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-3 h-3" alt="">
-                            WINNER
-                        </div>
-                        {% endif %}
-                    </div>
-                    <div class="text-4xl font-bold {% if match.winner_side == 2 %}text-success{% endif %}">
-                        {{ match.team2_score }}
-                    </div>
-                </div>
-            </div>
-            {% else %}
-            <!-- Player 1 Card -->
-            <div class="rounded-lg border bg-white p-4 {% if match.winner_side == 1 %}ring-2 ring-success{% endif %}">
-                <div class="flex items-center justify-between mb-2">
-                    <div class="flex items-center gap-3">
-                        <div class="w-10 h-10 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-semibold">
-                            {{ match.side1_players.0.name|slice:":1"|upper }}
-                        </div>
-                        <div>
-                            {% player_link match.side1_players.0 css="font-semibold hover:underline" label=match.side1_label %}
-                            {% if match.winner_side == 1 %}
-                            <div class="flex items-center gap-1 text-xs text-success font-bold">
-                                <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-3 h-3" alt="">
-                                WINNER
-                            </div>
-                            {% endif %}
-                            {% if player1_elo_change %}
-                            <div class="flex items-center gap-1 text-xs {% if player1_elo_change.rating_change > 0 %}text-success{% else %}text-destructive{% endif %} font-semibold mt-1">
-                                {% if player1_elo_change.rating_change > 0 %}+{% endif %}{{ player1_elo_change.rating_change }} Elo
-                            </div>
-                            {% endif %}
-                        </div>
-                    </div>
-                    <div class="text-4xl font-bold {% if match.winner_side == 1 %}text-success{% endif %}">
-                        {{ match.team1_score }}
-                    </div>
-                </div>
-            </div>
-
-            <!-- VS Divider -->
-            <div class="text-center py-2">
-                <div class="inline-flex items-center gap-2">
-                    <div class="h-px w-12 bg-border"></div>
-                    <span class="text-2xl font-bold text-muted-foreground opacity-30">VS</span>
-                    <div class="h-px w-12 bg-border"></div>
-                </div>
-                {% if match.winner_side %}
-                <div class="mt-2">
-                    <span class="inline-flex items-center rounded-md bg-success/10 px-3 py-1 text-xs font-medium text-success">Match Complete</span>
-                </div>
-                {% else %}
-                <div class="mt-2">
-                    <span class="inline-flex items-center rounded-md bg-warning/10 px-3 py-1 text-xs font-medium text-warning">In Progress</span>
-                </div>
-                {% endif %}
-            </div>
-
-            <!-- Player 2 Card -->
-            <div class="rounded-lg border bg-white p-4 {% if match.winner_side == 2 %}ring-2 ring-success{% endif %}">
-                <div class="flex items-center justify-between mb-2">
-                    <div class="flex items-center gap-3">
-                        <div class="w-10 h-10 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-semibold">
-                            {{ match.side2_players.0.name|slice:":1"|upper }}
-                        </div>
-                        <div>
-                            {% player_link match.side2_players.0 css="font-semibold hover:underline" label=match.side2_label %}
-                            {% if match.winner_side == 2 %}
-                            <div class="flex items-center gap-1 text-xs text-success font-bold">
-                                <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-3 h-3" alt="">
-                                WINNER
-                            </div>
-                            {% endif %}
-                            {% if player2_elo_change %}
-                            <div class="flex items-center gap-1 text-xs {% if player2_elo_change.rating_change > 0 %}text-success{% else %}text-destructive{% endif %} font-semibold mt-1">
-                                {% if player2_elo_change.rating_change > 0 %}+{% endif %}{{ player2_elo_change.rating_change }} Elo
-                            </div>
-                            {% endif %}
-                        </div>
-                    </div>
-                    <div class="text-4xl font-bold {% if match.winner_side == 2 %}text-success{% endif %}">
-                        {{ match.team2_score }}
-                    </div>
-                </div>
-            </div>
-            {% endif %}
-        </div>
+      </p>
+      {% else %}
+      <p class="text-[14px] font-extrabold leading-snug">Waiting on the other side.</p>
+      <p class="mt-0.5 text-[12px] font-semibold leading-relaxed text-muted-foreground">
+        {% if viewer_has_confirmed %}You have agreed to this.{% endif %}
+        Elo lands when everybody has.
+      </p>
+      {% endif %}
     </div>
+  </section>
 
-    <!-- Game Scores -->
-    <div class="rounded-lg border bg-white">
-        <div class="p-4 md:p-6 border-b">
-            <h3 class="text-lg md:text-xl font-semibold flex items-center gap-2">
-                <img src="{% static 'pingpong/icons/list.svg' %}" class="w-5 h-5" alt="">
-                Game Scores
-            </h3>
-        </div>
-
-        {% if match.games.all %}
-        <!-- Desktop Table -->
-        <div class="hidden md:block overflow-x-auto">
-            <table class="w-full">
-                <thead class="border-b bg-muted/50">
-                    <tr>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Game #</th>
-                        <th class="px-6 py-3 text-center text-xs font-medium text-muted-foreground uppercase tracking-wider">{% if match.is_double %}{{ match.side1_label }}{% else %}{{ match.side1_label }}{% endif %}</th>
-                        <th class="px-6 py-3 text-center text-xs font-medium text-muted-foreground uppercase tracking-wider">{% if match.is_double %}{{ match.side2_label }}{% else %}{{ match.side2_label }}{% endif %}</th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Winner</th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Duration</th>
-                    </tr>
-                </thead>
-                <tbody class="divide-y">
-                    {% for game in match.games.all %}
-                    <tr class="hover:bg-muted/50">
-                        <td class="px-6 py-4 whitespace-nowrap">
-                            <span class="font-semibold">Game {{ game.game_number }}</span>
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-center">
-                            <span class="inline-flex items-center justify-center rounded-md px-4 py-2 text-xl font-bold {% if game.winner_side == 1 %}bg-success/10 text-success{% else %}bg-muted{% endif %}">
-                                {{ game.team1_score }}
-                            </span>
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-center">
-                            <span class="inline-flex items-center justify-center rounded-md px-4 py-2 text-xl font-bold {% if game.winner_side == 2 %}bg-success/10 text-success{% else %}bg-muted{% endif %}">
-                                {{ game.team2_score }}
-                            </span>
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap">
-                            {% if game.winner_side %}
-                            <div class="flex items-center gap-2">
-                                <img src="{% static 'pingpong/icons/award.svg' %}" class="w-4 h-4 text-success" alt="">
-                                <span class="font-medium">{{ game.winner_label }}</span>
-                            </div>
-                            {% else %}
-                            <span class="text-muted-foreground">—</span>
-                            {% endif %}
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap">
-                            {% if game.duration_minutes %}
-                            <span class="text-sm">{{ game.duration_minutes }} min</span>
-                            {% else %}
-                            <span class="text-sm text-muted-foreground">—</span>
-                            {% endif %}
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-
-        <!-- Mobile Game Cards -->
-        <div class="md:hidden divide-y">
-            {% for game in match.games.all %}
-            <div class="p-4">
-                <div class="flex items-center justify-between mb-3">
-                    <span class="font-semibold text-sm">Game {{ game.game_number }}</span>
-                    {% if game.duration_minutes %}
-                    <span class="text-xs text-muted-foreground">{{ game.duration_minutes }} min</span>
-                    {% endif %}
-                </div>
-                
-                <!-- Score Display -->
-                <div class="grid grid-cols-3 gap-2 items-center mb-2">
-                    <div class="text-center">
-                        <div class="text-xs text-muted-foreground mb-1 truncate">
-                            {{ match.side1_label|truncatechars:12 }}
-                        </div>
-                        <span class="inline-flex items-center justify-center rounded-md px-3 py-2 text-2xl font-bold w-full {% if game.winner_side == 1 %}bg-success/10 text-success{% else %}bg-muted{% endif %}">
-                            {{ game.team1_score }}
-                        </span>
-                    </div>
-                    <div class="text-center text-muted-foreground font-bold">-</div>
-                    <div class="text-center">
-                        <div class="text-xs text-muted-foreground mb-1 truncate">
-                            {{ match.side2_label|truncatechars:12 }}
-                        </div>
-                        <span class="inline-flex items-center justify-center rounded-md px-3 py-2 text-2xl font-bold w-full {% if game.winner_side == 2 %}bg-success/10 text-success{% else %}bg-muted{% endif %}">
-                            {{ game.team2_score }}
-                        </span>
-                    </div>
-                </div>
-
-                <!-- Winner Badge -->
-                {% if game.winner_side %}
-                <div class="flex items-center justify-center gap-1 text-xs">
-                    <img src="{% static 'pingpong/icons/award.svg' %}" class="w-3 h-3 text-success" alt="">
-                    <span class="font-medium text-success">{{ game.winner_label }} won</span>
-                </div>
-                {% endif %}
-            </div>
-            {% endfor %}
-        </div>
-        {% else %}
-        <div class="p-8 md:p-12 text-center">
-            <img src="{% static 'pingpong/icons/clipboard-list.svg' %}" class="w-16 h-16 mx-auto text-muted-foreground mb-4 opacity-30" alt="">
-            <h4 class="text-base md:text-lg font-semibold mb-2">No Game Scores Yet</h4>
-            <p class="text-muted-foreground mb-6 text-sm md:text-base">Start recording individual game scores for this match</p>
-            {% if not match.winner_side %}
-            <a href="{% url 'pingpong:game_add' match.pk %}" class="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors min-h-[44px]">
-                <img src="{% static 'pingpong/icons/plus.svg' %}" class="w-4 h-4 invert" alt="">
-                Add First Game Score
-            </a>
-            {% endif %}
-        </div>
-        {% endif %}
+  {# ---------------------------------------------------------------- #}
+  {# Games.                                                            #}
+  {# ---------------------------------------------------------------- #}
+  <section class="pt-4">
+    <div class="mb-2 flex items-baseline justify-between">
+      <h2 class="label-cap">Games</h2>
+      {% if not match.winner_side %}
+      <a href="{% url 'pingpong:game_add' match.pk %}" class="text-[11px] font-extrabold uppercase tracking-[0.1em] text-paddle">Add a game</a>
+      {% endif %}
     </div>
+    <span class="rule"></span>
 
-    <!-- Match Notes -->
-    {% if match.notes %}
-    <div class="rounded-lg border bg-white p-4 md:p-6">
-        <h3 class="text-base md:text-lg font-semibold mb-3 flex items-center gap-2">
-            <img src="{% static 'pingpong/icons/file-text.svg' %}" class="w-5 h-5" alt="">
-            Match Notes
-        </h3>
-        <p class="text-muted-foreground text-sm md:text-base">{{ match.notes }}</p>
+    {% if game_rows %}
+    {% for row in game_rows %}
+    <div class="flex items-center gap-3 border-b border-court-line py-3">
+      <span class="w-6 flex-none text-[12px] font-extrabold text-muted-foreground">{{ row.game.game_number }}</span>
+
+      {% comment %}
+      One bar: the share of the game's points side one took. Two boxes only
+      said who won; this says whether it was close.
+      {% endcomment %}
+      <span class="{{ match.side1_players.0|hue }} relative h-2 min-w-0 flex-1 bg-court-line"
+            role="img"
+            aria-label="{{ match.side1_label }} took {{ row.side1_share }}% of the points">
+        <span class="hue-bar absolute inset-y-0 left-0" style="width:{{ row.side1_share }}%"></span>
+      </span>
+
+      <span class="n w-[74px] flex-none text-right text-[16px]
+                   {% if row.game.winner_side == 1 %}{{ match.side1_players.0|hue }} hue-text{% elif row.game.winner_side == 2 %}{{ match.side2_players.0|hue }} hue-text{% endif %}">
+        {{ row.game.team1_score }} – {{ row.game.team2_score }}
+        {% if row.game.winner_side %}<span class="sr-only">, won by <span class="font-medium">{{ row.game.winner_label }}</span></span>{% endif %}
+      </span>
+    </div>
+    {% endfor %}
+
+    {% if long_games_note %}
+    <p class="py-3 text-[12px] font-semibold text-muted-foreground">{{ long_games_note }}</p>
+    {% endif %}
+
+    {% else %}
+    <div class="py-6">
+      <p class="text-heading">No games yet</p>
+      <p class="mt-1 text-[12.5px] font-semibold leading-relaxed text-muted-foreground">
+        A match without games has no score to agree on.
+      </p>
+      {% if not match.winner_side %}
+      <a href="{% url 'pingpong:game_add' match.pk %}" class="btn-paddle mt-3 w-full">Add the first game</a>
+      {% endif %}
     </div>
     {% endif %}
+  </section>
+
+  {% if match.notes %}
+  <section class="pt-6">
+    <h2 class="label-cap mb-2 block">Notes</h2>
+    <span class="rule mb-3"></span>
+    <p class="text-body text-muted-foreground">{{ match.notes }}</p>
+  </section>
+  {% endif %}
+
+  <section class="pt-6">
+    <a href="{% url 'pingpong:match_edit' match.pk %}" class="btn-ghost w-full">
+      {% icon "pencil" size="sm" %}
+      Edit this match
+    </a>
+  </section>
 </div>
+
+{# ---------------------------------------------------------------- #}
+{# The confirm bar. Pinned above the safe area with a 2px red top     #}
+{# edge, 52px targets, flush-left labels. Rendered only when this     #}
+{# viewer actually has a decision to make.                            #}
+{# ---------------------------------------------------------------- #}
+{% if viewer_can_confirm %}
+<div class="fixed inset-x-0 bottom-tabbar z-20 border-t-2 border-paddle bg-court-overlay p-3 lg:bottom-0 lg:left-64">
+  <div class="mx-auto flex max-w-3xl gap-px">
+    <form method="post" action="{% url 'pingpong:match_confirm' match.pk %}" class="flex-1">
+      {% csrf_token %}
+      <button type="submit" class="btn-confirm min-h-[52px] w-full text-[16px]">
+        Confirm {{ match.team1_score }}–{{ match.team2_score }}
+      </button>
+    </form>
+    <a href="{% url 'pingpong:match_edit' match.pk %}" class="btn-ghost min-h-[52px] text-[14px]">Dispute</a>
+  </div>
+</div>
+{% endif %}
 {% endblock %}

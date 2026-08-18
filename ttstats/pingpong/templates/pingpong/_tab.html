@@ -1,0 +1,17 @@
+{% load icon_tags nav_tags %}
+{% comment %}
+One tab. See _tab_bar.html.
+
+56px minimum, which is above the 44px floor because this is the control you hit
+while holding a paddle. The label is always shown -- an icon-only tab bar makes
+people guess, and "Cups" is not a universally understood trophy.
+{% endcomment %}
+
+{% nav_active match_tab as is_active %}
+
+<a href="{{ url }}"
+   {% if is_active %}aria-current="page"{% endif %}
+   class="flex min-h-[56px] flex-1 flex-col items-center justify-center gap-1 -mt-0.5 border-t-2 {% if is_active %}border-paddle bg-court-line text-bone{% else %}border-transparent text-muted-foreground{% endif %}">
+  {% icon icon_name size="md" %}
+  <span class="text-[10px] font-extrabold uppercase tracking-[0.1em]">{{ label }}</span>
+</a>

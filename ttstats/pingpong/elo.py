@@ -5,6 +5,8 @@ Supports both 1v1 and 2v2 matches.
 """
 
 import logging
+from typing import NamedTuple
+
 from django.db import transaction
 
 logger = logging.getLogger(__name__)
@@ -92,6 +94,79 @@ def get_win_probability(side1_players, side2_players, match=None):
     return (t1_pct, t2_pct)
 
 
+class EloProjection(NamedTuple):
+    """What a match is worth, before anyone has agreed to it.
+
+    Carries the K-factors as well as the changes because EloHistory records the
+    K it was calculated with, and the only way to guarantee the recorded K is
+    the K actually used is to hand back both from one call.
+    """
+
+    side1_change: int
+    side2_change: int
+    side1_k: float
+    side2_k: float
+
+
+def projected_elo_changes(match):
+    """An EloProjection for a match, calculated but not applied.
+
+    The dashboard tells you what a pending confirmation costs -- "-16 Elo if
+    true" -- before you agree to it, and the match detail shows the same figure
+    next to each name. That number has to be the number that will actually be
+    written when both players confirm, so this is the arithmetic
+    `update_player_elo` uses rather than a second copy of it.
+
+    Zero changes when the match has no winner or a side is empty; a match
+    nobody has won yet moves nobody's rating.
+    """
+    from .models import Side
+
+    nothing = EloProjection(0, 0, 0.0, 0.0)
+
+    if not match.winner_side:
+        return nothing
+
+    team1_players = list(match.players_on(Side.ONE))
+    team2_players = list(match.players_on(Side.TWO))
+    if not team1_players or not team2_players:
+        return nothing
+
+    r1 = sum(p.elo_rating for p in team1_players) / len(team1_players)
+    r2 = sum(p.elo_rating for p in team2_players) / len(team2_players)
+
+    s1 = 1 if match.winner_side == Side.ONE else 0
+    s2 = 1 - s1
+
+    # For 2v2 the team K-factor is the average of its members', which
+    # preserves the new-player boost inside a team.
+    k1_list = [calculate_k_factor(match, p) for p in team1_players]
+    k2_list = [calculate_k_factor(match, p) for p in team2_players]
+    k1_team = sum(k1_list) / len(k1_list)
+    k2_team = sum(k2_list) / len(k2_list)
+
+    return EloProjection(
+        calculate_elo_change(r1, r2, s1, k1_team),
+        calculate_elo_change(r2, r1, s2, k2_team),
+        k1_team,
+        k2_team,
+    )
+
+
+def projected_elo_change_for(match, player):
+    """What this match is worth to one player, signed. 0 if they did not play."""
+    from .models import Side
+
+    if player is None:
+        return 0
+    projection = projected_elo_changes(match)
+    if any(p.pk == player.pk for p in match.players_on(Side.ONE)):
+        return projection.side1_change
+    if any(p.pk == player.pk for p in match.players_on(Side.TWO)):
+        return projection.side2_change
+    return 0
+
+
 def update_player_elo(match):
     """
     Calculate and update Elo ratings after match completion.
@@ -133,31 +208,11 @@ def update_player_elo(match):
             logger.error(f"Skipping Elo update for match {match.pk}: empty side found")
             return
 
-        if is_double:
-            # Team Elo is the average of its members
-            r1 = sum(p.elo_rating for p in team1_players) / len(team1_players)
-            r2 = sum(p.elo_rating for p in team2_players) / len(team2_players)
-        else:
-            # 1v1 Case
-            r1 = team1_players[0].elo_rating
-            r2 = team2_players[0].elo_rating
-
-        # 2. DETERMINE OUTCOME (1 = side 1 wins, 0 = side 2 wins)
-        s1 = 1 if match.winner_side == Side.ONE else 0
-        s2 = 1 - s1
-
-        # 3. CALCULATE K-FACTORS
-        # For 2v2, we average the K-factors of the players in the team
-        # This preserves the "new player boost" logic even in teams
-        k1_list = [calculate_k_factor(match, p) for p in team1_players]
-        k2_list = [calculate_k_factor(match, p) for p in team2_players]
-        
-        k1_team = sum(k1_list) / len(k1_list)
-        k2_team = sum(k2_list) / len(k2_list)
-
-        # 4. CALCULATE CHANGE
-        elo_change_1 = calculate_elo_change(r1, r2, s1, k1_team)
-        elo_change_2 = calculate_elo_change(r2, r1, s2, k2_team)
+        # 2-4. THE ARITHMETIC
+        # Shared with projected_elo_changes(), which is what the dashboard and
+        # match detail show as "-16 Elo if true". The figure the user is asked
+        # to agree to must be the figure that gets written.
+        elo_change_1, elo_change_2, k1_team, k2_team = projected_elo_changes(match)
 
         # 5. APPLY UPDATES TO TEAM 1
         for p in team1_players:

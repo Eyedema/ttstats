@@ -1,7 +1,9 @@
 {% extends "pingpong/base.html" %}
 {% load static %}
+{% load icon_tags %}
 
 {% block title %}Head to Head Statistics - Table Tennis Tracker{% endblock %}
+{% block nav_title %}Head to head{% endblock %}
 
 {% block content %}
 <div class="max-w-7xl mx-auto space-y-6">
@@ -12,12 +14,12 @@
     </div>
 
     <!-- Player Selection -->
-    <div class="rounded-lg border bg-white p-4 md:p-6">
+    <div class="rounded-lg border bg-card p-4 md:p-6">
         <form method="get" class="space-y-4">
             <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div class="space-y-2">
                     <label class="text-sm font-medium" for="player1">Player 1</label>
-                    <select name="player1" id="player1" class="flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring">
+                    <select name="player1" id="player1" class="flex h-12 w-full rounded-md border border-input bg-card px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring">
                         <option value="">Select Player 1...</option>
                         {% for player in all_players %}
                         <option value="{{ player.pk }}" {% if request.GET.player1 == player.pk|stringformat:"s" %}selected{% endif %}>
@@ -29,7 +31,7 @@
 
                 <div class="space-y-2">
                     <label class="text-sm font-medium" for="player2">Player 2</label>
-                    <select name="player2" id="player2" class="flex h-12 w-full rounded-md border border-input bg-white px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring">
+                    <select name="player2" id="player2" class="flex h-12 w-full rounded-md border border-input bg-card px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-ring">
                         <option value="">Select Player 2...</option>
                         {% for player in all_players %}
                         <option value="{{ player.pk }}" {% if request.GET.player2 == player.pk|stringformat:"s" %}selected{% endif %}>
@@ -41,7 +43,7 @@
 
                 <div class="flex items-end">
                     <button type="submit" class="w-full inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-3 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors min-h-[48px]">
-                        <img src="{% static 'pingpong/icons/chart-spline.svg' %}" class="w-4 h-4 invert" alt="">
+                        {% icon "chart-spline" css="w-4 h-4" %}
                         Compare Players
                     </button>
                 </div>
@@ -53,7 +55,7 @@
         {% if has_2v2_matches %}
         <div class="rounded-lg border bg-warning/10 p-6">
             <div class="flex items-start gap-3">
-                <img src="{% static 'pingpong/icons/info.svg' %}" class="w-5 h-5 text-warning" alt="">
+                {% icon "info" css="w-5 h-5 text-warning" %}
                 <div>
                     <p class="font-semibold text-sm">Limited Data</p>
                     <p class="text-xs mt-1">Head-to-head statistics only include singles (1v1) matches. Doubles matches are excluded from this comparison.</p>
@@ -64,7 +66,7 @@
 
         <!-- Win Probability Prediction -->
         {% if player1_win_pct is not None %}
-        <div class="rounded-lg border bg-white p-4 md:p-6">
+        <div class="rounded-lg border bg-card p-4 md:p-6">
             <h3 class="text-sm font-medium text-muted-foreground mb-3">Predicted Outcome (Current Elo)</h3>
             <div class="flex justify-between text-sm font-medium mb-1.5">
                 <span>{{ player1 }} {{ player1_win_pct }}%</span>
@@ -87,7 +89,7 @@
             <!-- Desktop Layout -->
             <div class="hidden md:grid md:grid-cols-3 gap-4 items-center">
                 <div class="text-center">
-                    <div class="w-20 h-20 rounded-full bg-white/20 flex items-center justify-center mx-auto mb-2">
+                    <div class="w-20 h-20 rounded-full bg-bone/20 flex items-center justify-center mx-auto mb-2">
                         <span class="text-3xl font-bold">{{ player1.name|slice:":1"|upper }}</span>
                     </div>
                     <h3 class="text-2xl font-bold">{{ player1 }}</h3>
@@ -97,7 +99,7 @@
                     <div class="text-lg opacity-90">{{ total_matches }} Match{{ total_matches|pluralize:"es" }}</div>
                 </div>
                 <div class="text-center">
-                    <div class="w-20 h-20 rounded-full bg-white/20 flex items-center justify-center mx-auto mb-2">
+                    <div class="w-20 h-20 rounded-full bg-bone/20 flex items-center justify-center mx-auto mb-2">
                         <span class="text-3xl font-bold">{{ player2.name|slice:":1"|upper }}</span>
                     </div>
                     <h3 class="text-2xl font-bold">{{ player2 }}</h3>
@@ -108,7 +110,7 @@
             <div class="md:hidden space-y-4">
                 <div class="flex items-center justify-between">
                     <div class="flex items-center gap-3">
-                        <div class="w-12 h-12 rounded-full bg-white/20 flex items-center justify-center">
+                        <div class="w-12 h-12 rounded-full bg-bone/20 flex items-center justify-center">
                             <span class="text-xl font-bold">{{ player1.name|slice:":1"|upper }}</span>
                         </div>
                         <h3 class="text-lg font-bold">{{ player1 }}</h3>
@@ -120,7 +122,7 @@
                 </div>
                 <div class="flex items-center justify-between">
                     <div class="flex items-center gap-3">
-                        <div class="w-12 h-12 rounded-full bg-white/20 flex items-center justify-center">
+                        <div class="w-12 h-12 rounded-full bg-bone/20 flex items-center justify-center">
                             <span class="text-xl font-bold">{{ player2.name|slice:":1"|upper }}</span>
                         </div>
                         <h3 class="text-lg font-bold">{{ player2 }}</h3>
@@ -131,9 +133,9 @@
 
         <!-- Match Record -->
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-6">
-            <div class="rounded-lg border bg-white p-4 md:p-6">
+            <div class="rounded-lg border bg-card p-4 md:p-6">
                 <h3 class="text-base md:text-lg font-semibold mb-4 flex items-center gap-2">
-                    <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-5 h-5" alt="">
+                    {% icon "trophy" css="w-5 h-5" %}
                     Match Record
                 </h3>
                 <div class="space-y-4">
@@ -185,9 +187,9 @@
                 </div>
             </div>
 
-            <div class="rounded-lg border bg-white p-4 md:p-6">
+            <div class="rounded-lg border bg-card p-4 md:p-6">
                 <h3 class="text-base md:text-lg font-semibold mb-4 flex items-center gap-2">
-                    <img src="{% static 'pingpong/icons/hash.svg' %}" class="w-5 h-5" alt="">
+                    {% icon "hash" css="w-5 h-5" %}
                     Game Record
                 </h3>
                 <div class="space-y-4">
@@ -243,25 +245,25 @@
 
         <!-- Stats Grid -->
         <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
-            <div class="rounded-lg border bg-white p-4 md:p-6">
+            <div class="rounded-lg border bg-card p-4 md:p-6">
                 <h4 class="text-xs md:text-sm font-medium text-muted-foreground mb-2">Close Games</h4>
                 <div class="text-2xl md:text-3xl font-bold">{{ close_games }}</div>
                 <p class="text-xs text-muted-foreground mt-1">Won by ≤2</p>
             </div>
 
-            <div class="rounded-lg border bg-white p-4 md:p-6">
+            <div class="rounded-lg border bg-card p-4 md:p-6">
                 <h4 class="text-xs md:text-sm font-medium text-muted-foreground mb-2 truncate">{{ player1.name|truncatechars:10 }} Dom.</h4>
                 <div class="text-2xl md:text-3xl font-bold text-success">{{ player1_dominant }}</div>
                 <p class="text-xs text-muted-foreground mt-1">Won by ≥5</p>
             </div>
 
-            <div class="rounded-lg border bg-white p-4 md:p-6">
+            <div class="rounded-lg border bg-card p-4 md:p-6">
                 <h4 class="text-xs md:text-sm font-medium text-muted-foreground mb-2 truncate">{{ player2.name|truncatechars:10 }} Dom.</h4>
                 <div class="text-2xl md:text-3xl font-bold text-success">{{ player2_dominant }}</div>
                 <p class="text-xs text-muted-foreground mt-1">Won by ≥5</p>
             </div>
 
-            <div class="rounded-lg border bg-white p-4 md:p-6">
+            <div class="rounded-lg border bg-card p-4 md:p-6">
                 <h4 class="text-xs md:text-sm font-medium text-muted-foreground mb-2">Avg Diff</h4>
                 <div class="text-2xl md:text-3xl font-bold">{{ avg_point_diff|floatformat:1 }}</div>
                 <p class="text-xs text-muted-foreground mt-1">Points/game</p>
@@ -269,9 +271,9 @@
         </div>
 
         <!-- Recent Form -->
-        <div class="rounded-lg border bg-white p-4 md:p-6">
+        <div class="rounded-lg border bg-card p-4 md:p-6">
             <h3 class="text-base md:text-lg font-semibold mb-4 flex items-center gap-2">
-                <img src="{% static 'pingpong/icons/activity.svg' %}" class="w-5 h-5" alt="">
+                {% icon "activity" css="w-5 h-5" %}
                 Recent Form (Last {{ recent_total }})
             </h3>
             <div class="grid grid-cols-2 gap-3 md:gap-4">
@@ -287,9 +289,9 @@
         </div>
 
         <!-- Point Difference Chart -->
-        <div class="rounded-lg border bg-white p-4 md:p-6">
+        <div class="rounded-lg border bg-card p-4 md:p-6">
             <h3 class="text-base md:text-lg font-semibold mb-4 flex items-center gap-2">
-                <img src="{% static 'pingpong/icons/trending-up.svg' %}" class="w-5 h-5" alt="">
+                {% icon "trending-up" css="w-5 h-5" %}
                 Point Differences Per Game
             </h3>
             <div class="w-full overflow-x-auto -mx-4 md:mx-0 px-4 md:px-0">
@@ -318,10 +320,10 @@
         </div>
 
         <!-- Match History -->
-        <div class="rounded-lg border bg-white">
+        <div class="rounded-lg border bg-card">
             <div class="p-4 md:p-6 border-b">
                 <h3 class="text-base md:text-lg font-semibold flex items-center gap-2">
-                    <img src="{% static 'pingpong/icons/history.svg' %}" class="w-5 h-5" alt="">
+                    {% icon "history" css="w-5 h-5" %}
                     Match History
                 </h3>
             </div>
@@ -352,7 +354,7 @@
                             <td class="px-6 py-4 whitespace-nowrap">
                                 {% if match.winner_side %}
                                 <span class="inline-flex items-center gap-1 text-sm font-medium {% if match.player1_won %}text-success{% else %}text-primary{% endif %}">
-                                    <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-4 h-4" alt="">
+                                    {% icon "trophy" css="w-4 h-4" %}
                                     {{ match.winner_label }}
                                 </span>
                                 {% endif %}
@@ -389,14 +391,14 @@
                         </div>
                         {% if match.winner_side %}
                         <span class="inline-flex items-center gap-1 text-sm font-medium {% if match.player1_won %}text-success{% else %}text-primary{% endif %}">
-                            <img src="{% static 'pingpong/icons/trophy.svg' %}" class="w-4 h-4" alt="">
+                            {% icon "trophy" css="w-4 h-4" %}
                             {{ match.winner_label|truncatechars:12 }}
                         </span>
                         {% endif %}
                     </div>
                     <a href="{% url 'pingpong:match_detail' match.pk %}" class="flex items-center justify-center gap-2 text-sm font-medium hover:underline text-primary py-2 border-t min-h-[44px]">
                         View Details
-                        <img src="{% static 'pingpong/icons/arrow-right.svg' %}" class="w-4 h-4" alt="">
+                        {% icon "arrow-right" css="w-4 h-4" %}
                     </a>
                 </div>
                 {% endfor %}
@@ -405,12 +407,12 @@
 
         {% else %}
         <!-- No Data -->
-        <div class="rounded-lg border bg-white p-8 md:p-12 text-center">
-            <img src="{% static 'pingpong/icons/chart-spline.svg' %}" class="w-16 h-16 mx-auto text-muted-foreground mb-4 opacity-30" alt="">
+        <div class="rounded-lg border bg-card p-8 md:p-12 text-center">
+            {% icon "chart-spline" css="w-16 h-16 mx-auto text-muted-foreground mb-4 opacity-30" %}
             <h3 class="text-lg md:text-xl font-semibold mb-2">No Matches Found</h3>
             <p class="text-muted-foreground mb-6 text-sm md:text-base">{{ player1 }} and {{ player2 }} haven't played each other yet.</p>
             <a href="{% url 'pingpong:match_add' %}" class="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors min-h-[44px]">
-                <img src="{% static 'pingpong/icons/plus.svg' %}" class="w-4 h-4 invert" alt="">
+                {% icon "plus" css="w-4 h-4" %}
                 Record First Match
             </a>
         </div>

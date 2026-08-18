@@ -23,7 +23,17 @@ TEMPLATES = ROOT / "ttstats/pingpong/templates"
 FORMS = ROOT / "ttstats/pingpong/forms.py"
 
 # class="..." and class='...' in templates, plus the Python widget class strings.
-CLASS_ATTR = re.compile(r"""class\s*=\s*["']([^"']*)["']""")
+# The negative lookbehind skips Alpine's `:class` / `x-bind:class`, whose value
+# is a JavaScript expression rather than a list of classes -- scanning it as one
+# reports `currentServer` and `state.team1_games` as missing utilities and
+# buries the real findings. The literal class names inside those expressions are
+# picked up separately by ALPINE_CLASS below, which is what Tailwind's own
+# scanner sees too.
+CLASS_ATTR = re.compile(r"""(?<![:\w-])class\s*=\s*["']([^"']*)["']""")
+# Quoted string literals inside an Alpine class binding: the only parts of the
+# expression that are actually class names.
+ALPINE_CLASS = re.compile(r'(?::|x-bind:)class\s*=\s*"([^"]*)"')
+ALPINE_LITERAL = re.compile(r"'([^']*)'")
 # Django tags inside a class attribute. Stripping the delimiters and their
 # contents leaves the literal classes from every branch, which is what we want:
 # `{% if x %}bg-success{% else %}bg-muted{% endif %}` -> `bg-success bg-muted`.
@@ -67,6 +77,9 @@ def used_classes() -> set[str]:
         for match in CLASS_ATTR.finditer(text):
             for token in match.group(1).split():
                 found.add(token)
+        for match in ALPINE_CLASS.finditer(text):
+            for literal in ALPINE_LITERAL.findall(match.group(1)):
+                found.update(literal.split())
         # forms.py builds bare class strings rather than class="..." attrs.
         # Parse it instead of scanning lines -- a line-based reader picks up
         # dict keys like `'class': INPUT_CSS` as though they were classes.

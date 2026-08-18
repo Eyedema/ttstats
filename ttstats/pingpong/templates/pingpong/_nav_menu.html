@@ -1,0 +1,70 @@
+{% load icon_tags %}
+{% comment %}
+The navigation menu, in tiers. Rendered by BOTH the mobile drawer and the
+desktop sidebar from this one file, so the two cannot drift -- they used to be
+two hand-maintained copies of the same nine links and had already diverged (the
+sidebar highlighted the active page; the drawer did not).
+
+Three tiers, ranked by how often you need them:
+
+  Daily      -- the tab destinations, so the drawer is never the only way to
+                reach them. Play is deliberately absent: it is a button in the
+                tab bar, not a place you browse to from a menu.
+  Dig around -- reachable, not shouting. These used to sit in the same flat
+                list as Dashboard, which is how a nine-link sidebar happens.
+  Settings   -- Notifications, Passkeys and Admin cost nothing here and
+                interrupt nothing.
+
+The tier heading is a 10px/+0.14em label; Daily's is red because it is the tier
+you are almost always after.
+{% endcomment %}
+
+<div class="py-4">
+  <p class="px-4 pb-2 text-[10px] font-extrabold uppercase tracking-[0.14em] text-paddle">Daily</p>
+
+  {% url 'pingpong:dashboard' as u %}
+  {% include 'pingpong/_nav_row.html' with url=u icon_name='layout-grid' label='Today' match_tab='today' %}
+  {% url 'pingpong:leaderboard' as u %}
+  {% include 'pingpong/_nav_row.html' with url=u icon_name='chart-column' label='Table' match_tab='table' %}
+  {% url 'pingpong:championship_list' as u %}
+  {% include 'pingpong/_nav_row.html' with url=u icon_name='trophy' label='Cups' match_tab='cups' badge=live_championships_count badge_tone='ball' %}
+
+  <span class="mx-4 my-4 block h-0.5 bg-court-edge"></span>
+
+  <p class="px-4 pb-2 text-[10px] font-extrabold uppercase tracking-[0.14em] text-muted-foreground">Dig around</p>
+
+  {% url 'pingpong:head_to_head' as u %}
+  {% include 'pingpong/_nav_row.html' with url=u icon_name='chart-spline' label='Head to head' match_urls='head_to_head' %}
+  {% url 'pingpong:calendar' as u %}
+  {% include 'pingpong/_nav_row.html' with url=u icon_name='calendar' label='Calendar' match_urls='calendar scheduled_match_detail' %}
+  {% url 'pingpong:player_list' as u %}
+  {% include 'pingpong/_nav_row.html' with url=u icon_name='users' label='Everyone' match_urls='player_list player_detail player_add player_edit' %}
+  {% url 'pingpong:match_list' as u %}
+  {% include 'pingpong/_nav_row.html' with url=u icon_name='list' label='All matches' match_urls='match_list match_detail' badge=pending_matches_count %}
+
+  <span class="mx-4 my-4 block h-0.5 bg-court-edge"></span>
+
+  <p class="px-4 pb-2 text-[10px] font-extrabold uppercase tracking-[0.14em] text-muted-foreground">Settings</p>
+
+  {% url 'pingpong:notification_settings' as u %}
+  {% include 'pingpong/_nav_row.html' with url=u icon_name='bell' label='Notifications' match_urls='notification_settings' %}
+  {% url 'pingpong:passkey_management' as u %}
+  {% include 'pingpong/_nav_row.html' with url=u icon_name='key' label='Passkeys' match_urls='passkey_management' %}
+  {% if user.is_staff %}
+    {% url 'admin:index' as u %}
+    {% include 'pingpong/_nav_row.html' with url=u icon_name='settings' label='Admin' %}
+  {% endif %}
+
+  {% comment %}
+  Log out is a POST, so it is a form rather than a link -- but it has to read
+  as the same kind of row as the ones above it.
+  {% endcomment %}
+  <form method="post" action="{% url 'logout' %}">
+    {% csrf_token %}
+    <button type="submit"
+            class="flex w-full min-h-[44px] items-center gap-3 py-2 pl-5 pr-4 text-left text-[15px] font-semibold text-bone-dim hover:bg-court-line">
+      {% icon "log-out" css="text-muted-foreground" size="sm" %}
+      <span>Log out</span>
+    </button>
+  </form>
+</div>

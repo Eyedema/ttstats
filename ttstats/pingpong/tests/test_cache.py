@@ -251,29 +251,31 @@ class TestCachedContextProcessor:
 class TestCachedDashboard:
     """Test dashboard caching."""
 
-    def test_dashboard_caches_player_count(self):
-        """Dashboard should cache total players."""
+    def test_dashboard_caches_recent_matches(self):
+        """The club-wide 'Lately' list is shared, so it is cached once.
+
+        The per-player blocks above it are not: a confirmation you have already
+        agreed to must not keep appearing under "Waiting on you" for five
+        minutes, and a live score is only worth showing if it is this second's.
+        """
         u, p = _verified_user_with_player()
         c = _login_client(u)
 
-        assert cache.get('dashboard_total_players') is None
+        assert cache.get('dashboard_recent_matches') is None
 
         resp = c.get(reverse("pingpong:dashboard"))
         assert resp.status_code == 200
 
-        # Should be cached now
-        assert cache.get('dashboard_total_players') is not None
+        assert cache.get('dashboard_recent_matches') is not None
 
-    def test_dashboard_uses_cached_match_count(self):
-        """Dashboard should use cached confirmed match count."""
+    def test_dashboard_uses_the_cached_recent_matches(self):
         u, p = _verified_user_with_player()
         c = _login_client(u)
 
-        # Pre-populate cache
-        cache.set('dashboard_total_matches', 999, 600)
+        cache.set('dashboard_recent_matches', [], 300)
 
         resp = c.get(reverse("pingpong:dashboard"))
-        assert resp.context['total_matches'] == 999
+        assert resp.context['recent_matches'] == []
 
 
 @pytest.mark.django_db

@@ -57,13 +57,20 @@ def _login_client(user):
 @pytest.mark.django_db
 class TestDashboardView:
     def test_authenticated_access(self):
+        """Today carries the blocks that can need you, not club-wide totals.
+
+        `total_players` and `total_matches` are deliberately gone: neither is
+        actionable and neither changes between two visits a minute apart, so
+        the overhaul spends that space on confirmations and rivalries instead.
+        """
         u, _ = _verified_user_with_player()
         c = _login_client(u)
         resp = c.get(reverse("pingpong:dashboard"))
         assert resp.status_code == 200
-        assert "total_players" in resp.context
-        assert "total_matches" in resp.context
-        assert "recent_matches" in resp.context
+        for key in ("live_matches", "pending_confirmations", "rivalries", "fixtures", "recent_matches"):
+            assert key in resp.context
+        assert "total_players" not in resp.context
+        assert "total_matches" not in resp.context
 
     def test_unauthenticated_redirect(self):
         c = Client()
@@ -124,6 +131,43 @@ class TestPlayerDetailView:
         assert resp.context["total_matches"] == 0
         assert resp.context["wins"] == 0
         assert resp.context["losses"] == 0
+
+    def test_recent_matches_are_from_the_viewed_players_perspective(self):
+        """Opponent name and score order must follow the player being viewed.
+
+        The template used to branch on `match.player1 == player`, an attribute
+        the participant-based model dropped. It read as empty for every row, so
+        the "vs" link named the viewed player themselves and the score printed
+        backwards whenever they were on side one.
+        """
+        u, p = _verified_user_with_player()
+        p.name = "Viewed Vic"
+        p.save()
+        other = PlayerFactory(with_user=True, name="Rival Rita")
+
+        # p is on side ONE and wins 3-0.
+        m = MatchFactory(player1=p, player2=other)
+        for i, (a, b) in enumerate([(11, 5), (11, 9), (11, 7)], start=1):
+            GameFactory(match=m, game_number=i, team1_score=a, team2_score=b)
+        m.refresh_from_db()
+        confirm_match(m)
+
+        c = _login_client(u)
+        resp = c.get(reverse("pingpong:player_detail", args=[p.pk]))
+        row = resp.context["matches"][0]
+
+        assert row.opponent_player == other
+        assert row.opponent_label == "Rival Rita"
+        assert (row.p1_score, row.p2_score) == (3, 0)
+        assert row.player_won is True
+
+        # And from the opponent's page the same match mirrors.
+        resp = c.get(reverse("pingpong:player_detail", args=[other.pk]))
+        row = resp.context["matches"][0]
+        assert row.opponent_player == p
+        assert row.opponent_label == "Viewed Vic"
+        assert (row.p1_score, row.p2_score) == (0, 3)
+        assert row.player_won is False
 
     def test_streak_calculation(self):
         u, p = _verified_user_with_player()
@@ -672,6 +716,53 @@ class TestMatchUpdateView:
         resp = c.get(reverse("pingpong:match_edit", args=[m.pk]))
         assert resp.status_code == 200
         assert resp.context.get("is_complete") is True
+
+    def test_completed_match_shows_player_names_and_winner(self):
+        """The read-only summary must name both sides and the winner.
+
+        It used to read `object.player1` / `object.player2` / `object.winner`,
+        which the participant-based model no longer has -- so the page rendered
+        a bare " vs " and an empty Winner line, silently.
+        """
+        u, p = _verified_user_with_player()
+        other = PlayerFactory(with_user=True, name="Rival Rita")
+        m = MatchFactory(player1=p, player2=other, best_of=3)
+        GameFactory(match=m, game_number=1, team1_score=11, team2_score=5)
+        GameFactory(match=m, game_number=2, team1_score=11, team2_score=9)
+        m.refresh_from_db()
+
+        c = _login_client(u)
+        resp = c.get(reverse("pingpong:match_edit", args=[m.pk]))
+        html = resp.content.decode()
+
+        assert resp.context["is_complete"] is True
+        assert f"{p.name} vs Rival Rita" in html
+        assert m.winner_label == p.name
+        # The winner line renders the name, not an empty trophy.
+        assert "vs  </p>" not in html
+        assert html.count(p.name) >= 2
+
+    def test_completed_doubles_shows_both_side_labels(self):
+        u, p = _verified_user_with_player()
+        mate = PlayerFactory(with_user=True, name="Partner Pia")
+        o1 = PlayerFactory(with_user=True, name="Foe Fay")
+        o2 = PlayerFactory(with_user=True, name="Foe Fred")
+        m = MatchFactory(
+            team1_players=[p, mate], team2_players=[o1, o2],
+            is_double=True, best_of=3,
+        )
+        GameFactory(match=m, game_number=1, team1_score=5, team2_score=11)
+        GameFactory(match=m, game_number=2, team1_score=9, team2_score=11)
+        m.refresh_from_db()
+
+        c = _login_client(u)
+        resp = c.get(reverse("pingpong:match_edit", args=[m.pk]))
+        html = resp.content.decode()
+
+        assert m.side1_label in html
+        assert m.side2_label in html
+        assert m.winner_label == m.side2_label
+        assert m.winner_label
 
     def test_non_participant_cannot_edit(self):
         """A user who isn't in either team must not be able to edit the match."""

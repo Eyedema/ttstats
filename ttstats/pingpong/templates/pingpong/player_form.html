@@ -1,28 +1,30 @@
 {% extends "pingpong/base.html" %}
 {% load static %}
+{% load icon_tags %}
 
 {% block title %}{% if object %}Edit {{ object }}{% else %}Add New Player{% endif %} - Table Tennis Tracker{% endblock %}
+{% block nav_title %}Player{% endblock %}
 
 {% block content %}
 <div class="max-w-3xl mx-auto space-y-6">
     <!-- Back button -->
     <div>
         <a href="{% url 'pingpong:player_list' %}" class="inline-flex items-center gap-2 text-sm font-medium hover:underline">
-            <img src="{% static 'pingpong/icons/arrow-left.svg' %}" class="w-4 h-4" alt="">
+            {% icon "arrow-left" css="w-4 h-4" %}
             Back to Players
         </a>
     </div>
 
     <!-- Form Card -->
-    <div class="rounded-lg border bg-white">
+    <div class="rounded-lg border bg-card">
         <div class="p-6">
             <!-- Header -->
             <div class="flex items-center gap-4 mb-6 pb-6 border-b">
                 <div class="w-14 h-14 rounded-full bg-primary text-primary-foreground flex items-center justify-center">
                     {% if object %}
-                    <img src="{% static 'pingpong/icons/pencil.svg' %}" class="w-6 h-6 invert" alt="">
+                    {% icon "pencil" css="w-6 h-6" %}
                     {% else %}
-                    <img src="{% static 'pingpong/icons/user-plus.svg' %}" class="w-6 h-6 invert" alt="">
+                    {% icon "user-plus" css="w-6 h-6" %}
                     {% endif %}
                 </div>
                 <div>
@@ -39,7 +41,7 @@
             {% if form.non_field_errors %}
             <div class="rounded-lg border border-destructive bg-destructive/10 p-4 mb-6">
                 <div class="flex items-center gap-2 text-destructive">
-                    <img src="{% static 'pingpong/icons/circle-alert.svg' %}" class="w-5 h-5" alt="">
+                    {% icon "circle-alert" css="w-5 h-5" %}
                     <span class="font-medium">{{ form.non_field_errors }}</span>
                 </div>
             </div>
@@ -60,7 +62,7 @@
                         id="id_name"
                         value="{{ form.name.value|default:'' }}"
                         placeholder="e.g., John Doe" 
-                        class="flex h-10 w-full rounded-md border border-input bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.name.errors %}border-destructive{% endif %}" 
+                        class="flex h-10 w-full rounded-md border border-input bg-card px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.name.errors %}border-destructive{% endif %}" 
                         required
                     />
                     {% if form.name.errors %}
@@ -84,7 +86,7 @@
                         id="id_nickname"
                         value="{{ form.nickname.value|default:'' }}"
                         placeholder="e.g., The Paddle Master" 
-                        class="flex h-10 w-full rounded-md border border-input bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.nickname.errors %}border-destructive{% endif %}" 
+                        class="flex h-10 w-full rounded-md border border-input bg-card px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.nickname.errors %}border-destructive{% endif %}" 
                     />
                     {% if form.nickname.errors %}
                     {% for error in form.nickname.errors %}
@@ -101,7 +103,7 @@
                     <select 
                         name="playing_style" 
                         id="id_playing_style"
-                        class="flex h-10 w-full rounded-md border border-input bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.playing_style.errors %}border-destructive{% endif %}"
+                        class="flex h-10 w-full rounded-md border border-input bg-card px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.playing_style.errors %}border-destructive{% endif %}"
                     >
                         <option value="normal" {% if form.playing_style.value == 'normal' or not form.playing_style.value %}selected{% endif %}>
                             Normal
@@ -132,7 +134,7 @@
                         name="notes" 
                         id="id_notes"
                         rows="5"
-                        class="flex w-full rounded-md border border-input bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.notes.errors %}border-destructive{% endif %}" 
+                        class="flex w-full rounded-md border border-input bg-card px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 {% if form.notes.errors %}border-destructive{% endif %}" 
                         placeholder="Strengths: Strong forehand, quick reflexes&#10;Weaknesses: Struggles with backhand loops&#10;Strategy: Attack their backhand early"
                     >{{ form.notes.value|default:'' }}</textarea>
                     {% if form.notes.errors %}
@@ -148,12 +150,12 @@
 
                 <!-- Form Actions -->
                 <div class="flex gap-3 justify-end">
-                    <a href="{% url 'pingpong:player_list' %}" class="inline-flex items-center justify-center gap-2 rounded-md border bg-white px-4 py-2 text-sm font-medium hover:bg-secondary transition-colors">
-                        <img src="{% static 'pingpong/icons/x.svg' %}" class="w-4 h-4" alt="">
+                    <a href="{% url 'pingpong:player_list' %}" class="inline-flex items-center justify-center gap-2 rounded-md border bg-card px-4 py-2 text-sm font-medium hover:bg-secondary transition-colors">
+                        {% icon "x" css="w-4 h-4" %}
                         Cancel
                     </a>
                     <button type="submit" class="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors">
-                        <img src="{% static 'pingpong/icons/check.svg' %}" class="w-4 h-4 invert" alt="">
+                        {% icon "check" css="w-4 h-4" %}
                         {% if object %}Update Player{% else %}Create Player{% endif %}
                     </button>
                 </div>
@@ -164,7 +166,7 @@
     <!-- Help Card -->
     <div class="rounded-lg border border-primary/20 bg-primary/5 p-4">
         <div class="flex gap-3">
-            <img src="{% static 'pingpong/icons/info.svg' %}" class="w-5 h-5 text-primary flex-shrink-0" alt="">
+            {% icon "info" css="w-5 h-5 text-primary flex-shrink-0" %}
             <div>
                 <h3 class="font-semibold text-sm mb-1">Quick Tips</h3>
                 <ul class="text-sm text-muted-foreground space-y-1 list-disc list-inside">

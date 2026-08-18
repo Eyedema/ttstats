@@ -1,287 +1,212 @@
 {% extends "pingpong/base.html" %}
-{% load static %}
+{% load icon_tags player_tags %}
 
-{% block title %}Dashboard - Table Tennis Tracker{% endblock %}
+{% block title %}Today - TTStats{% endblock %}
+{% block nav_title %}Today{% endblock %}
+
+{% comment %}
+Today: three things, ranked by whether they need you.
+
+The old dashboard led with Total Matches and Active Players inside two large
+cards. Neither is actionable and neither changes between two visits a minute
+apart, so both are gone -- along with the "Welcome back" line, which spent the
+most valuable strip of the screen saying nothing.
+
+What is here, in order: a match you are scoring right now, a result somebody is
+waiting for you to agree to, then the rivalries and fixtures that are merely
+interesting. Each block is a 11px/+0.14em label over a 2px rule; rows that are
+about a *person* carry that person's hue as a 4px left bar, so you read who
+before you read what.
+{% endcomment %}
 
 {% block content %}
-<div class="max-w-7xl mx-auto space-y-6">
-    {% if live_matches %}
-    <!-- Resume live match banner (KAN-11) -->
-    <div
-        x-data="liveResumeBanner({{ live_matches|length }})"
-        x-show="visibleCount > 0"
-        x-cloak
-        class="space-y-3"
-    >
-        {% for lm in live_matches %}
-        <div
-            x-show="!dismissed.includes({{ lm.pk }})"
-            class="rounded-lg border border-primary/40 bg-primary/5 p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3"
-            data-testid="live-resume-banner"
-        >
-            <div class="flex items-start gap-3">
-                <span class="inline-block h-3 w-3 mt-2 rounded-full bg-red-500 animate-pulse flex-shrink-0"></span>
-                <div>
-                    <p class="font-semibold">Live match in progress vs {{ lm.opponent }}</p>
-                    <p class="text-sm text-muted-foreground">
-                        Game {{ lm.team1_games|add:lm.team2_games|add:1 }} / {{ lm.best_of }} ·
-                        Games {{ lm.team1_games }}-{{ lm.team2_games }} ·
-                        Current {{ lm.team1_points }}-{{ lm.team2_points }}
-                        {% if lm.last_point_at %} · last point {{ lm.last_point_at|timesince }} ago{% endif %}
-                    </p>
-                </div>
-            </div>
-            <div class="flex gap-2">
-                <a href="{{ lm.resume_url }}" class="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors min-h-[44px]">
-                    Resume
-                </a>
-                <button
-                    type="button"
-                    @click="dismiss({{ lm.pk }})"
-                    class="inline-flex items-center justify-center gap-2 rounded-md border bg-white px-4 py-2 text-sm font-medium hover:bg-secondary transition-colors min-h-[44px]"
-                    aria-label="Dismiss banner"
-                >
-                    Dismiss
-                </button>
-            </div>
-        </div>
-        {% endfor %}
+<div class="mx-auto max-w-3xl space-y-6">
+
+  {# ---------------------------------------------------------------- #}
+  {# Live now. Amber, and amber means nothing else anywhere in the app.#}
+  {# ---------------------------------------------------------------- #}
+  {% for lm in live_matches %}
+  <section class="surface-raised" data-testid="live-resume-banner">
+    <div class="flex items-center gap-2 border-b border-court-line px-3 py-2.5">
+      <span class="live-dot"></span>
+      <span class="label-live">Live now · game {{ lm.game_number }} of {{ lm.best_of }}</span>
     </div>
-    <script>
-    function liveResumeBanner(total) {
-        return {
-            dismissed: JSON.parse(localStorage.getItem('live_dismissed') || '[]'),
-            get visibleCount() {
-                return total - this.dismissed.length;
-            },
-            dismiss(pk) {
-                if (!this.dismissed.includes(pk)) this.dismissed.push(pk);
-                localStorage.setItem('live_dismissed', JSON.stringify(this.dismissed));
-            },
-        };
-    }
-    </script>
+
+    <div class="flex items-center gap-4 px-3 py-3">
+      <div class="min-w-0 flex-1">
+        <p class="text-[18px] font-extrabold leading-tight tracking-[-0.02em]">
+          <span class="n">{{ lm.team1_points }}–{{ lm.team2_points }}</span>
+          {% if lm.team1_points > lm.team2_points %}up on{% elif lm.team1_points < lm.team2_points %}down to{% else %}level with{% endif %}
+          {{ lm.opponent }}
+        </p>
+        <p class="mt-1 text-[12.5px] font-semibold text-muted-foreground">
+          Games {{ lm.team1_games }}–{{ lm.team2_games }}.
+          {% if lm.last_point_at %}Last point {{ lm.last_point_at|timesince }} ago.{% endif %}
+        </p>
+      </div>
+      {# The two sides in their own colours, so the card says who at a glance. #}
+      <div class="flex items-center gap-1.5">
+        <span class="{{ nav_player|hue }} hue-bar w-1 h-9"></span>
+        <span class="{{ lm.opponent_player|hue }} hue-bar w-1 h-9"></span>
+      </div>
+    </div>
+
+    <a href="{{ lm.resume_url }}" class="btn-paddle flex min-h-[48px] w-full justify-between border-t border-court-line">
+      <span>Resume scoring</span>
+      {% icon "arrow-right" size="md" %}
+    </a>
+  </section>
+  {% endfor %}
+
+  {# ---------------------------------------------------------------- #}
+  {# Waiting on you. Only matches this player still has to act on -- a #}
+  {# match waiting on the *other* player is not waiting on you, and    #}
+  {# listing it here is how a dashboard teaches people to ignore it.   #}
+  {# ---------------------------------------------------------------- #}
+  <section>
+    <div class="mb-2 flex items-baseline justify-between">
+      <h2 class="label-cap">Waiting on you</h2>
+      {% if pending_confirmations %}
+      <span class="n text-[11px] text-paddle">{{ pending_confirmations|length }}</span>
+      {% endif %}
+    </div>
+    <span class="rule mb-3"></span>
+
+    {% if pending_confirmations %}
+    <div class="space-y-2">
+      {% for row in pending_confirmations %}
+      <article class="surface flex">
+        <span class="{{ row.opponent|hue }} hue-bar w-1"></span>
+        <div class="min-w-0 flex-1 p-2.5">
+          <a href="{% url 'pingpong:match_detail' row.match.pk %}" class="block">
+            <p class="text-[15px] font-extrabold leading-tight">
+              {% if row.their_score > row.my_score %}
+                {{ row.opponent_label }} says they beat you {{ row.their_score }}–{{ row.my_score }}
+              {% else %}
+                {{ row.opponent_label }} logged your {{ row.my_score }}–{{ row.their_score }}
+              {% endif %}
+            </p>
+            <p class="mt-0.5 text-[12px] font-semibold text-muted-foreground">
+              {{ row.waiting_since|date:"D H:i" }}
+              {% if row.match.location %} · {{ row.match.location.name }}{% endif %}
+              {% if row.elo_if_true %} · {{ row.elo_if_true|stringformat:"+d" }} Elo if true{% endif %}
+            </p>
+          </a>
+
+          {% comment %}
+          Confirm is green because it is agreement, not an action of yours:
+          you are assenting to what someone else already said happened.
+          Dispute is outlined -- available, never inviting.
+          {% endcomment %}
+          <div class="mt-2 flex gap-px">
+            <form method="post" action="{% url 'pingpong:match_confirm' row.match.pk %}" class="flex-1">
+              {% csrf_token %}
+              <button type="submit" class="btn-confirm min-h-[40px] w-full text-[13px]">
+                {% if row.their_score > row.my_score %}Yeah, they did{% else %}That's right{% endif %}
+              </button>
+            </form>
+            <a href="{% url 'pingpong:match_detail' row.match.pk %}" class="btn-ghost min-h-[40px] text-[13px]">Dispute</a>
+          </div>
+        </div>
+      </article>
+      {% endfor %}
+    </div>
+
+    {% else %}
+    {# Empty states get a headline and one action, never an illustration. #}
+    <div class="surface p-4">
+      <div class="mb-3 flex gap-1" aria-hidden="true">
+        <span class="h-1 w-5 bg-court-line"></span>
+        <span class="h-1 w-5 bg-court-line"></span>
+        <span class="h-1 w-5 bg-court-line"></span>
+      </div>
+      <p class="text-heading">All square</p>
+      <p class="mt-1 text-[12.5px] font-semibold leading-relaxed text-muted-foreground">
+        Nobody owes you a confirmation. Suspiciously peaceful.
+      </p>
+      <a href="{% url 'pingpong:play' %}" class="btn-paddle mt-3 w-full">Go start something</a>
+    </div>
     {% endif %}
+  </section>
 
-    <!-- Welcome Header -->
-    <div>
-        <h2 class="text-2xl md:text-3xl font-bold tracking-tight">Welcome back, {{ user.first_name|default:user.username }}! 👋</h2>
-        <p class="text-muted-foreground mt-1 text-sm md:text-base">Here's what's happening with your table tennis matches</p>
+  {# ---------------------------------------------------------------- #}
+  {# Live rivalries. Ordered by how recently you played them, not by   #}
+  {# volume: a rivalry is live because it is ongoing.                  #}
+  {# ---------------------------------------------------------------- #}
+  {% if rivalries %}
+  <section>
+    <h2 class="label-cap mb-2 block">Live rivalries</h2>
+    <span class="rule mb-3"></span>
+
+    <div class="space-y-2">
+      {% for r in rivalries %}
+      <a href="{% url 'pingpong:head_to_head' %}?player1={{ nav_player.pk }}&amp;player2={{ r.player.pk }}"
+         class="surface flex items-center gap-2.5 px-3 py-2.5">
+        <span class="{{ r.player|hue }} hue-bar w-1 h-7"></span>
+        <span class="min-w-0 flex-1">
+          <span class="block text-[14px] font-extrabold leading-tight">{{ r.player.name }}</span>
+          <span class="block text-[11px] font-semibold text-muted-foreground">
+            {% if r.leading %}you lead{% elif r.wins == r.losses %}dead level{% else %}they lead{% endif %}
+            over your last {{ r.played }}
+          </span>
+        </span>
+        <span class="n text-[17px] {% if r.leading %}text-confirmed{% elif r.wins == r.losses %}text-bone{% else %}text-paddle{% endif %}">{{ r.wins }}–{{ r.losses }}</span>
+      </a>
+      {% endfor %}
     </div>
+  </section>
+  {% endif %}
 
-    <!-- Stats Grid - Mobile: 1 col, Tablet: 2 cols, Desktop: 3 cols -->
-    <div class="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
-        <!-- Total Matches -->
-        <div class="rounded-lg border bg-white p-4 md:p-6">
-            <div class="flex items-center justify-between space-x-4">
-                <div class="space-y-1">
-                    <p class="text-sm font-medium text-muted-foreground">Total Matches</p>
-                    <p class="text-2xl md:text-3xl font-bold">{{ total_matches }}</p>
-                    <p class="text-xs text-muted-foreground">All time</p>
-                </div>
-                <div class="w-10 h-10 md:w-12 md:h-12 bg-primary/10 rounded-full flex items-center justify-center flex-shrink-0">
-                    <img src="{% static 'pingpong/icons/clipboard-list.svg' %}" class="w-5 h-5 md:w-6 md:h-6" alt="">
-                </div>
-            </div>
-        </div>
+  {# ---------------------------------------------------------------- #}
+  {# On the calendar.                                                  #}
+  {# ---------------------------------------------------------------- #}
+  {% if fixtures %}
+  <section>
+    <h2 class="label-cap mb-2 block">On the calendar</h2>
+    <span class="rule mb-3"></span>
 
-        <!-- Total Players -->
-        <div class="rounded-lg border bg-white p-4 md:p-6">
-            <div class="flex items-center justify-between space-x-4">
-                <div class="space-y-1">
-                    <p class="text-sm font-medium text-muted-foreground">Active Players</p>
-                    <p class="text-2xl md:text-3xl font-bold">{{ total_players }}</p>
-                    <p class="text-xs text-muted-foreground">Registered</p>
-                </div>
-                <div class="w-10 h-10 md:w-12 md:h-12 bg-primary/10 rounded-full flex items-center justify-center flex-shrink-0">
-                    <img src="{% static 'pingpong/icons/users.svg' %}" class="w-5 h-5 md:w-6 md:h-6" alt="">
-                </div>
-            </div>
-        </div>
-
-        <!-- Quick Actions - Full width on mobile -->
-        <div class="rounded-lg border bg-white p-4 md:p-6 sm:col-span-2 lg:col-span-1">
-            <p class="text-sm font-medium text-muted-foreground mb-4">Quick Actions</p>
-            <div class="space-y-2">
-                <a href="{% url 'pingpong:match_add' %}" class="w-full inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2.5 md:py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors min-h-[44px]">
-                    <img src="{% static 'pingpong/icons/plus.svg' %}" class="w-4 h-4 invert" alt="">
-                    New Match
-                </a>
-                {% if user.is_staff %}
-                <a href="{% url 'pingpong:player_add' %}" class="w-full inline-flex items-center justify-center gap-2 rounded-md border bg-white px-4 py-2.5 md:py-2 text-sm font-medium hover:bg-secondary transition-colors min-h-[44px]">
-                    <img src="{% static 'pingpong/icons/user-plus.svg' %}" class="w-4 h-4" alt="">
-                    Add Player
-                </a>
-                {% endif %}
-            </div>
-        </div>
-    </div>
-
-    <!-- Recent Matches -->
-    <div class="rounded-lg border bg-white">
-        <div class="p-4 md:p-6 border-b">
-            <h3 class="text-lg md:text-xl font-semibold flex items-center gap-2">
-                <img src="{% static 'pingpong/icons/clock.svg' %}" class="w-5 h-5" alt="">
-                Recent Matches
-            </h3>
-        </div>
-        
-        {% if recent_matches %}
-        <!-- Desktop Table -->
-        <div class="hidden md:block overflow-x-auto">
-            <table class="w-full">
-                <thead class="border-b bg-muted/50">
-                    <tr>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Date</th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Match</th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Score</th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Type</th>
-                        <th class="px-6 py-3 text-right text-xs font-medium text-muted-foreground uppercase tracking-wider">Actions</th>
-                    </tr>
-                </thead>
-                <tbody class="divide-y">
-                    {% for match in recent_matches %}
-                    <tr class="hover:bg-muted/50">
-                        <td class="px-6 py-4 whitespace-nowrap">
-                            <div class="text-sm font-medium">{{ match.date_played|date:"M d, Y" }}</div>
-                            <div class="text-xs text-muted-foreground">{{ match.date_played|date:"H:i" }}</div>
-                        </td>
-                        <td class="px-6 py-4">
-                            {% if match.is_double %}
-                            <div class="text-sm">
-                                <div class="font-medium">{{ match.side1_label }} vs {{ match.side2_label }}</div>
-                                <div class="text-xs text-muted-foreground mt-0.5">
-                                    {% for p in match.side1_players %}{{ p.name|truncatechars:10 }}{% if not forloop.last %} & {% endif %}{% endfor %}
-                                    vs
-                                    {% for p in match.side2_players %}{{ p.name|truncatechars:10 }}{% if not forloop.last %} & {% endif %}{% endfor %}
-                                </div>
-                            </div>
-                            {% else %}
-                            <div class="flex items-center gap-2 text-sm">
-                                <span class="font-medium">{{ match.side1_label }}</span>
-                                <span class="text-muted-foreground">vs</span>
-                                <span class="font-medium">{{ match.side2_label }}</span>
-                            </div>
-                            {% endif %}
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap">
-                            <div class="flex items-center gap-2">
-                                <span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium {% if match.winner_side == 1 %}bg-success/10 text-success{% else %}bg-muted{% endif %}">
-                                    {{ match.team1_score }}
-                                </span>
-                                <span class="text-muted-foreground">-</span>
-                                <span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium {% if match.winner_side == 2 %}bg-success/10 text-success{% else %}bg-muted{% endif %}">
-                                    {{ match.team2_score }}
-                                </span>
-                            </div>
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap">
-                            {% if match.match_type == 'tournament' %}
-                            <span class="inline-flex items-center rounded-md bg-destructive/10 px-2 py-1 text-xs font-medium text-destructive">Tournament</span>
-                            {% elif match.match_type == 'practice' %}
-                            <span class="inline-flex items-center rounded-md bg-warning/10 px-2 py-1 text-xs font-medium text-warning">Practice</span>
-                            {% else %}
-                            <span class="inline-flex items-center rounded-md bg-muted px-2 py-1 text-xs font-medium">Casual</span>
-                            {% endif %}
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-right">
-                            <a href="{% url 'pingpong:match_detail' match.pk %}" class="inline-flex items-center gap-1 text-sm font-medium hover:underline">
-                                View
-                                <img src="{% static 'pingpong/icons/arrow-right.svg' %}" class="w-4 h-4" alt="">
-                            </a>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-
-        <!-- Mobile Cards -->
-        <div class="md:hidden divide-y">
-            {% for match in recent_matches %}
-            <a href="{% url 'pingpong:match_detail' match.pk %}" class="block p-4 hover:bg-muted/50 transition-colors active:bg-muted">
-                <!-- Date & Type Row -->
-                <div class="flex items-center justify-between mb-3">
-                    <div class="text-xs text-muted-foreground">
-                        {{ match.date_played|date:"M d, Y" }} • {{ match.date_played|date:"H:i" }}
-                    </div>
-                    {% if match.match_type == 'tournament' %}
-                    <span class="inline-flex items-center rounded-md bg-destructive/10 px-2 py-0.5 text-xs font-medium text-destructive">Tournament</span>
-                    {% elif match.match_type == 'practice' %}
-                    <span class="inline-flex items-center rounded-md bg-warning/10 px-2 py-0.5 text-xs font-medium text-warning">Practice</span>
-                    {% else %}
-                    <span class="inline-flex items-center rounded-md bg-muted px-2 py-0.5 text-xs font-medium">Casual</span>
-                    {% endif %}
-                </div>
-
-                <!-- Players & Score -->
-                {% if match.is_double %}
-                <div class="flex items-center justify-between">
-                    <div class="flex-1">
-                        <div class="flex items-center gap-2 mb-1">
-                            <div class="{% if match.winner_side != 1 %}text-muted-foreground{% endif %}">
-                                <div class="text-sm font-medium">{{ match.side1_label }}</div>
-                                <div class="text-xs text-muted-foreground">
-                                    {% for p in match.side1_players %}{{ p.name|truncatechars:12 }}{% if not forloop.last %} & {% endif %}{% endfor %}
-                                </div>
-                            </div>
-                            <span class="inline-flex items-center rounded-md px-2 py-0.5 text-xs font-bold {% if match.winner_side == 1 %}bg-success/10 text-success{% else %}bg-muted text-muted-foreground{% endif %}">
-                                {{ match.team1_score }}
-                            </span>
-                        </div>
-                        <div class="flex items-center gap-2">
-                            <div class="{% if match.winner_side != 2 %}text-muted-foreground{% endif %}">
-                                <div class="text-sm font-medium">{{ match.side2_label }}</div>
-                                <div class="text-xs text-muted-foreground">
-                                    {% for p in match.side2_players %}{{ p.name|truncatechars:12 }}{% if not forloop.last %} & {% endif %}{% endfor %}
-                                </div>
-                            </div>
-                            <span class="inline-flex items-center rounded-md px-2 py-0.5 text-xs font-bold {% if match.winner_side == 2 %}bg-success/10 text-success{% else %}bg-muted text-muted-foreground{% endif %}">
-                                {{ match.team2_score }}
-                            </span>
-                        </div>
-                    </div>
-                    <img src="{% static 'pingpong/icons/arrow-right.svg' %}" class="w-5 h-5 text-muted-foreground flex-shrink-0" alt="">
-                </div>
-                {% else %}
-                <div class="flex items-center justify-between">
-                    <div class="flex-1">
-                        <div class="flex items-center gap-2 mb-1">
-                            <span class="text-sm font-medium {% if match.winner_side == 1 %}text-foreground{% else %}text-muted-foreground{% endif %}">
-                                {{ match.side1_label }}
-                            </span>
-                            <span class="inline-flex items-center rounded-md px-2 py-0.5 text-xs font-bold {% if match.winner_side == 1 %}bg-success/10 text-success{% else %}bg-muted text-muted-foreground{% endif %}">
-                                {{ match.team1_score }}
-                            </span>
-                        </div>
-                        <div class="flex items-center gap-2">
-                            <span class="text-sm font-medium {% if match.winner_side == 2 %}text-foreground{% else %}text-muted-foreground{% endif %}">
-                                {{ match.side2_label }}
-                            </span>
-                            <span class="inline-flex items-center rounded-md px-2 py-0.5 text-xs font-bold {% if match.winner_side == 2 %}bg-success/10 text-success{% else %}bg-muted text-muted-foreground{% endif %}">
-                                {{ match.team2_score }}
-                            </span>
-                        </div>
-                    </div>
-                    <img src="{% static 'pingpong/icons/arrow-right.svg' %}" class="w-5 h-5 text-muted-foreground flex-shrink-0" alt="">
-                </div>
-                {% endif %}
-            </a>
-            {% endfor %}
-        </div>
-
-        <div class="p-4 border-t bg-muted/30">
-            <a href="{% url 'pingpong:match_list' %}" class="inline-flex items-center gap-2 text-sm font-medium hover:underline min-h-[44px]">
-                View All Matches
-                <img src="{% static 'pingpong/icons/arrow-right.svg' %}" class="w-4 h-4" alt="">
-            </a>
-        </div>
-        {% else %}
-        <div class="p-8 md:p-12 text-center">
-            <img src="{% static 'pingpong/icons/info.svg' %}" class="w-12 h-12 mx-auto text-muted-foreground mb-4 opacity-50" alt="">
-            <p class="text-muted-foreground text-sm md:text-base">No matches yet. <a href="{% url 'pingpong:match_add' %}" class="font-medium hover:underline">Record your first match!</a></p>
-        </div>
+    <div class="space-y-2">
+      {% for f in fixtures %}
+      <a href="{% url 'pingpong:scheduled_match_detail' f.scheduled_match.pk %}" class="flex items-center gap-3">
+        <span class="n w-14 flex-none text-[12px] font-semibold text-muted-foreground">{{ f.scheduled_match.scheduled_date|date:"D d" }}</span>
+        <span class="{{ f.opponent|hue }} hue-bar w-1 h-5"></span>
+        <span class="flex-1 truncate text-[13.5px] font-semibold">vs {{ f.opponent_label }} · {{ f.scheduled_match.scheduled_time|time:"H:i" }}</span>
+        {% if f.is_championship %}
+        <span class="text-[10px] font-extrabold uppercase tracking-[0.1em] text-ball">cup</span>
         {% endif %}
+      </a>
+      {% endfor %}
     </div>
+  </section>
+  {% endif %}
+
+  {# ---------------------------------------------------------------- #}
+  {# Lately. Last, because it needs nothing from you -- it is the block#}
+  {# you read when the ones above it are empty.                        #}
+  {# ---------------------------------------------------------------- #}
+  {% if recent_matches %}
+  <section>
+    <div class="mb-2 flex items-baseline justify-between">
+      <h2 class="label-cap">Lately</h2>
+      <a href="{% url 'pingpong:match_list' %}" class="text-[11px] font-extrabold uppercase tracking-[0.1em] text-muted-foreground">All matches</a>
+    </div>
+    <span class="rule mb-3"></span>
+
+    <div class="divide-y divide-court-line">
+      {% for match in recent_matches %}
+      <a href="{% url 'pingpong:match_detail' match.pk %}" class="flex items-center gap-3 py-2.5">
+        <span class="n w-14 flex-none text-[12px] font-semibold text-muted-foreground">{{ match.date_played|date:"D d" }}</span>
+        <span class="min-w-0 flex-1 truncate text-[13.5px] font-semibold">
+          <span class="{% if match.winner_side != 1 %}text-muted-foreground{% endif %}">{{ match.side1_label }}</span>
+          <span class="text-muted-foreground">v</span>
+          <span class="{% if match.winner_side != 2 %}text-muted-foreground{% endif %}">{{ match.side2_label }}</span>
+        </span>
+        <span class="n text-[15px]">{{ match.team1_score }}–{{ match.team2_score }}</span>
+      </a>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
 </div>
 {% endblock %}

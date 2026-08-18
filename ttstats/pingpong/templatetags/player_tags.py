@@ -2,6 +2,8 @@ from django import template
 from django.urls import reverse
 from django.utils.html import format_html
 
+from .. import player_hues
+
 register = template.Library()
 
 
@@ -27,3 +29,21 @@ def player_link(player, css="", label=None):
             text,
         )
     return format_html('<span class="{}">{}</span>', css, text)
+
+
+@register.filter
+def hue(player):
+    """CSS hue class for a player, safe when the player is gone.
+
+    `{{ player.hue_class }}` works on a real Player, but a deleted participant
+    leaves `None` in the template and would render an empty class -- the bar
+    then draws in whatever `--hue` an ancestor happened to set. This falls back
+    to slot 1 explicitly.
+    """
+    return player_hues.hue_class(getattr(player, "pk", None))
+
+
+@register.simple_tag
+def player_bar(player, css="hue-bar"):
+    """The 4px identity bar that prefixes rivalry and confirmation rows."""
+    return format_html('<span class="{} {}" aria-hidden="true"></span>', hue(player), css)

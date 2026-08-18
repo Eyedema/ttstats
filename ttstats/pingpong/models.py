@@ -6,7 +6,7 @@ from django.contrib.auth.models import User
 from django.db import models
 from django.utils import timezone
 
-from . import match_state
+from . import match_state, player_hues
 from .managers import ChampionshipManager, GameManager, LiveMatchManager, MatchManager, PlayerManager, ScheduledMatchManager
 
 # Email verification token expires after 24 hours
@@ -83,6 +83,24 @@ class Player(models.Model):
         matches = self.matches_won.count()
         total = self.matches_played.count()
         return round(matches / total * 100, 1) if total else 0
+
+    # --- Identity hue -------------------------------------------------------
+    # Every player owns one colour, permanently, and the UI leans on it to say
+    # *who* before it says *what*. Derived from the pk rather than stored, so
+    # there is no field to migrate and no way for two players to collide.
+    # See player_hues.py for the palette and the reasoning.
+
+    @property
+    def hue_class(self):
+        return player_hues.hue_class(self.pk)
+
+    @property
+    def hue_hex(self):
+        return player_hues.hue_hex(self.pk)
+
+    @property
+    def hue_ink(self):
+        return player_hues.hue_ink(self.pk)
 
     class Meta:
         ordering = ["name"]
