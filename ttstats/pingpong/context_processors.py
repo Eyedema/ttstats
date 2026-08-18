@@ -1,5 +1,8 @@
 # pingpong/context_processors.py
+from django.conf import settings
 from django.core.cache import cache
+from django.middleware.csrf import get_token
+from django.urls import reverse
 
 from .models import Championship, Match, Player
 
@@ -94,4 +97,31 @@ def pingpong_context(request):
         'nav_player': player,
         'nav_player_rank': rank,
         'live_championships_count': live_championships_count,
+    }
+
+
+def push_context(request):
+    """Config for push.js, rendered into base.html via json_script.
+
+    Kept separate from pingpong_context, which early-returns in three places
+    and would drop this for any user without a Player -- leaving push.js with
+    no config on exactly the pages a half-set-up account sees.
+
+    Only the *public* VAPID key goes in here. It is handed to the browser by
+    design; the private key must never reach a template.
+    """
+    return {
+        'push_config': {
+            'enabled': bool(settings.VAPID_PUBLIC_KEY and settings.VAPID_PRIVATE_KEY),
+            'vapidPublicKey': settings.VAPID_PUBLIC_KEY,
+            # The CSRF cookie is HttpOnly, so JS cannot read the token from
+            # document.cookie. Same reason base.html sets hx-headers.
+            'csrfToken': get_token(request),
+            'urls': {
+                'serviceWorker': reverse('service_worker'),
+                'subscribe': reverse('pingpong:push_subscribe'),
+                'unsubscribe': reverse('pingpong:push_unsubscribe'),
+                'test': reverse('pingpong:push_test'),
+            },
+        }
     }

@@ -20,7 +20,7 @@ from django.contrib import admin
 from django.urls import path, include
 from django.views.generic import RedirectView
 
-from pingpong.views import CustomLoginView
+from pingpong.views import CustomLoginView, ManifestView, ServiceWorkerView
 
 # Admin URL can be customized via environment variable for security
 # Set ADMIN_URL to a random string in production (e.g., 'secret-admin-abc123/')
@@ -32,6 +32,11 @@ urlpatterns = [
     path('accounts/login/', CustomLoginView.as_view(), name='login'),
     path('accounts/', include('django.contrib.auth.urls')),
     path('pingpong/', include('pingpong.urls')),
+    # PWA. Both must be at the root: a service worker's scope defaults to the
+    # path it was served from, so a worker under /static/ or /pingpong/ could
+    # never control the whole site. Serving from / gives it scope /.
+    path('sw.js', ServiceWorkerView.as_view(), name='service_worker'),
+    path('manifest.webmanifest', ManifestView.as_view(), name='manifest'),
     # WebAuthn URLs (must be at root level for namespace to work)
     path('webauthn/', include(('django_otp_webauthn.urls', 'otp_webauthn'))),
 ]

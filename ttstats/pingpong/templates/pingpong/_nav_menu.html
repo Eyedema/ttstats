@@ -12,7 +12,8 @@ Three tiers, ranked by how often you need them:
                 tab bar, not a place you browse to from a menu.
   Dig around -- reachable, not shouting. These used to sit in the same flat
                 list as Dashboard, which is how a nine-link sidebar happens.
-  Settings   -- Passkeys and Admin cost nothing here and interrupt nothing.
+  Settings   -- Notifications, Passkeys and Admin cost nothing here and
+                interrupt nothing.
 
 The tier heading is a 10px/+0.14em label; Daily's is red because it is the tier
 you are almost always after.
@@ -45,6 +46,8 @@ you are almost always after.
 
   <p class="px-4 pb-2 text-[10px] font-extrabold uppercase tracking-[0.14em] text-muted-foreground">Settings</p>
 
+  {% url 'pingpong:notification_settings' as u %}
+  {% include 'pingpong/_nav_row.html' with url=u icon_name='bell' label='Notifications' match_urls='notification_settings' %}
   {% url 'pingpong:passkey_management' as u %}
   {% include 'pingpong/_nav_row.html' with url=u icon_name='key' label='Passkeys' match_urls='passkey_management' %}
   {% if user.is_staff %}

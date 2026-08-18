@@ -16,6 +16,18 @@ cd "$REPO_ROOT"
 export DJANGO_SETTINGS_MODULE=ttstats.settings.dev
 unset DATABASE_URL || true
 
+# Throwaway VAPID keypair, committed on purpose.
+#
+# Without keys the app reports push as "not configured on this server" and
+# never renders the enable button, so every browser test would exercise the
+# one state production is guaranteed NOT to be in. These make the e2e server
+# look like a configured deployment. Nothing is ever sent: the tests do not
+# subscribe to a real push service, and this key pair is public in the repo,
+# so it must never be used anywhere real.
+export VAPID_PUBLIC_KEY="BFGG9T9Q89g2G_O5lR-iaNElVj-dJH1umtVTCoiI0a97c4PqSfebOzRB7mE02K2xk7GioqPhcx1aur7lb5r6p5I"
+export VAPID_PRIVATE_KEY="yvVjNtitD1wJSoyx7XSA3e7AiCJEKQQ5axvRBIP6ytI"
+export VAPID_ADMIN_EMAIL="mailto:e2e@example.invalid"
+
 E2E_DB="$REPO_ROOT/ttstats/e2e.sqlite3"
 export TTSTATS_SQLITE_NAME="$E2E_DB"
 

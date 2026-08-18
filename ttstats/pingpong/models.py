@@ -216,6 +216,14 @@ class Match(SideLabelMixin, models.Model):
         help_text="Player driving the live scoreboard for this match",
     )
 
+    # Set the first time the "match confirmed, here is your Elo" push goes
+    # out. Three separate signal paths can reach that point for the same
+    # match, and two of them can run concurrently when both players confirm
+    # at once, so exactly-once needs a persisted flag rather than an in-memory
+    # one. Written with a conditional queryset .update(), which makes it an
+    # atomic compare-and-set -- see notifications.notify_match_confirmed.
+    result_notified_at = models.DateTimeField(null=True, blank=True, editable=False)
+
     all_objects = models.Manager()
     objects = MatchManager()
     live_objects = LiveMatchManager()
@@ -1100,3 +1108,95 @@ class ChampionshipEntryMember(models.Model):
 
     def __str__(self):
         return f"{self.player} in {self.entry}"
+
+
+class NotificationKind(models.TextChoices):
+    """The push notifications a user can be sent, and can switch off.
+
+    The value is stored on NotificationPreference as the suffix of a boolean
+    field (`push_<value>`), so adding a kind means adding the matching field
+    and a migration. `NotificationPreference.wants()` does the lookup, so no
+    caller needs to know that.
+    """
+
+    MATCH_CONFIRMATION = 'match_confirmation', 'A match is waiting for your confirmation'
+    MATCH_RESULT = 'match_result', 'A match you played was confirmed'
+    SCHEDULED_MATCH = 'scheduled_match', 'A match was scheduled for you'
+    LEADERBOARD_OVERTAKE = 'leaderboard_overtake', 'Someone passed you on the leaderboard'
+
+
+class NotificationPreference(models.Model):
+    """Per-user opt-outs, one boolean per NotificationKind.
+
+    Rows are created by the same post_save signal that creates UserProfile,
+    but `for_user()` also creates on demand so a user who predates this
+    feature never hits a missing-row crash.
+    """
+
+    user = models.OneToOneField(
+        User, on_delete=models.CASCADE, related_name='notification_preference'
+    )
+    push_match_confirmation = models.BooleanField(default=True)
+    push_match_result = models.BooleanField(default=True)
+    push_scheduled_match = models.BooleanField(default=True)
+    # Off by default: it is the one notification that fires without the user
+    # having done anything, so opting in should be a deliberate act.
+    push_leaderboard_overtake = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    @classmethod
+    def for_user(cls, user):
+        prefs, _ = cls.objects.get_or_create(user=user)
+        return prefs
+
+    def wants(self, kind):
+        """True if the user still wants pushes of this kind.
+
+        An unknown kind returns True rather than False: a new notification
+        type shipped without its preference field should be noisy and get
+        noticed, not silently deliver to nobody.
+        """
+        return getattr(self, f'push_{kind}', True)
+
+    def __str__(self):
+        return f"Notification preferences for {self.user.username}"
+
+
+class PushSubscription(models.Model):
+    """One browser's Web Push endpoint for one user.
+
+    A user has as many rows as they have installed browsers/devices. The
+    endpoint URL is the identity: it is what the push service gave the
+    browser, and re-subscribing on the same device returns the same one, so
+    it is unique and upserted on rather than duplicated.
+    """
+
+    user = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name='push_subscriptions'
+    )
+    # Push endpoints are long and have no meaningful bound, hence TextField.
+    endpoint = models.TextField(unique=True)
+    # The two keys from the browser's PushSubscription, base64url, unpadded.
+    p256dh = models.CharField(max_length=255)
+    auth = models.CharField(max_length=255)
+    user_agent = models.CharField(max_length=255, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_success_at = models.DateTimeField(null=True, blank=True)
+    # Reset to 0 on every success. Only a 404/410 from the push service
+    # deletes a row; this counter is for diagnosing the flaky ones.
+    failure_count = models.IntegerField(default=0)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [models.Index(fields=['user'])]
+
+    @property
+    def subscription_info(self):
+        """The dict shape pywebpush expects, rebuilt from the stored columns."""
+        return {
+            'endpoint': self.endpoint,
+            'keys': {'p256dh': self.p256dh, 'auth': self.auth},
+        }
+
+    def __str__(self):
+        return f"Push subscription for {self.user.username} ({self.endpoint[:40]}...)"

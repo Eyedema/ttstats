@@ -54,6 +54,14 @@ urlpatterns = [
     # Passkey management
     path("passkeys/", views.PasskeyManagementView.as_view(), name="passkey_management"),
 
+    # Push notifications. The service worker and manifest are NOT here -- they
+    # have to be served from the site root to get a usable scope, so they live
+    # in the project urls.py.
+    path("notifications/", views.NotificationSettingsView.as_view(), name="notification_settings"),
+    path("push/subscribe/", views.PushSubscribeView.as_view(), name="push_subscribe"),
+    path("push/unsubscribe/", views.PushUnsubscribeView.as_view(), name="push_unsubscribe"),
+    path("push/test/", views.PushTestView.as_view(), name="push_test"),
+
     path('championships/', views.ChampionshipListView.as_view(), name='championship_list'),
     path('championships/create/', views.ChampionshipCreateView.as_view(), name='championship_create'),
     # htmx fragment: the participant picker, re-rendered when the type changes.

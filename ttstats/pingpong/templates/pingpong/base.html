@@ -9,10 +9,25 @@
 
     <!-- Dark is the base palette, light is the override, and the viewer's
          system setting drives it. Declaring both here means form controls and
-         scrollbars follow the page instead of staying light on navy. -->
+         scrollbars follow the page instead of staying light on navy. The two
+         theme-colors replace the single flat one: an installed app should not
+         wear a navy status bar over the light palette. -->
     <meta name="color-scheme" content="dark light">
     <meta name="theme-color" content="#0b1220" media="(prefers-color-scheme: dark)">
     <meta name="theme-color" content="#f4f1ea" media="(prefers-color-scheme: light)">
+
+    <!-- PWA. The manifest and service worker are served from the site root
+         (see ttstats/urls.py), not from /static/, because a worker's scope
+         defaults to the path it was served from. -->
+    <link rel="manifest" href="{% url 'manifest' %}">
+    <link rel="apple-touch-icon" href="{% static 'pingpong/icons/app/apple-touch-icon.png' %}">
+    <!-- iOS ignores the manifest's display mode; these are how an installed
+         TTStats gets its own window and status bar instead of Safari chrome.
+         Push on iOS only works from an installed app, so this is load-bearing,
+         not decoration. -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="TTStats">
 
     <!-- Inline, not in app.css. These are the rules that keep overlays OFF the
          screen, so they must not depend on the stylesheet having been built,
@@ -64,6 +79,12 @@
             });
         }, 5000);
     </script>
+
+    <!-- Push notifications. json_script, not escapejs -- see CLAUDE.md.
+         push.js is deferred and inert on pages without the settings panel,
+         where it only re-asserts an existing subscription. -->
+    {{ push_config|json_script:"push-config" }}
+    <script defer src="{% static 'pingpong/js/push.js' %}"></script>
 
     {% block extra_css %}{% endblock %}
 </head>

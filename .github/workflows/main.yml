@@ -53,7 +53,10 @@ jobs:
           # Frontend assets are gated separately. Before this, a commit that
           # touched only templates or the Tailwind config got zero CI, so a
           # purge misconfiguration could ship unnoticed.
-          if echo "$CHANGED_FILES" | grep -qE "\.(html|css|js)$|tailwind\.config\.js|postcss\.config\.js|package(-lock)?\.json"; then
+          # .webmanifest is here because the PWA manifest is a template like
+          # any other -- without it, a commit touching only the manifest would
+          # skip the browser tests that check the app is still installable.
+          if echo "$CHANGED_FILES" | grep -qE "\.(html|css|js|webmanifest)$|tailwind\.config\.js|postcss\.config\.js|package(-lock)?\.json"; then
             echo "Frontend files were changed"
             echo "assets_changed=true" >> $GITHUB_OUTPUT
           else
@@ -273,7 +276,7 @@ jobs:
         env:
           E2E_PYTHON: python
           SECRET_KEY: "test-secret-key-for-ci-only"
-        run: npx playwright test --project=setup --project=iphone-safari --project=iphone-no-js --project=iphone-reduced
+        run: npx playwright test --project=setup --project=iphone-safari --project=iphone-pwa --project=iphone-no-js --project=iphone-reduced
 
       - name: Upload Playwright report
         if: >-

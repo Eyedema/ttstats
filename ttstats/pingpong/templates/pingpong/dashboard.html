@@ -41,7 +41,7 @@ before you read what.
         </p>
         <p class="mt-1 text-[12.5px] font-semibold text-muted-foreground">
           Games {{ lm.team1_games }}–{{ lm.team2_games }}.
-          {% if lm.last_point_at %}Last point {{ lm.last_point_at }}.{% endif %}
+          {% if lm.last_point_at %}Last point {{ lm.last_point_at|timesince }} ago.{% endif %}
         </p>
       </div>
       {# The two sides in their own colours, so the card says who at a glance. #}
