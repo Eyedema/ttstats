@@ -42,6 +42,19 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
+    # Below WhiteNoise on purpose. WhiteNoise short-circuits static requests in
+    # process_request and already serves its own pre-compressed .gz/.br
+    # siblings, so a static hit never reaches this middleware and we don't
+    # burn CPU re-gzipping a woff2. Everything below is a rendered template.
+    #
+    # These pages are 40% whitespace and 42KB of Tailwind class attributes, and
+    # every one of them inlines the 20KB icon sprite -- the match list measured
+    # 143KB on the wire and gzips to 12.6KB. Uncompressed HTML was the single
+    # largest contributor to the app feeling slow on mobile.
+    #
+    # BREACH is not a concern here: Django masks the CSRF token with a fresh
+    # per-response salt, so the secret is not a stable plaintext to correlate.
+    'django.middleware.gzip.GZipMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',

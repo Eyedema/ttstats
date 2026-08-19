@@ -21,7 +21,7 @@ line up whichever state a row is in.
 
 <a href="{{ url }}"
    {% if is_active %}aria-current="page"{% endif %}
-   class="flex min-h-[44px] items-center gap-3 py-2 pr-4 {% if is_active %}border-l-4 border-paddle bg-court-line pl-3 font-extrabold text-bone{% else %}pl-5 font-semibold text-bone-dim hover:bg-court-line{% endif %} text-[15px]">
+   class="pressable-flat flex min-h-[44px] items-center gap-3 py-2 pr-4 {% if is_active %}border-l-4 border-paddle bg-court-line pl-3 font-extrabold text-bone{% else %}pl-5 font-semibold text-bone-dim hover:bg-court-line{% endif %} text-[15px]">
   {% icon icon_name css=is_active|yesno:"text-bone,text-muted-foreground" size="sm" %}
   <span>{{ label }}</span>
   {% if badge %}

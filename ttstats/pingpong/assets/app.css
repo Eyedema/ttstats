@@ -158,6 +158,63 @@
   [x-cloak] {
     display: none !important;
   }
+
+  /* --- Touch feedback ----------------------------------------------------- */
+
+  /* The installed PWA has no browser chrome: no spinner, no throbber, no URL
+     bar flicker. A tap that produces no immediate visual change is therefore
+     indistinguishable from a tap the app never received, and the instinct is
+     to tap again. This is why the app read as slow long before any of it was
+     slow -- server think-time is 15-140ms, which is imperceptible WITH
+     acknowledgement and feels broken without it.
+
+     Declared once here against every interactive element rather than as a
+     class sprinkled over ~100 call sites: the failure mode of the class
+     approach is a button someone forgot, and a button that does not respond
+     is exactly the bug being fixed. `hover:` cannot do this job either -- on
+     iOS it latches after the tap and leaves the element you just left lit up.
+
+     Opacity is the signal, not colour, because it composites over whatever
+     background the element already has (paddle red, bone, a player hue) and
+     so needs no per-variant rule. It also survives reduced motion, which
+     narrows transition-property to exactly this kind of property and drops
+     the scale. Two signals when motion is allowed, one when it is not. */
+  a[href],
+  button,
+  summary,
+  [role="button"],
+  label[for],
+  input[type="submit"],
+  input[type="button"],
+  .pressable {
+    /* Removes the ~300ms iOS Safari tap delay and the grey flash overlay,
+       both of which read as lag in their own right. */
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  a[href]:active,
+  button:not(:disabled):active,
+  summary:active,
+  [role="button"]:active,
+  label[for]:active,
+  input[type="submit"]:not(:disabled):active,
+  input[type="button"]:not(:disabled):active,
+  .pressable:active {
+    opacity: 0.55;
+    transform: scale(0.97);
+    /* Instant on press, so the acknowledgement cannot lag the finger. The
+       ease back out is handled by the element's own transition utility where
+       it has one. */
+    transition: none;
+  }
+
+  /* Opt-out for full-bleed bars and rows. Scaling a 56px tab makes the whole
+     tab bar look like it is wobbling, and scaling a list row detaches its
+     edges from the dividers above and below it. These press by dimming. */
+  .pressable-flat:active {
+    transform: none;
+  }
 }
 
 @layer components {
@@ -395,6 +452,48 @@
 
     100% {
       transform: scale(1);
+    }
+  }
+
+  /* --- Navigation progress ------------------------------------------------ */
+
+  /* Fails closed, same contract as the drawer: with no JS this element is
+     scaleX(0) and 1px tall in the corner -- invisible, unclickable, and it
+     never reports progress that is not happening. JS adds .is-loading on link
+     activation and the browser discards the whole document on navigation, so
+     nothing has to clear it.
+
+     Red because this is the app confirming the action you just took. It is
+     explicitly not amber: amber means live-right-now and appears nowhere
+     else. */
+  .nav-progress {
+    position: fixed;
+    inset-inline: 0;
+    top: 0;
+    z-index: 60;
+    height: 2px;
+    background: theme('colors.paddle.DEFAULT');
+    transform: scaleX(0);
+    transform-origin: left;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .nav-progress.is-loading {
+    opacity: 1;
+    /* Decelerating toward 90% and never reaching it: the bar cannot promise a
+       completion time it does not know. Arrival is the new page replacing
+       this one. */
+    animation: nav-progress 8s cubic-bezier(0, 0.6, 0.3, 1) forwards;
+  }
+
+  @keyframes nav-progress {
+    0% {
+      transform: scaleX(0);
+    }
+
+    100% {
+      transform: scaleX(0.9);
     }
   }
 }
