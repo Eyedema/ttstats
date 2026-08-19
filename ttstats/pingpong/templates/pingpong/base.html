@@ -92,6 +92,71 @@
 <body class="min-h-screen bg-court text-bone"
       hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
 
+    {% comment %}
+    Navigation progress. In the installed PWA there is no browser loading bar,
+    so this is the only thing that tells the user a tap became a request.
+
+    It renders inert (scaleX(0), opacity 0, pointer-events none) and only the
+    script below animates it, so a failed stylesheet or dead JS leaves nothing
+    on screen rather than a stuck bar -- the same fail-closed rule the drawer
+    follows.
+    {% endcomment %}
+    <div id="nav-progress" class="nav-progress" aria-hidden="true"></div>
+
+    <script>
+        // Plain JS, delegated on document, deliberately not Alpine: this must
+        // survive a CSP without 'unsafe-eval' and must not wait on a framework
+        // to boot, because the whole point is to react on the very first tap.
+        (function () {
+            var bar = document.getElementById('nav-progress');
+            if (!bar) return;
+
+            function start() {
+                // Restart the animation even if a previous tap already armed
+                // it, so a second tap is acknowledged rather than ignored.
+                bar.classList.remove('is-loading');
+                void bar.offsetWidth;
+                bar.classList.add('is-loading');
+            }
+
+            document.addEventListener('click', function (e) {
+                // Only an unmodified primary click navigates.
+                if (e.defaultPrevented || e.button !== 0) return;
+                if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+
+                var a = e.target.closest && e.target.closest('a[href]');
+                if (!a) return;
+                if (a.hasAttribute('download') || a.hasAttribute('data-no-progress')) return;
+                if (a.target && a.target !== '_self') return;
+                // htmx swaps in place; there is no document load to report.
+                if (a.hasAttribute('hx-get') || a.hasAttribute('hx-post')) return;
+
+                var url;
+                try { url = new URL(a.href, location.href); } catch (err) { return; }
+                if (url.origin !== location.origin) return;
+                // Same page, different fragment: no request is made.
+                if (url.href.split('#')[0] === location.href.split('#')[0]) return;
+
+                start();
+            }, false);
+
+            document.addEventListener('submit', function (e) {
+                if (e.defaultPrevented) return;
+                var f = e.target;
+                if (f && f.hasAttribute && !f.hasAttribute('data-no-progress')) start();
+            }, false);
+
+            // Coming back via bfcache restores this document with the bar still
+            // armed. Clear it, or "back" looks like it is loading forever.
+            window.addEventListener('pageshow', function () {
+                bar.classList.remove('is-loading');
+            });
+            window.addEventListener('pagehide', function () {
+                bar.classList.remove('is-loading');
+            });
+        })();
+    </script>
+
     {# The Lucide sprite. Once per page, before anything that <use>s it. #}
     {% include 'pingpong/_icons.html' %}
 

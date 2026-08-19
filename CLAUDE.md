@@ -421,6 +421,71 @@ the failure mode above.
 - **Keep `PROD_CSP` in sync when adding a directive.** It also carries
   `worker-src` and `manifest-src` for the service worker and web manifest.
 
+### Perceived speed: the app was silent, not slow
+
+The installed PWA has no browser chrome — no throbber, no URL bar, no native
+progress line — so a tap with no immediate visual change is indistinguishable
+from a tap that never registered. Measured server think-time is **15–140ms**
+(dashboard worst at ~110–140ms, leaderboard ~15ms) with 4–29 queries per page
+and no N+1 anywhere. The app was never slow; it just said nothing.
+
+- **HTML is gzipped by `GZipMiddleware`, placed directly below WhiteNoise.**
+  Below, deliberately: WhiteNoise short-circuits static requests in
+  `process_request` and serves its own pre-compressed siblings, so a static hit
+  never reaches GZip and no CPU is spent re-gzipping a woff2. Everything that
+  does reach it is a rendered template. Pages are ~40% whitespace, ~42KB of
+  Tailwind class attributes, and every one inlines the 20KB icon sprite — the
+  match list was **143KB on the wire and is 12.6KB compressed** (80–91% across
+  the app). BREACH is not a concern: Django re-masks the CSRF token per
+  response, so there is no stable plaintext to correlate.
+- **Touch feedback is declared once in `@layer base`, against element
+  selectors** (`a[href]`, `button`, `summary`, `[role=button]`, `label[for]`,
+  submit/button inputs) plus an opt-in `.pressable`. It is deliberately *not* a
+  class sprinkled over the ~100 call sites: the failure mode of that approach
+  is a control someone forgot, and a control that does not respond is exactly
+  the bug being fixed.
+- **Opacity is the press signal, not colour.** It composites over whatever
+  background the element already has — paddle red, bone, a player hue — so no
+  per-variant rule is needed, and it survives reduced motion, which narrows
+  `transition-property` to exactly this kind of property and drops the scale.
+  Two signals when motion is allowed, one when it is not.
+- `.pressable-flat` opts out of the scale only. The tab bar and drawer rows use
+  it: scaling a 56px tab makes the whole fixed bar look like it is wobbling.
+- **`hover:` cannot do this job.** On iOS it latches after the tap and leaves
+  the element you just left lit up.
+- `touch-action: manipulation` removes the ~300ms double-tap-zoom delay, which
+  on its own is longer than any response this app produces.
+- **`#nav-progress` is fail-closed like the drawer**: it renders `scaleX(0)`,
+  `opacity:0`, `pointer-events:none`, and only the inline plain-JS handler adds
+  `.is-loading`. It is fixed across the top of the viewport where the mobile
+  header's controls are, so `pointer-events:none` is load-bearing — without it
+  it becomes an invisible tap-blocking strip. It animates toward 90% and never
+  reaches it (it cannot promise a completion time it does not know); arrival is
+  the next document replacing it. `pageshow`/`pagehide` clear it, or bfcache
+  restores a document that looks like it is loading forever.
+- **Testing it needs care.** Playwright queues every evaluation in a frame
+  behind that frame's pending navigation, so a *delayed* route makes the
+  assertion run against the new document and it fails whether or not the
+  feature works. `tap-feedback.spec.js` aborts the navigation instead, keeping
+  the armed document alive. The synthetic-click variant registers its
+  `preventDefault` listener *after* the page's own, since the page's handler
+  bails on `e.defaultPrevented`.
+
+### `from:` in an hx-trigger takes a CSS selector, not a jQuery one
+
+`change from:#date_filter[value!='custom']` shipped on the leaderboard. `!=` is
+not a CSS attribute operator, so the selector threw, htmx never bound that
+trigger, and **changing Period did nothing at all** while Format and Show
+worked — a dead control, which is the loudest possible version of "did my tap
+register?". It also raised a `pageerror` on every leaderboard load.
+
+The exclusion was unnecessary: picking "Custom range" with no dates leaves
+`filter_start_date` None in `LeaderboardView`, so the request returns all-time
+results and reveals the date inputs, which is what choosing a custom range
+should do. Expressing it as an htmx event filter would have needed
+`new Function()` — i.e. `'unsafe-eval'`, which the e2e `PROD_CSP` deliberately
+withholds.
+
 ### Fail-closed rule for JS-managed UI
 
 **UI whose hidden state is managed by JavaScript must fail closed.** A drawer

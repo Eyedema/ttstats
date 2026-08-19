@@ -58,8 +58,24 @@ includes, so the two cannot drift.
           hx-target="#leaderboard-results"
           hx-swap="outerHTML"
           hx-push-url="true"
+          {% comment %}
+          `from:` takes a CSS selector. It used to read
+          `#date_filter[value!='custom']`, which is jQuery syntax -- `!=` is not
+          a CSS attribute operator -- so the selector threw, htmx never bound
+          this trigger, and changing Period did nothing at all while Format and
+          Show worked. A dead control is the loudest possible version of "did my
+          tap register?".
+
+          The exclusion it was reaching for is not needed. Picking "Custom
+          range" with no dates yet leaves `filter_start_date` None in
+          LeaderboardView, so the request returns all-time results and reveals
+          the two date inputs -- which is what choosing a custom range should
+          do. Expressing it as an htmx event filter would have required
+          `new Function()`, i.e. 'unsafe-eval', which the e2e PROD_CSP
+          deliberately withholds.
+          {% endcomment %}
           hx-trigger="change from:#match_type, change from:#top_x,
-                      change from:#date_filter[value!='custom'], submit">
+                      change from:#date_filter, submit">
 
       <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
         <div class="space-y-1.5">

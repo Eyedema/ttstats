@@ -5,13 +5,17 @@ One tab. See _tab_bar.html.
 56px minimum, which is above the 44px floor because this is the control you hit
 while holding a paddle. The label is always shown -- an icon-only tab bar makes
 people guess, and "Cups" is not a universally understood trophy.
+
+`pressable-flat` rather than `pressable`: the tab is already a 56px block of
+fill, and scaling it makes the bar itself look like it is wobbling, so it
+darkens on press without shrinking.
 {% endcomment %}
 
 {% nav_active match_tab as is_active %}
 
 <a href="{{ url }}"
    {% if is_active %}aria-current="page"{% endif %}
-   class="flex min-h-[56px] flex-1 flex-col items-center justify-center gap-1 -mt-0.5 border-t-2 {% if is_active %}border-paddle bg-court-line text-bone{% else %}border-transparent text-muted-foreground{% endif %}">
+   class="pressable-flat flex min-h-[56px] flex-1 flex-col items-center justify-center gap-1 -mt-0.5 border-t-2 {% if is_active %}border-paddle bg-court-line text-bone{% else %}border-transparent text-muted-foreground{% endif %}">
   {% icon icon_name size="md" %}
   <span class="text-[10px] font-extrabold uppercase tracking-[0.1em]">{{ label }}</span>
 </a>
