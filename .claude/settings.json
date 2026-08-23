@@ -1,0 +1,85 @@
+{
+  "includeCoAuthoredBy": true,
+  "env": {
+    "INSIDE_CLAUDE_CODE": "1",
+    "BASH_DEFAULT_TIMEOUT_MS": "420000",
+    "BASH_MAX_TIMEOUT_MS": "420000"
+  },
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/skill-eval.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|MultiEdit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c '[ \"$(git branch --show-current)\" != \"main\" ] || { echo \"{\\\"block\\\": true, \\\"message\\\": \\\"Cannot edit files on main branch. Create a feature branch first.\\\"}\" >&2; exit 2; }'",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|MultiEdit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'case \"$CLAUDE_TOOL_INPUT_FILE_PATH\" in *.py) uv run ruff format \"$CLAUDE_TOOL_INPUT_FILE_PATH\" 2>&1 && echo \"{\\\"feedback\\\": \\\"Formatted with Ruff.\\\", \\\"suppressOutput\\\": true}\" || echo \"{\\\"feedback\\\": \\\"Ruff format failed.\\\"}\" >&2 ;; esac'",
+            "timeout": 30
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|MultiEdit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'case \"$CLAUDE_TOOL_INPUT_FILE_PATH\" in pyproject.toml|requirements*.txt) echo \"{\\\"feedback\\\": \\\"Installing dependencies...\\\"}\" >&2; uv sync >/dev/null 2>&1 && echo \"{\\\"feedback\\\": \\\"Dependencies installed.\\\", \\\"suppressOutput\\\": true}\" || echo \"{\\\"feedback\\\": \\\"Failed to install dependencies.\\\"}\" >&2 ;; esac'",
+            "timeout": 60
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|MultiEdit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'case \"$CLAUDE_TOOL_INPUT_FILE_PATH\" in */test_*.py|*_test.py|*/tests/*.py) echo \"{\\\"feedback\\\": \\\"Running tests...\\\"}\" >&2; uv run pytest \"$CLAUDE_TOOL_INPUT_FILE_PATH\" -x -q 2>&1 | tail -30; if [ ${PIPESTATUS[0]} -eq 0 ]; then echo \"{\\\"feedback\\\": \\\"Tests passed.\\\"}\"; else echo \"{\\\"feedback\\\": \\\"Tests failed. See output above.\\\"}\" >&2; fi ;; esac'",
+            "timeout": 90
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|MultiEdit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'case \"$CLAUDE_TOOL_INPUT_FILE_PATH\" in *.py) echo \"{\\\"feedback\\\": \\\"Type checking with pyright...\\\"}\" >&2; output=$(uv run pyright \"$CLAUDE_TOOL_INPUT_FILE_PATH\" 2>&1); if [ $? -eq 0 ]; then echo \"{\\\"feedback\\\": \\\"No type errors.\\\", \\\"suppressOutput\\\": true}\"; else echo \"$output\" | head -20 >&2; echo \"{\\\"feedback\\\": \\\"Pyright found type errors.\\\"}\" >&2; fi; exit 0 ;; esac'",
+            "timeout": 30
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|MultiEdit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'case \"$CLAUDE_TOOL_INPUT_FILE_PATH\" in *.py) output=$(uv run ruff check \"$CLAUDE_TOOL_INPUT_FILE_PATH\" 2>&1); if [ $? -eq 0 ]; then echo \"{\\\"feedback\\\": \\\"Ruff check passed.\\\", \\\"suppressOutput\\\": true}\"; else echo \"$output\" | head -20 >&2; echo \"{\\\"feedback\\\": \\\"Ruff found lint issues.\\\"}\" >&2; fi; exit 0 ;; esac'",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,171 @@
+{
+  "$schema": "./skill-rules.schema.json",
+  "version": "2.0",
+  "config": {
+    "minConfidenceScore": 3,
+    "showMatchReasons": true,
+    "maxSkillsToShow": 5
+  },
+  "scoring": {
+    "keyword": 2,
+    "keywordPattern": 3,
+    "pathPattern": 4,
+    "directoryMatch": 5,
+    "intentPattern": 4,
+    "contentPattern": 3,
+    "contextPattern": 2
+  },
+  "directoryMappings": {
+    "apps/": "django-models",
+    "models/": "django-models",
+    "templates/": "django-templates",
+    "tests/": "pytest-django-patterns",
+    "tasks/": "celery-patterns",
+    "forms/": "django-forms"
+  },
+  "skills": {
+    "pytest-django-patterns": {
+      "description": "pytest-django testing patterns and TDD workflow",
+      "priority": 9,
+      "triggers": {
+        "keywords": ["test", "pytest", "fixture", "factory", "mock", "tdd"],
+        "keywordPatterns": ["\\btest(?:s|ing)?\\b", "\\bspec\\b", "\\bfixture\\b"],
+        "pathPatterns": ["**/test_*.py", "**/*_test.py", "**/conftest.py", "**/factories.py"],
+        "intentPatterns": [
+          "(?:write|add|create|fix).*(?:test)",
+          "(?:test).*(?:for|the)",
+          "(?:red.green.refactor|tdd)"
+        ],
+        "contentPatterns": ["@pytest", "def test_", "Factory", "pytest.mark"]
+      },
+      "excludePatterns": ["e2e", "playwright", "selenium"]
+    },
+    "django-forms": {
+      "description": "Django form handling with validation",
+      "priority": 7,
+      "triggers": {
+        "keywords": ["form", "modelform", "validation", "clean", "widget"],
+        "keywordPatterns": ["\\bform(?:s)?\\b", "Form\\b", "\\bvalidat(?:e|ion)\\b"],
+        "pathPatterns": ["**/forms.py", "**/forms/*.py"],
+        "intentPatterns": [
+          "(?:create|build|add).*(?:form)",
+          "(?:form).*(?:validation|submit|field)",
+          "(?:validat(?:e|ion)).*(?:schema|rule)"
+        ],
+        "contentPatterns": ["forms.Form", "ModelForm", "clean_", "is_valid"]
+      },
+      "excludePatterns": ["format", "transform", "platform"]
+    },
+    "htmx-alpine-patterns": {
+      "description": "HTMX patterns for dynamic Django templates",
+      "priority": 7,
+      "triggers": {
+        "keywords": ["htmx", "hx-", "partial", "ajax", "dynamic"],
+        "keywordPatterns": ["\\bhtmx\\b", "\\bhx-\\w+\\b", "\\bpartial\\b"],
+        "pathPatterns": ["**/templates/**/_*.html", "**/partials/**"],
+        "intentPatterns": [
+          "(?:add|create).*(?:htmx|dynamic|ajax)",
+          "(?:htmx).*(?:request|swap|trigger)"
+        ],
+        "contentPatterns": ["hx-get", "hx-post", "hx-target", "hx-swap", "HX-Request"]
+      }
+    },
+    "django-templates": {
+      "description": "Django template inheritance and patterns",
+      "priority": 6,
+      "triggers": {
+        "keywords": ["template", "html", "extends", "block", "include"],
+        "keywordPatterns": ["\\btemplate\\b", "\\bhtml\\b"],
+        "pathPatterns": ["**/templates/**/*.html"],
+        "intentPatterns": [
+          "(?:create|add).*(?:template|page)",
+          "(?:template).*(?:tag|filter)"
+        ],
+        "contentPatterns": ["{% extends", "{% block", "{% include", "{% for"]
+      }
+    },
+    "celery-patterns": {
+      "description": "Celery task patterns and async processing",
+      "priority": 7,
+      "triggers": {
+        "keywords": ["celery", "task", "async", "background", "queue", "worker"],
+        "keywordPatterns": ["\\bcelery\\b", "\\btask\\b", "\\basync\\b", "\\.delay\\("],
+        "pathPatterns": ["**/tasks.py", "**/tasks/*.py", "**/celery.py"],
+        "intentPatterns": [
+          "(?:create|add).*(?:task|background)",
+          "(?:async|background).*(?:job|process)"
+        ],
+        "contentPatterns": ["@shared_task", "@celery", ".delay(", ".apply_async"]
+      }
+    },
+    "django-models": {
+      "description": "Django model design and QuerySet optimization",
+      "priority": 7,
+      "triggers": {
+        "keywords": ["model", "queryset", "migration", "orm", "database", "query"],
+        "keywordPatterns": ["\\bmodel\\b", "\\bqueryset\\b", "\\bmigration\\b"],
+        "pathPatterns": ["**/models.py", "**/models/*.py", "**/migrations/*.py"],
+        "intentPatterns": [
+          "(?:create|add|design).*(?:model)",
+          "(?:optimize|fix).*(?:query|n\\+1)"
+        ],
+        "contentPatterns": ["models.Model", "models.CharField", "objects.filter", "select_related"]
+      }
+    },
+    "systematic-debugging": {
+      "description": "Four-phase debugging with root cause analysis",
+      "priority": 9,
+      "triggers": {
+        "keywords": ["bug", "debug", "fix", "error", "issue", "broken", "failing"],
+        "keywordPatterns": ["\\bbug\\b", "\\bfix\\b", "\\berror\\b", "\\bissue\\b", "doesn't work", "not working"],
+        "intentPatterns": [
+          "(?:fix|debug|resolve|investigate).*(?:bug|error|issue|problem)",
+          "(?:why).*(?:not working|broken|failing)",
+          "(?:something).*(?:wrong|broken)"
+        ]
+      },
+      "excludePatterns": ["fix typo", "fix formatting", "fix lint"]
+    },
+    "github-actions": {
+      "description": "GitHub Actions CI/CD workflow patterns",
+      "priority": 6,
+      "triggers": {
+        "keywords": ["github action", "workflow", "ci/cd", "pipeline", "ci"],
+        "keywordPatterns": ["github.action", "ci/?cd", "\\bworkflow\\b"],
+        "pathPatterns": [".github/workflows/**", ".github/**/*.yml"],
+        "intentPatterns": [
+          "(?:create|add|update).*(?:workflow|action|pipeline)",
+          "(?:ci|cd).*(?:pipeline|workflow)"
+        ],
+        "contentPatterns": ["runs-on:", "uses:", "steps:"]
+      }
+    },
+    "worktree-commit-merge": {
+      "description": "Commit worktree changes, merge into master/main, sync branch",
+      "priority": 8,
+      "triggers": {
+        "keywords": ["worktree", "merge", "master", "main"],
+        "keywordPatterns": ["\\bworktree\\b", "\\bmerge.*(?:master|main)\\b"],
+        "intentPatterns": [
+          "commit.*(?:and|then).*merge",
+          "merge.*(?:to|into).*(?:master|main)",
+          "(?:done|finished).*worktree",
+          "we.re done"
+        ]
+      }
+    },
+    "documentation": {
+      "description": "Documentation and docstrings",
+      "priority": 3,
+      "triggers": {
+        "keywords": ["documentation", "docstring", "readme", "docs"],
+        "keywordPatterns": ["\\bdoc(?:s|umentation)?\\b", "\\breadme\\b"],
+        "pathPatterns": ["**/docs/**", "**/*.md", "**/README*"],
+        "intentPatterns": [
+          "(?:write|add|update).*(?:doc|documentation)",
+          "(?:document).*(?:function|class|api)"
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "skill_name": "worktree-commit-merge",
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "Set up a test git environment in /tmp/wct-eval-0-main: init a repo, make an initial commit with a README.md, then create a feature branch 'feature/add-utils', then create a git worktree for it at /tmp/wct-eval-0-wt. In that worktree, create a file utils.py with some simple helper functions (e.g. format_date, slugify). Now you are 'in' that worktree at /tmp/wct-eval-0-wt with uncommitted changes. Commit those changes to feature/add-utils and merge the branch into master.",
+      "expected_output": "utils.py committed to feature/add-utils, then fast-forward merged into master",
+      "files": [],
+      "assertions": [
+        {"text": "utils.py was committed on the feature/add-utils branch"},
+        {"text": "The merge into master was a fast-forward (not a merge commit)"},
+        {"text": "The commit message follows a conventional format (type: description or type(scope): description)"},
+        {"text": "utils.py is present on master after the merge"}
+      ]
+    },
+    {
+      "id": 1,
+      "prompt": "Set up a test git environment: init repo at /tmp/wct-eval-1-main, make initial commit with README.md on master. Create branch 'feature/fix-null-check', worktree at /tmp/wct-eval-1-wt. THEN make an additional commit directly on master (e.g. update README.md with a new line) — this prevents a fast-forward later. In the worktree, create a file validator.py with a null-check fix. Now you're 'in' the worktree at /tmp/wct-eval-1-wt with the uncommitted validator.py changes. Commit the changes and merge into master.",
+      "expected_output": "validator.py committed to feature/fix-null-check, merged into master with a regular merge commit",
+      "files": [],
+      "assertions": [
+        {"text": "validator.py was committed on the feature/fix-null-check branch"},
+        {"text": "A regular merge commit was created on master (not a fast-forward)"},
+        {"text": "The skill attempted --ff-only before falling back to a regular merge"},
+        {"text": "validator.py is present on master after the merge"}
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Set up: init repo at /tmp/wct-eval-2-main, initial commit with README.md, create branch 'feature/update-config', worktree at /tmp/wct-eval-2-wt. In the worktree modify two files: create config.py with some settings constants and update the README.md to add a 'Configuration' section. You are now in the worktree at /tmp/wct-eval-2-wt with both files uncommitted. Commit all relevant changes and merge into master.",
+      "expected_output": "Both config.py and README.md committed in a single commit, merged into master",
+      "files": [],
+      "assertions": [
+        {"text": "Both config.py and README.md are staged and committed in a single commit (not two separate commits)"},
+        {"text": "The feature branch is merged into master"},
+        {"text": "Both config.py and README.md are present on master after the merge"}
+      ]
+    }
+  ]
+}
