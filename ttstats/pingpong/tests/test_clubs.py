@@ -144,9 +144,12 @@ class TestClubDeleteIsProtected:
             club.delete()
 
     def test_an_empty_club_can_be_deleted(self):
+        # Not `count() == 0`: migration 0033 creates the default club, so the
+        # test database always carries one.
         club = ClubFactory()
+        pk = club.pk
         club.delete()
-        assert Club.objects.count() == 0
+        assert not Club.objects.filter(pk=pk).exists()
 
 
 @pytest.mark.django_db
