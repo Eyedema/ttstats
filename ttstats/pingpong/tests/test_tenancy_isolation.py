@@ -169,6 +169,15 @@ PK_KWARG = {
     "scheduled_match_convert": "scheduled_match_pk",
 }
 
+# A *valid* body for the endpoints that validate their payload before they look
+# the object up. With an empty body these return 400 without ever touching the
+# match, so the sweep would be asserting on a shape check rather than on the
+# tenancy boundary -- passing while testing nothing.
+POST_BODIES = {
+    "live_start": {"initial_server": "team1"},
+    "live_point": {"side": "team1"},
+}
+
 
 def _pingpong_url_names():
     """Every url_name registered under the `pingpong` namespace."""
@@ -231,11 +240,16 @@ class Tenant:
 
         # A live match, driven by this club's player as scorekeeper.
         self.live_match = MatchFactory(player1=self.player, player2=self.other_player)
+        # The real initial state, not a hand-made stub: live_scoring reads
+        # keys a stub would not have, and the sweep must exercise the actual
+        # code path rather than crash before reaching the tenancy check.
+        from pingpong import live_scoring
+
         Match.all_objects.filter(pk=self.live_match.pk).update(
             is_live=True,
             club=self.club,
             scorekeeper=self.player,
-            live_state={"started": False},
+            live_state=live_scoring.initial_state(self.live_match.best_of),
         )
         self.live_match.refresh_from_db()
 
@@ -286,7 +300,10 @@ def _url(name, tenant):
 
 def _fetch(client, name, url):
     if name in POST_ONLY:
-        return client.post(url, data={}, content_type="application/json")
+        import json
+
+        body = json.dumps(POST_BODIES.get(name, {}))
+        return client.post(url, data=body, content_type="application/json")
     return client.get(url)
 
 

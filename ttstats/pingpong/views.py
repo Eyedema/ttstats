@@ -47,6 +47,8 @@ from .elo import (
     projected_elo_change_for,
     projected_elo_changes,
 )
+from . import cache_utils
+from .managers import scope_to_active_club
 from .models import Game, Location, Match, MatchParticipant, Player, UserProfile, MatchConfirmation, ScheduledMatch, ScheduledMatchParticipant, Side, Championship, EloHistory, format_side_label, NotificationKind, NotificationPreference, PushSubscription
 from .emails import send_scheduled_match_email, send_passkey_deleted_email
 from .services import set_match_sides, set_scheduled_match_sides
@@ -387,7 +389,9 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
         page = self.request.GET.get('page', 1)
 
         # Try cache for aggregate stats (10 minute TTL)
-        stats_cache_key = f'player_stats_{player.pk}'
+        # Namespaced by the player's own club: these are that player's stats,
+        # not a per-viewer view of them.
+        stats_cache_key = f'{cache_utils.club_prefix(player.club)}player_stats_{player.pk}'
         cached_stats = cache.get(stats_cache_key)
 
         if cached_stats is None:
@@ -742,10 +746,13 @@ class DashboardView(LoginRequiredMixin, TemplateView):
     # --- Shared helpers -----------------------------------------------------
 
     def _recent_matches(self):
-        recent_matches = cache.get("dashboard_recent_matches")
+        # Holds Match instances from a club-scoped query, so the key must carry
+        # the club or the first club to load the dashboard serves every other.
+        key = f"{cache_utils.club_prefix()}dashboard_recent_matches"
+        recent_matches = cache.get(key)
         if recent_matches is None:
             recent_matches = list(Match.objects.all().order_by("-date_played")[:5])
-            cache.set("dashboard_recent_matches", recent_matches, 300)
+            cache.set(key, recent_matches, 300)
         return recent_matches
 
     @staticmethod
@@ -1102,9 +1109,23 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
         return [self.template_name]
 
     def _leaderboard_cache_key(self, match_type, date_filter, start_date, end_date, top_x):
-        """Build a cache key that includes filter params and a generation counter."""
-        generation = cache.get('leaderboard_generation', 0)
-        return f'leaderboard_{generation}_{match_type}_{date_filter}_{start_date}_{end_date}_{top_x}'
+        """Cache key: club namespace, then generation, then the filter params.
+
+        The club goes in the *prefix* so `cache_control --stats` can group by
+        club and a targeted flush stays possible. Its generation counter is
+        per club too, so a match in Club A no longer invalidates Club B's
+        leaderboard -- previously correct, but wasteful, and it hid the missing
+        key component during testing.
+
+        With the flag off `club_prefix()` is empty and the key is byte-identical
+        to its pre-tenancy shape.
+        """
+        prefix = cache_utils.club_prefix()
+        generation = cache.get(cache_utils.leaderboard_generation_key(), 0)
+        return (
+            f'{prefix}leaderboard_{generation}_{match_type}_{date_filter}'
+            f'_{start_date}_{end_date}_{top_x}'
+        )
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -1154,7 +1175,13 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
 
         # Build base match query with filters applied at DB level
         # Use is_confirmed=True to filter at DB level instead of Python
-        matches_query = Match._base_manager.filter(is_confirmed=True)
+        # _base_manager deliberately bypasses row-level security: the
+        # leaderboard is a whole-club table, not "matches I played in".
+        # It must NOT also bypass tenancy -- this feeds the cached payload,
+        # which makes it the single highest-risk bypass in the app.
+        matches_query = scope_to_active_club(
+            Match._base_manager.filter(is_confirmed=True)
+        )
 
         # Apply match type filter at DB level
         if match_type == 'singles':
@@ -1331,7 +1358,10 @@ class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
             player2 = get_object_or_404(Player, pk=player2_id)
 
             # Try cache first (30 minute TTL)
-            h2h_cache_key = f'h2h_{min(player1.pk, player2.pk)}_{max(player1.pk, player2.pk)}'
+            h2h_cache_key = (
+                f'{cache_utils.club_prefix(player1.club)}'
+                f'h2h_{min(player1.pk, player2.pk)}_{max(player1.pk, player2.pk)}'
+            )
             cached_h2h = cache.get(h2h_cache_key)
 
             if cached_h2h is not None:
@@ -2048,11 +2078,13 @@ class ScheduledMatchConvertView(LoginRequiredMixin, CreateView):
             return super().dispatch(request, *args, **kwargs)
 
         # User is authenticated, safe to fetch object
-        # Use _base_manager to bypass custom manager filtering
+        # _base_manager bypasses the *user* filter so a championship organiser
+        # can convert a match they are not playing in. Scoped, so it does not
+        # also bypass the club filter.
         try:
-            self.scheduled_match = ScheduledMatch._base_manager.get(
-                pk=self.kwargs['scheduled_match_pk']
-            )
+            self.scheduled_match = scope_to_active_club(
+                ScheduledMatch._base_manager.all()
+            ).get(pk=self.kwargs['scheduled_match_pk'])
         except ScheduledMatch.DoesNotExist:
             from django.http import Http404
             raise Http404("Scheduled match not found")
@@ -2673,8 +2705,9 @@ class ScheduledMatchEditView(LoginRequiredMixin, UpdateView):
     template_name = "pingpong/scheduled_match_edit.html"
 
     def get_queryset(self):
-        # Use all_objects to bypass manager filtering
-        return ScheduledMatch.all_objects.all()
+        # all_objects bypasses the *user* filter so a championship organiser
+        # can edit a match they are not playing in. Scoped to the club.
+        return scope_to_active_club(ScheduledMatch.all_objects.all())
 
     def dispatch(self, request, *args, **kwargs):
         if not request.user.is_authenticated:
@@ -2723,7 +2756,10 @@ def _get_live_match_for_scorekeeper(request, pk):
     Uses ``all_objects`` so the default manager's is_live=False filter
     doesn't hide our target.
     """
-    match = get_object_or_404(Match.all_objects, pk=pk)
+    # all_objects so the default manager's is_live=False filter doesn't hide
+    # the target -- but scoped, because bypassing the *user* filter for a
+    # scorekeeper is not a reason to expose another club's match.
+    match = get_object_or_404(scope_to_active_club(Match.all_objects.all()), pk=pk)
     try:
         user_player = request.user.player
     except (AttributeError, Player.DoesNotExist):
@@ -2909,8 +2945,9 @@ class LiveStateView(LoginRequiredMixin, View):
     """
 
     def get(self, request, pk):
-        # all_objects so we can return a completed match's redirect too
-        match = get_object_or_404(Match.all_objects, pk=pk)
+        # all_objects so we can return a completed match's redirect too,
+        # scoped so it cannot reach across clubs.
+        match = get_object_or_404(scope_to_active_club(Match.all_objects.all()), pk=pk)
         try:
             user_player = request.user.player
         except (AttributeError, Player.DoesNotExist):

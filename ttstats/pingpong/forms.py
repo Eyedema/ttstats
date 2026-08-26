@@ -32,6 +32,37 @@ def _best_of_field():
 FIELD_CSS = "field-input"
 
 
+class ScopedChoicesMixin:
+    """Re-bind Player/Location choice querysets when the form is instantiated.
+
+    **A `queryset=Player.objects.all()` written in a class body is evaluated at
+    import time**, when there is no request and therefore no user and no club
+    in thread-local context. The manager runs unfiltered, the resulting
+    QuerySet's filters are fixed, and every later render reuses them -- so the
+    picker silently ignores row-level security forever.
+
+    That was harmless while `PlayerManager` returned everyone to everyone. With
+    club scoping it is a leak *with a write attached*: a picker offering
+    another club's players lets a user build a cross-club match through the UI.
+
+    Re-binding here is deliberately a `.all()` on the manager rather than a
+    stored queryset, so `get_queryset()` runs per request.
+    """
+
+    scoped_choice_fields = ()
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for name in self.scoped_choice_fields:
+            field = self.fields.get(name)
+            if field is None:
+                continue
+            model = field.queryset.model
+            field.queryset = model._default_manager.all().order_by(
+                *model._meta.ordering or ["pk"]
+            )
+
+
 class StyledFormMixin:
     """Give every widget the shared control class, and mark fields in error.
 
@@ -81,7 +112,9 @@ def _player_field(number, required):
     )
 
 
-class MatchForm(StyledFormMixin, forms.ModelForm):
+class MatchForm(ScopedChoicesMixin, StyledFormMixin, forms.ModelForm):
+    scoped_choice_fields = ("player1", "player2", "player3", "player4", "location")
+
     best_of = _best_of_field()
     # The datetime-local control posts back in this shape too.
     date_played = forms.DateTimeField(
@@ -240,8 +273,10 @@ class PlayerRegistrationForm(StyledFormMixin, UserCreationForm):
         return user
 
 
-class ScheduledMatchForm(StyledFormMixin, forms.ModelForm):
+class ScheduledMatchForm(ScopedChoicesMixin, StyledFormMixin, forms.ModelForm):
     """Form for scheduling a future match"""
+
+    scoped_choice_fields = ("player1", "player2", "location")
 
     player1 = forms.ModelChoiceField(
     queryset=Player.objects.all(),

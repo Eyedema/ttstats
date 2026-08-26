@@ -4,6 +4,8 @@ from django.core.cache import cache
 from django.middleware.csrf import get_token
 from django.urls import reverse
 
+from . import cache_utils
+from .managers import scope_to_active_club
 from .models import Championship, Club, Match, Player
 
 # --- The navigation spine ---------------------------------------------------
@@ -59,7 +61,11 @@ def pingpong_context(request):
     if not player:
         return {**empty, 'nav_tab': nav_tab}
 
-    cache_key = f'pending_matches_{player.pk}'
+    # Every one of these keys is club-namespaced: they summarise
+    # club-scoped queries, and an unnamespaced key means the first club to
+    # render a page serves its numbers to every other.
+    prefix = cache_utils.club_prefix()
+    cache_key = f'{prefix}pending_matches_{player.pk}'
     pending_matches_count = cache.get(cache_key)
     if pending_matches_count is None:
         # Denormalized is_confirmed, so this filters in the DB rather than in
@@ -77,14 +83,20 @@ def pingpong_context(request):
         participants__player=player, is_live=True
     ).distinct().count()
 
-    live_championships_count = cache.get('live_championships_count')
+    live_key = f'{prefix}live_championships_count'
+    live_championships_count = cache.get(live_key)
     if live_championships_count is None:
-        live_championships_count = Championship.all_objects.filter(
-            status=Championship.Status.IN_PROGRESS
+        # all_objects bypasses the *user* filter -- a badge counting only
+        # the championships you entered is not a badge. Scoped, so it does
+        # not also bypass the club filter.
+        live_championships_count = scope_to_active_club(
+            Championship.all_objects.filter(
+                status=Championship.Status.IN_PROGRESS
+            )
         ).count()
-        cache.set('live_championships_count', live_championships_count, 300)
+        cache.set(live_key, live_championships_count, 300)
 
-    rank_key = f'player_rank_{player.pk}'
+    rank_key = f'{prefix}player_rank_{player.pk}'
     rank = cache.get(rank_key)
     if rank is None:
         rank = Player.objects.filter(elo_rating__gt=player.elo_rating).count() + 1

@@ -175,9 +175,54 @@ Maintain integration tests that exercise complete user flows end-to-end through 
 These are non-obvious behaviors that aren't clear from reading individual source files.
 
 ### Row-Level Security
+
+**Two independent boundaries, applied in this order.** Getting them backwards,
+or conflating them, is the whole failure mode:
+
+1. **The club** (tenancy) -- whose data is this? Flag-gated on `clubs`.
+2. **The user** (participation) -- which of my club's rows am I party to?
+
 - `CurrentUserMiddleware` stores user in thread-local (`_thread_locals.user`)
 - Managers filter querysets: no user = unfiltered, anonymous = empty, staff = all, regular = own matches only
-- **Bypass:** Use `Model.all_objects` (e.g., `Match.all_objects`) to skip row-level filtering (needed in championship views)
+- **Staff bypass the user filter. NOTHING bypasses the club filter.** A staff
+  account is global; a club is not.
+- **All six managers share `ScopedManagerMixin`.** They used to be six
+  near-duplicate copies of the same staff/anonymous/regular branch. Adding a
+  second boundary to six copies is how one gets missed, and a missed one is a
+  leak that raises nothing and logs nothing. Subclasses supply `club_lookup`,
+  `_base_queryset()`, `_scope_to_user()`, and the two opt-out knobs.
+- `filters_by_user = False` (PlayerManager, LiveMatchManager) skips the
+  *participation* filter only. It must never skip the club filter.
+- `anonymous_returns_none = False` exists solely to keep the flag-off path
+  byte-identical where the pre-tenancy manager served anonymous visitors.
+- **Bypass:** `Model.all_objects` / `_base_manager` skip row-level filtering
+  (championship views legitimately need every match in a championship, not just
+  the viewer's). **After tenancy they must not also skip the club filter** --
+  wrap them in `managers.scope_to_active_club(qs)`. See the audit table below.
+- **A `queryset=` written in a form class body is evaluated at import time**,
+  with no user and no club in context. The manager runs unfiltered and its
+  filters are then fixed forever. Harmless while `PlayerManager` returned
+  everyone to everyone; with tenancy it is a leak *with a write attached*, since
+  a picker offering another club's players lets a user build a cross-club match
+  through the UI. `ScopedChoicesMixin` re-binds them per instantiation.
+
+#### The `all_objects` / `_base_manager` audit (KAN-24)
+
+| Site | Why it bypasses | Resolution |
+|---|---|---|
+| `views.LeaderboardView` | Whole-club table, not "matches I played in" | **Scoped.** Highest risk: it feeds the cached payload |
+| `views._get_live_match_for_scorekeeper` | `is_live=False` default filter hides the target | **Scoped** |
+| `views.LiveStateView` | Must return a completed match's redirect | **Scoped** |
+| `views.ScheduledMatchConvertView` | Organiser converts a match they don't play in | **Scoped** |
+| `views.ScheduledMatchEditView` | Same | **Scoped** |
+| `context_processors.pingpong_context` | Badge counting only your own championships is not a badge | **Scoped** |
+| `ChampionshipDetailView` (4 sites) | Participants see all championship matches | **Left club-wide** — filtered by `championship=`, and the championship itself came through the club-scoped manager. Transitively safe |
+| `MatchManager` / `ScheduledMatchManager` `_scope_to_user` | `Championship.all_objects` inside an `Exists()` subquery | **Left club-wide** — correlated to `OuterRef('championship_id')` on an already-scoped row |
+| `models.Match.recompute`, `services` | Writes to a known pk | **Left club-wide** — no reads |
+| `achievements.py`, `notifications.py` | Background/system paths with no viewer | **Left club-wide** — `get_current_user()` is None, the unfiltered contract |
+| `seed_demo`, `seed_e2e`, `award_achievements`, `backfill_clubs` | Management commands | **Left club-wide** — same |
+
+#### The active club, and what `None` means
 
 #### The active club, and what `None` means
 
@@ -641,6 +686,37 @@ The app is installable and can push notifications. Two modules, deliberately spl
 - Falls back to LocMemCache when `REDIS_URL` is not set
 - Leaderboard uses generation counter pattern: `cache.incr('leaderboard_generation')` versions keys instead of deleting all filter variants
 - `CacheDebugMiddleware` (dev only) adds `X-Request-Time`, `X-Cache-Hits`, `X-Cache-Misses` headers
+
+#### Every cache key carries its club
+
+**A correctly-scoped query served from a cache entry another club warmed is
+still a leak** -- and it is the one kind of leak a suite running against a cold
+cache will never see. `cache_utils.club_prefix()` is the single source of the
+namespace.
+
+- The club id is a key **prefix**, not a suffix, so `cache_control --stats` can
+  group by namespace and a targeted flush stays possible: `club7:*` is a
+  scannable pattern, `*:club7` is not.
+- **The generation counter is per club** (`club7:leaderboard_generation`). The
+  pattern itself is kept -- versioning keys beats deleting the cross-product of
+  every filter variant -- but a match in Club A no longer invalidates Club B's.
+- The new key name is a **clean break** from `leaderboard_generation`, never an
+  overlap. A deploy leaves old keys in Redis, and an ambiguous key is how one
+  club is served another's payload for a whole TTL.
+- **A viewer with no club gets its own `noclub:` namespace**, which collides
+  with neither a real club nor the flag-off (empty) namespace.
+- **A player's keys are namespaced by that player's club, not the viewer's.**
+  They summarise that player; a viewer-dependent key means one entry per viewer
+  and a hit rate near zero.
+- **A cross-club match invalidates both clubs.** They are representable by
+  design, and half-invalidating leaves one side reading a stale table.
+- With the flag off, `club_prefix()` is `""` and every key is byte-identical to
+  its pre-tenancy shape.
+- **`warm_cache` scopes by explicit filter, never by faking a request.** The
+  managers' contract is "no user means unfiltered" and a command has no user, so
+  a club in thread-local context alone leaves every query unscoped and writes
+  each club's key with the whole database's numbers. A populated cache that is
+  wrong is worse than a cold one.
 
 ### Feature flags fail closed
 
