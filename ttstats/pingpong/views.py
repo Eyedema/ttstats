@@ -49,7 +49,7 @@ from .elo import (
 )
 from . import cache_utils
 from .managers import scope_to_active_club
-from .models import Game, Location, Match, MatchParticipant, Player, UserProfile, MatchConfirmation, ScheduledMatch, ScheduledMatchParticipant, Side, Championship, ClubRole, EloHistory, format_side_label, NotificationKind, NotificationPreference, PushSubscription
+from .models import Game, Location, Match, MatchParticipant, Player, UserProfile, MatchConfirmation, ScheduledMatch, ScheduledMatchParticipant, Side, Championship, ClubInvite, ClubMembership, ClubRole, EloHistory, format_side_label, NotificationKind, NotificationPreference, PushSubscription
 from .emails import send_scheduled_match_email, send_passkey_deleted_email
 from .services import set_match_sides, set_scheduled_match_sides
 
@@ -1638,6 +1638,12 @@ class PlayerRegistrationView(CreateView):
         """Log the user in after successful registration"""
         response = super().form_valid(form)
         user = self.object  # type: ignore
+
+        # If they arrived via an invite link, put them in the club now. The
+        # invite flow hooks into this view rather than forking it -- a second
+        # registration path would drift from this one, which already creates
+        # the Player, sends verification and logs the user in.
+        invited_club = consume_pending_invite(self.request, user=user)
         verification_url = self.request.build_absolute_uri(
             reverse_lazy(
                 "pingpong:email_verify", args=[user.profile.email_verification_token]
@@ -1658,6 +1664,7 @@ class PlayerRegistrationView(CreateView):
             {
                 "email": user.email,
                 "username": user.username,
+                "invited_club": invited_club,
             },
         )
 
@@ -3260,9 +3267,17 @@ class ClubSettingsView(ClubAdminRequiredMixin, View):
             if viewer.outranks(m) and not (m.is_owner and owners <= 1)
         }
 
+        from .forms import ClubInviteForm
+
         return {
             "club": self.club,
             "form": form or ClubSettingsForm(instance=self.club),
+            "invite_form": ClubInviteForm(),
+            "invites": self.club.invites.all()[:10],
+            # Popped, not read: an invite link is a bearer credential, so it is
+            # shown once on the redirect after creation rather than living on
+            # the settings page forever.
+            "last_invite_url": self.request.session.pop("last_invite_url", None),
             "memberships": memberships,
             "viewer_membership": viewer,
             "actionable_ids": actionable_ids,
@@ -3364,3 +3379,203 @@ class ClubMemberRemoveView(ClubAdminRequiredMixin, View):
         membership.delete()
         messages.success(request, f"{username} was removed from the club.")
         return redirect("pingpong:club_settings")
+
+
+# ---------------------------------------------------------------------------
+# Club invites (KAN-18 / S1.6)
+# ---------------------------------------------------------------------------
+
+# Where an invite token waits while an anonymous visitor goes through signup.
+# Session rather than a query parameter on the signup URL: the registration
+# form posts to itself, so a query parameter would be lost on the first
+# validation error and the invite would silently evaporate.
+PENDING_INVITE_SESSION_KEY = "pending_club_invite"
+
+
+def _find_invite(token):
+    """Look an invite up by token. Returns None rather than raising.
+
+    Compared in constant time. A plain `filter(token=token)` on an indexed
+    unique column is already not a timing oracle in any practical sense, but
+    the lookup result is then re-verified with `secrets.compare_digest` so the
+    property does not depend on how the database happens to index the column.
+
+    The token is never logged, here or anywhere -- it is a bearer credential.
+    """
+    import secrets
+
+    if not token or len(token) > 64:
+        return None
+    invite = ClubInvite.objects.filter(token=token).select_related("club").first()
+    if invite is None:
+        return None
+    if not secrets.compare_digest(str(invite.token), str(token)):
+        return None
+    return invite
+
+
+def accept_club_invite(request, invite, user=None):
+    """Put `user` (default: the request's user) in the invite's club.
+
+    One place, called from both the accept view and the post-signup hook, so
+    the two paths cannot drift about what "joined" means.
+
+    The explicit `user` argument is not optional decoration: at registration
+    time the new account exists but is **not logged in yet**, so `request.user`
+    is still anonymous and the invite would silently do nothing.
+    """
+    user = user or request.user
+    if not user or not user.is_authenticated:
+        return "invalid"
+
+    if invite.club.user_is_member(user):
+        return "already_member"
+
+    if not invite.claim():
+        return "invalid"
+
+    ClubMembership.objects.get_or_create(
+        club=invite.club,
+        user=user,
+        defaults={"role": ClubRole.MEMBER},
+    )
+
+    # base.html renders {% url 'pingpong:player_detail' user.player.pk %}
+    # unconditionally, so a member without a Player 500s every page in the app.
+    # An invite must never leave someone in that state.
+    player = getattr(user, "player", None)
+    if player is None:
+        Player.objects.create(user=user, name=user.username, club=invite.club)
+    elif player.club_id is None:
+        Player.objects.filter(pk=player.pk).update(club=invite.club)
+
+    from ttstats.middleware import set_active_club
+
+    set_active_club(request, invite.club)
+    return "joined"
+
+
+class ClubInviteCreateView(ClubAdminRequiredMixin, View):
+    """Generate an invite link for the active club. Admins only."""
+
+    def post(self, request):
+        from .forms import ClubInviteForm
+
+        form = ClubInviteForm(request.POST)
+        if not form.is_valid():
+            messages.error(request, "Could not create that invite.")
+            return redirect("pingpong:club_settings")
+
+        invite = ClubInvite.issue(
+            club=self.club,
+            created_by=request.user,
+            validity=timedelta(days=form.cleaned_data["valid_for_days"]),
+            max_uses=form.cleaned_data.get("max_uses") or None,
+            note=form.cleaned_data.get("note", ""),
+        )
+        messages.success(
+            request,
+            "Invite link created. Share it with the person you want to add.",
+        )
+        request.session["last_invite_url"] = request.build_absolute_uri(
+            reverse("pingpong:club_invite_accept", args=[invite.token])
+        )
+        return redirect("pingpong:club_settings")
+
+
+class ClubInviteRevokeView(ClubAdminRequiredMixin, View):
+    """Revoke an invite. Admins only, and only for their own club."""
+
+    def post(self, request, invite_id):
+        invite = get_object_or_404(self.club.invites, pk=invite_id)
+        invite.revoke()
+        messages.success(request, "That invite link no longer works.")
+        return redirect("pingpong:club_settings")
+
+
+@method_decorator(
+    # A token is guessable only by brute force, so the accept endpoint is the
+    # one place worth rate limiting: it is the only oracle for "is this token
+    # real". Keyed on IP because the attacker is by definition not logged in.
+    ratelimit(key="ip", rate="20/h", method="GET", block=True),
+    name="dispatch",
+)
+class ClubInviteAcceptView(View):
+    """Open an invite link.
+
+    Handles both visitors: an authenticated user joins immediately, an
+    anonymous one is sent through the *existing* signup flow with the token
+    parked in their session. Registration is not forked -- a second signup path
+    would drift from the first, and this one already creates the Player,
+    sends verification and logs the user in.
+    """
+
+    template_name = "pingpong/club_invite_invalid.html"
+
+    def get(self, request, token):
+        invite = _find_invite(token)
+
+        if invite is None or not invite.is_valid:
+            return self._invalid(request, invite)
+
+        if not request.user.is_authenticated:
+            # Park it and send them to signup. Survives the round trip,
+            # including a failed validation pass on the form.
+            request.session[PENDING_INVITE_SESSION_KEY] = invite.token
+            messages.info(
+                request,
+                f"Create an account to join {invite.club.name}.",
+            )
+            return redirect("pingpong:signup")
+
+        outcome = accept_club_invite(request, invite)
+
+        if outcome == "already_member":
+            messages.info(
+                request, f"You are already a member of {invite.club.name}."
+            )
+        elif outcome == "invalid":
+            # Lost the race for the last use of a single-use link.
+            invite.refresh_from_db()
+            return self._invalid(request, invite)
+        else:
+            messages.success(request, f"Welcome to {invite.club.name}!")
+
+        return redirect("pingpong:dashboard")
+
+    def _invalid(self, request, invite):
+        """Never a 500, and never silent membership."""
+        return render(
+            request,
+            self.template_name,
+            {
+                "reason": (
+                    invite.invalid_reason
+                    if invite is not None
+                    else "This invite link is not valid."
+                ),
+                "club": invite.club if invite is not None else None,
+            },
+            status=404 if invite is None else 410,
+        )
+
+
+def consume_pending_invite(request, user=None):
+    """Apply a parked invite after signup. Safe to call unconditionally.
+
+    Called from `PlayerRegistrationView.form_valid`, which is why the invite
+    flow does not need a registration path of its own. `user` is passed
+    explicitly there because the new account is not logged in yet.
+    """
+    token = request.session.pop(PENDING_INVITE_SESSION_KEY, None)
+    user = user or getattr(request, "user", None)
+    if not token or not user or not user.is_authenticated:
+        return None
+
+    invite = _find_invite(token)
+    if invite is None or not invite.is_valid:
+        return None
+
+    if accept_club_invite(request, invite, user=user) != "joined":
+        return None
+    return invite.club

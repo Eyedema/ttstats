@@ -1500,3 +1500,130 @@ class FeatureFlagOverride(models.Model):
     def __str__(self):
         state = "on" if self.enabled else "off"
         return f"{self.name}={state} for {self.user.username}"
+
+
+CLUB_INVITE_DEFAULT_VALIDITY = timedelta(days=14)
+
+
+class ClubInvite(models.Model):
+    """A shareable link that lets someone join a club.
+
+    This is what makes onboarding a second group self-serve, which is the point
+    of the whole tenancy epic: no admin creating accounts by hand, no shell.
+
+    Token generation follows the `UserProfile.email_verification_token`
+    precedent already working in production -- `uuid.uuid4().hex`, 32 hex
+    characters of CSPRNG output. Expiry is a stored timestamp rather than an
+    interval computed at read time, because an invite's lifetime is a property
+    of the invite, not of whenever someone happens to open it.
+
+    A link forwarded to the wrong person is the expected failure, not an exotic
+    one, which is why expiry, revocation and a use cap are all in scope rather
+    than optional.
+    """
+
+    club = models.ForeignKey(
+        Club, on_delete=models.CASCADE, related_name="invites"
+    )
+    token = models.CharField(max_length=64, unique=True, db_index=True)
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="club_invites_created",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    max_uses = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Leave blank for unlimited uses until expiry.",
+    )
+    uses = models.PositiveIntegerField(default=0)
+    note = models.CharField(
+        max_length=120,
+        blank=True,
+        help_text="Who this was sent to, for your own records.",
+    )
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    @classmethod
+    def issue(cls, club, created_by, validity=None, max_uses=None, note=""):
+        return cls.objects.create(
+            club=club,
+            created_by=created_by,
+            token=uuid.uuid4().hex,
+            expires_at=timezone.now() + (validity or CLUB_INVITE_DEFAULT_VALIDITY),
+            max_uses=max_uses,
+            note=note,
+        )
+
+    # -- state ---------------------------------------------------------------
+
+    @property
+    def is_revoked(self):
+        return self.revoked_at is not None
+
+    @property
+    def is_expired(self):
+        return timezone.now() >= self.expires_at
+
+    @property
+    def is_used_up(self):
+        return self.max_uses is not None and self.uses >= self.max_uses
+
+    @property
+    def is_valid(self):
+        return not (self.is_revoked or self.is_expired or self.is_used_up)
+
+    @property
+    def invalid_reason(self):
+        """Why this link no longer works, in words a recipient can act on.
+
+        Deliberately specific. "This invite is no longer valid" tells someone
+        holding a link nothing about whether to ask for a new one or check the
+        date, and the distinction is not sensitive -- the token holder already
+        has the token.
+        """
+        if self.is_revoked:
+            return "This invite has been revoked by a club admin."
+        if self.is_expired:
+            return "This invite has expired. Ask a club admin for a new link."
+        if self.is_used_up:
+            return "This invite has already been used."
+        return ""
+
+    def revoke(self):
+        if self.revoked_at is None:
+            self.revoked_at = timezone.now()
+            self.save(update_fields=["revoked_at"])
+
+    def claim(self):
+        """Consume one use, atomically. True if the claim succeeded.
+
+        A conditional queryset `.update()`, which the database evaluates as a
+        single compare-and-set -- the same shape `Match.result_notified_at`
+        uses for exactly-once push. Two people opening the same single-use link
+        at the same moment is a real race, and `if invite.is_used_up: ...` in
+        Python loses it every time.
+
+        An unlimited invite still counts uses; it just has no ceiling to test.
+        """
+        rows = ClubInvite.objects.filter(
+            pk=self.pk,
+            revoked_at__isnull=True,
+            expires_at__gt=timezone.now(),
+        ).filter(
+            models.Q(max_uses__isnull=True) | models.Q(uses__lt=models.F("max_uses"))
+        ).update(uses=models.F("uses") + 1)
+
+        if rows:
+            self.refresh_from_db(fields=["uses"])
+        return bool(rows)
+
+    def __str__(self):
+        return f"Invite to {self.club.name} ({'valid' if self.is_valid else 'invalid'})"

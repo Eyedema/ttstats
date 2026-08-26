@@ -102,6 +102,24 @@ URL_EXPECTATIONS = {
         "Same as club_member_role.",
     ),
 
+    # --- Club invites (KAN-18) ----------------------------------------------
+    "club_invite_create": (
+        "agnostic",
+        "Issues an invite for the viewer's ACTIVE club only -- there is no "
+        "club id in the request to forge. Admin-gating is in test_club_roles.py.",
+    ),
+    "club_invite_revoke": (
+        "agnostic",
+        "Looked up through `self.club.invites`, so another club's invite id "
+        "404s. Asserted in test_club_invites.py.",
+    ),
+    "club_invite_accept": (
+        "agnostic",
+        "Token-addressed and deliberately reachable by anyone holding the "
+        "link -- that is the feature. The token IS the authorization, it is "
+        "rate limited, and it grants membership rather than exposing data.",
+    ),
+
     # --- Per-user settings: scoped to request.user, never to a club ---------
     "passkey_management": (
         "agnostic",

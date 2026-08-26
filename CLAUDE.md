@@ -167,6 +167,7 @@ Maintain integration tests that exercise complete user flows end-to-end through 
 3. **Doubles match lifecycle:** Create match (4 players) -> add games -> confirm as all 4 players -> assert Elo updated for all.
 4. **Scheduled match conversion:** Schedule match -> assert emails -> convert to match -> add games -> confirm -> verify calendar status.
 5. **Head-to-head with data:** Create two players, play multiple confirmed matches -> GET head-to-head -> assert stats correct.
+6. **Club invite -> anonymous signup -> membership** (`test_club_invites.py::TestAnonymousSignupThroughAnInvite`): admin generates an invite -> anonymous visitor opens the link -> signs up -> assert they are a member with a Player, the invite is consumed exactly once, and registration's own behaviour (verification email) is unchanged.
 
 ---
 
@@ -717,6 +718,41 @@ namespace.
   a club in thread-local context alone leaves every query unscoped and writes
   each club's key with the whole database's numbers. A populated cache that is
   wrong is worse than a cold one.
+
+### Club invites are bearer credentials
+
+`ClubInvite` + `/pingpong/join/<token>/` is how a second group onboards itself
+with no admin creating accounts and no shell. The token *is* the authorization,
+which sets every rule below.
+
+- **The token follows the `UserProfile.email_verification_token` precedent** --
+  `uuid.uuid4().hex`, already working in production. Compared with
+  `secrets.compare_digest`, never logged, and the accept endpoint is rate
+  limited (`20/h` by IP) because it is the only oracle for "is this token real".
+- **Registration is hooked, never forked.** `PlayerRegistrationView.form_valid`
+  calls `consume_pending_invite()`. A second signup path would drift from the
+  one that already creates the Player, sends verification and handles the
+  form's error states.
+- **`accept_club_invite` takes an explicit `user`.** At registration time the
+  new account exists but is *not logged in yet*, so `request.user` is still
+  anonymous and the invite would silently do nothing.
+- **The token is parked in the session, not on the signup URL.** The
+  registration form posts to itself, so a query parameter is lost on the first
+  validation error and the invite evaporates.
+- **`claim()` is a conditional `.update()`**, so two people opening the same
+  single-use link at the same moment cannot both win. `if invite.is_used_up:`
+  in Python loses that race every time. Same shape as
+  `Match.result_notified_at`.
+- **An existing member's visit does not burn a use** -- otherwise a curious
+  member destroys a single-use link meant for someone else.
+- **Acceptance guarantees a Player exists.** `base.html` renders
+  `user.player.pk` unconditionally, so a member without one 500s every page.
+- **A dead link gets a real page**, with the *specific* reason (expired /
+  revoked / used up). Never a 500, never silent membership. The distinction is
+  not sensitive: the reader already holds the token.
+- **The generated link is shown once**, on the redirect after creation, and is
+  not re-rendered on later visits. A settings page that always displays every
+  live link is a settings page you cannot show anyone.
 
 ### Club roles
 

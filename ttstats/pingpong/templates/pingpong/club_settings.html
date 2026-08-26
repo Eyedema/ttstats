@@ -29,6 +29,66 @@
   </div>
 
   <div class="border bg-card p-4 md:p-6">
+    <h3 class="text-heading mb-1">Invite someone</h3>
+    <p class="text-muted-foreground text-sm mb-4">
+      Create a link and send it however you like. They sign up themselves.
+    </p>
+
+    {% if last_invite_url %}
+    {% comment %}
+      Shown once, right after creation. Not stored on the page permanently:
+      an invite link is a bearer credential, and a settings page that always
+      displays every live link is a settings page you cannot show anyone.
+    {% endcomment %}
+    <div class="border border-confirmed p-3 mb-4 space-y-2">
+      <p class="label-cap text-confirmed">New link ready</p>
+      <p class="break-all text-sm font-mono">{{ last_invite_url }}</p>
+    </div>
+    {% endif %}
+
+    <form method="post" action="{% url 'pingpong:club_invite_create' %}"
+          class="space-y-4">
+      {% csrf_token %}
+      {% include "pingpong/_field.html" with field=invite_form.valid_for_days %}
+      {% include "pingpong/_field.html" with field=invite_form.max_uses %}
+      {% include "pingpong/_field.html" with field=invite_form.note %}
+      <button type="submit"
+              class="inline-flex items-center justify-center gap-2 bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground min-h-[44px]">
+        {% icon "user-plus" css="w-4 h-4" %}
+        Create invite link
+      </button>
+    </form>
+
+    {% if invites %}
+    <ul class="divide-y mt-6">
+      {% for invite in invites %}
+      <li class="py-3 flex flex-wrap items-center justify-between gap-3">
+        <div class="min-w-0">
+          <p class="text-sm truncate">{{ invite.note|default:"Untitled invite" }}</p>
+          <p class="label-cap text-muted-foreground">
+            {% if invite.is_valid %}
+              Expires {{ invite.expires_at|date:"j M" }}
+              · {{ invite.uses }}{% if invite.max_uses %}/{{ invite.max_uses }}{% endif %} used
+            {% else %}
+              {{ invite.invalid_reason }}
+            {% endif %}
+          </p>
+        </div>
+        {% if invite.is_valid %}
+        <form method="post" action="{% url 'pingpong:club_invite_revoke' invite.pk %}">
+          {% csrf_token %}
+          <button type="submit" class="text-sm px-3 py-1.5 border text-paddle min-h-[36px]">
+            Revoke
+          </button>
+        </form>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </div>
+
+  <div class="border bg-card p-4 md:p-6">
     <h3 class="text-heading mb-1">Members</h3>
     <p class="text-muted-foreground text-sm mb-4">
       Owners and admins can invite and remove people. A club always has at

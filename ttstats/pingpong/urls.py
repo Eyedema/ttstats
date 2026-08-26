@@ -65,6 +65,24 @@ urlpatterns = [
         name="club_member_remove",
     ),
 
+    path(
+        "club/invites/new/",
+        views.ClubInviteCreateView.as_view(),
+        name="club_invite_create",
+    ),
+    path(
+        "club/invites/<int:invite_id>/revoke/",
+        views.ClubInviteRevokeView.as_view(),
+        name="club_invite_revoke",
+    ),
+    # The accept link. Deliberately short and outside /club/ -- this is the URL
+    # people paste into WhatsApp.
+    path(
+        "join/<str:token>/",
+        views.ClubInviteAcceptView.as_view(),
+        name="club_invite_accept",
+    ),
+
     # Passkey management
     path("passkeys/", views.PasskeyManagementView.as_view(), name="passkey_management"),
 

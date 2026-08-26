@@ -9,7 +9,7 @@ from django.contrib.auth.models import User
 from django.core.management.base import BaseCommand, CommandError
 
 from pingpong import live_scoring as ls, services
-from pingpong.models import Match, Player
+from pingpong.models import Club, ClubInvite, ClubMembership, ClubRole, Match, Player
 
 E2E_USERNAME = "e2e"
 E2E_PASSWORD = "e2e-local-only"
@@ -57,7 +57,26 @@ class Command(BaseCommand):
         )
         services.set_match_sides(match, [player], [opponent])
 
+        # A club, so the invite specs have something to point at. Idempotent
+        # like everything else here: the suite re-seeds before every run.
+        club, _ = Club.objects.get_or_create(
+            slug="e2e-club", defaults={"name": "E2E Club"}
+        )
+        ClubMembership.objects.get_or_create(
+            club=club, user=user, defaults={"role": ClubRole.OWNER}
+        )
+        Player.objects.filter(pk__in=[player.pk, opponent.pk]).update(club=club)
+
+        # One live invite and one revoked one, so the suite can render both the
+        # working and the dead page without mutating state mid-run.
+        ClubInvite.objects.filter(club=club).delete()
+        live_invite = ClubInvite.issue(club, user, max_uses=50, note="e2e")
+        dead_invite = ClubInvite.issue(club, user, note="e2e revoked")
+        dead_invite.revoke()
+
         # The suite reads these off stdout rather than hard-coding a pk.
         self.stdout.write(f"E2E_USERNAME={E2E_USERNAME}")
         self.stdout.write(f"E2E_PASSWORD={E2E_PASSWORD}")
         self.stdout.write(f"E2E_MATCH_PK={match.pk}")
+        self.stdout.write(f"E2E_INVITE_TOKEN={live_invite.token}")
+        self.stdout.write(f"E2E_REVOKED_INVITE_TOKEN={dead_invite.token}")
