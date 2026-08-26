@@ -902,6 +902,14 @@ dict lookup plus one table is disproportionate on a 3.7GB VPS with a pinned
 - **Prod:** `DEBUG=False`, PostgreSQL, Mailgun, HTTPS, WhiteNoise, `DJANGO_SETTINGS_MODULE=ttstats.settings.prod`
 - **Docker services:** web (Django), db (PostgreSQL), redis (Redis 7 Alpine)
 - **Web push needs three vars in `.env.prod`** (`compose.prod.yml` already passes the whole file through): `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_ADMIN_EMAIL` (a `mailto:` URL). Until they are set the app emails as before -- push is not a hard dependency of any code path.
+- **The tenancy cutover has a runbook: `docs/tenancy-rollout.md`.** Seven steps,
+  each with its own verification command, gate and rollback. Steps 5 and 6 roll
+  back by flipping `TTSTATS_FLAGS_ON` -- no deploy, no migration, effective on
+  the next request. Step 7 (non-null columns) is the point of no return and is
+  the only one whose rollback is "restore the snapshot".
+- **Production is the `db` service in `compose.prod.yml`** (PostgreSQL 16,
+  volume `pgdata`). Supabase holds only a *dev clone* pulled from it by
+  `pg_dump` -- it is not authoritative and is not a fallback.
 - **CI/CD** (`.github/workflows/main.yml`): On push/PR runs tests with coverage; on master push deploys via SSH to VPS. The test job is gated on changed files -- **`.py` gates the test run, frontend extensions gate the asset build**, so a template-only commit still builds the CSS.
 - **Migration `0028_drop_team` is one-way.** Reversing would re-add NOT NULL FK columns with nothing to put in them, so it raises a `RuntimeError` naming the remedy: restore a pre-0028 snapshot.
 - **Deploy runs `collectstatic` under `set -e`** (`docker/django/entrypoint.sh`), and prod uses WhiteNoise's hashing manifest storage. A vendored file whose `sourceMappingURL` target is missing therefore **fails the deploy**, not just the page -- `scripts/vendor_assets.mjs` copies `.map` siblings for exactly this reason.
