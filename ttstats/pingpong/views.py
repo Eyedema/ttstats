@@ -49,7 +49,7 @@ from .elo import (
 )
 from . import cache_utils
 from .managers import scope_to_active_club
-from .models import Game, Location, Match, MatchParticipant, Player, UserProfile, MatchConfirmation, ScheduledMatch, ScheduledMatchParticipant, Side, Championship, ClubInvite, ClubMembership, ClubRole, EloHistory, format_side_label, NotificationKind, NotificationPreference, PushSubscription
+from .models import Game, Location, Match, MatchParticipant, Player, UserProfile, MatchConfirmation, ScheduledMatch, ScheduledMatchParticipant, Side, Championship, Club, ClubInvite, ClubMembership, ClubRole, EloHistory, format_side_label, NotificationKind, NotificationPreference, PushSubscription
 from .emails import send_scheduled_match_email, send_passkey_deleted_email
 from .services import set_match_sides, set_scheduled_match_sides
 
@@ -3579,3 +3579,43 @@ def consume_pending_invite(request, user=None):
     if accept_club_invite(request, invite, user=user) != "joined":
         return None
     return invite.club
+
+
+class ClubSwitchView(LoginRequiredMixin, View):
+    """Switch the viewer's active club.
+
+    POST only. Switching changes what every subsequent page shows, which makes
+    it a state change, not a navigation -- a GET link would let any page on the
+    internet move someone's club with an <img> tag.
+
+    Membership is checked here *and* re-checked by `_resolve_active_club` on
+    every later request. This one is the courtesy error message; that one is
+    the security boundary.
+    """
+
+    def post(self, request):
+        from ttstats.middleware import set_active_club
+
+        # Coerced before it reaches the ORM: a non-numeric pk raises ValueError
+        # out of the field's get_prep_value, which would turn a malformed POST
+        # into a 500 rather than a polite refusal.
+        try:
+            club_id = int(request.POST.get("club_id", ""))
+        except (TypeError, ValueError):
+            club_id = None
+
+        club = (
+            Club.objects.for_user(request.user).filter(pk=club_id).first()
+            if club_id is not None
+            else None
+        )
+
+        if club is None:
+            messages.error(request, "You are not a member of that club.")
+            return redirect("pingpong:dashboard")
+
+        set_active_club(request, club)
+        messages.success(request, f"Now viewing {club.name}.")
+        # Today, deliberately. Staying put would leave the viewer on a detail
+        # page belonging to the club they just left, which then 404s.
+        return redirect("pingpong:dashboard")

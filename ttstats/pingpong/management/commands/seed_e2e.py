@@ -67,6 +67,17 @@ class Command(BaseCommand):
         )
         Player.objects.filter(pk__in=[player.pk, opponent.pk]).update(club=club)
 
+        # A second club, so the switcher actually has something to switch
+        # between. A single-club user sees no switcher by design, which would
+        # make the S1.8 specs assert on markup that is correctly absent.
+        second, _ = Club.objects.get_or_create(
+            slug="e2e-club-two",
+            defaults={"name": "E2E Second Club With A Deliberately Long Name"},
+        )
+        ClubMembership.objects.get_or_create(
+            club=second, user=user, defaults={"role": ClubRole.MEMBER}
+        )
+
         # One live invite and one revoked one, so the suite can render both the
         # working and the dead page without mutating state mid-run.
         ClubInvite.objects.filter(club=club).delete()
@@ -80,3 +91,5 @@ class Command(BaseCommand):
         self.stdout.write(f"E2E_MATCH_PK={match.pk}")
         self.stdout.write(f"E2E_INVITE_TOKEN={live_invite.token}")
         self.stdout.write(f"E2E_REVOKED_INVITE_TOKEN={dead_invite.token}")
+        self.stdout.write(f"E2E_CLUB={club.name}")
+        self.stdout.write(f"E2E_CLUB_TWO={second.name}")

@@ -160,13 +160,29 @@ def club_context(request):
     """
     from django.utils.functional import SimpleLazyObject
 
-    from ttstats.middleware import get_current_club, get_user_clubs
+    from ttstats.middleware import (
+        get_current_club,
+        get_current_membership,
+        get_user_clubs,
+    )
 
     if not request.user.is_authenticated:
         return {'active_club': None, 'user_clubs': [], 'has_multiple_clubs': False}
+
+    def _is_club_admin():
+        # Read off the memoized membership list rather than re-querying:
+        # deciding whether to draw one menu row must not cost a query on every
+        # page in the app.
+        membership = get_current_membership()
+        return bool(membership and membership.is_admin)
 
     return {
         'active_club': SimpleLazyObject(get_current_club),
         'user_clubs': SimpleLazyObject(get_user_clubs),
         'has_multiple_clubs': SimpleLazyObject(lambda: len(get_user_clubs()) > 1),
+        # Whether to offer the Club settings row. A template cannot call
+        # `club.user_can_administer(user)` -- Django templates take no
+        # arguments -- and the alternative, a template filter, would put a
+        # permission decision somewhere nobody thinks to audit.
+        'club_admin': SimpleLazyObject(_is_club_admin),
     }

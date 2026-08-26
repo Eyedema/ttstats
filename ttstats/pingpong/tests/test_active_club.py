@@ -15,6 +15,7 @@ from django.test import RequestFactory
 from pingpong.context_processors import club_context
 from ttstats.middleware import (
     ACTIVE_CLUB_SESSION_KEY,
+    REQUEST_LOCAL_ATTRS,
     CurrentUserMiddleware,
     _thread_locals,
     get_current_club,
@@ -28,11 +29,11 @@ from .conftest import ClubFactory, ClubMembershipFactory, PlayerFactory, UserFac
 def _clean_thread_locals():
     """Every test here manipulates the thread-local directly, so both ends of
     every test must be clean — the convention `test_managers.py` already uses."""
-    for attr in ("user", "session", "club", "user_clubs"):
+    for attr in REQUEST_LOCAL_ATTRS:
         if hasattr(_thread_locals, attr):
             delattr(_thread_locals, attr)
     yield
-    for attr in ("user", "session", "club", "user_clubs"):
+    for attr in REQUEST_LOCAL_ATTRS:
         if hasattr(_thread_locals, attr):
             delattr(_thread_locals, attr)
 

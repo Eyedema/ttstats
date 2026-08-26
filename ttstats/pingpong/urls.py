@@ -53,6 +53,7 @@ urlpatterns = [
 
     # Club administration (KAN-17). Not a tab: a club is a context, not a
     # destination -- see TAB_FOR_URL_NAME.
+    path("club/switch/", views.ClubSwitchView.as_view(), name="club_switch"),
     path("club/settings/", views.ClubSettingsView.as_view(), name="club_settings"),
     path(
         "club/members/<int:membership_id>/role/",

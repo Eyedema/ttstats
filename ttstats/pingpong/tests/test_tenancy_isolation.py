@@ -28,7 +28,7 @@ from django.urls import URLPattern, URLResolver, get_resolver, reverse
 
 from pingpong.models import Club, Match, Player, Side
 from pingpong.services import set_match_sides
-from ttstats.middleware import _thread_locals
+from ttstats.middleware import REQUEST_LOCAL_ATTRS, _thread_locals
 
 from .conftest import (
     ChampionshipFactory,
@@ -100,6 +100,12 @@ URL_EXPECTATIONS = {
     "club_member_remove": (
         "agnostic",
         "Same as club_member_role.",
+    ),
+
+    "club_switch": (
+        "agnostic",
+        "POST only, and it can only select from Club.objects.for_user() -- a "
+        "forged club_id is refused. Covered in test_club_switcher.py.",
     ),
 
     # --- Club invites (KAN-18) ----------------------------------------------
@@ -308,11 +314,11 @@ class Tenant:
 @pytest.fixture(autouse=True)
 def _no_thread_local_leak():
     """Manager-level assertions manipulate the thread-local directly."""
-    for attr in ("user", "session", "club", "user_clubs", "flag_memo"):
+    for attr in REQUEST_LOCAL_ATTRS:
         if hasattr(_thread_locals, attr):
             delattr(_thread_locals, attr)
     yield
-    for attr in ("user", "session", "club", "user_clubs", "flag_memo"):
+    for attr in REQUEST_LOCAL_ATTRS:
         if hasattr(_thread_locals, attr):
             delattr(_thread_locals, attr)
 

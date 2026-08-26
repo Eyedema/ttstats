@@ -719,6 +719,40 @@ namespace.
   each club's key with the whole database's numbers. A populated cache that is
   wrong is worse than a cold one.
 
+### The club switcher has no hidden state
+
+The switcher lives in `_nav_menu.html` -- **edited once**, rendered by both the
+drawer and the desktop sidebar, which is why they cannot diverge again.
+
+- **Placement is the drawer, never the tab bar.** The four tabs are
+  *destinations*; a club is a *context*. A fifth tab would also break the rule
+  that Play is a tab because it is the only thing that starts something.
+- **There is deliberately NO dropdown.** The fail-closed rule applies to
+  anything whose hidden state is managed by JavaScript, and the cheapest way to
+  obey it is to have no hidden state: this is a list of plain POST forms, two
+  or three rows long, never collapsed. It cannot render open-and-unusable, it
+  needs no Alpine, no `[x-cloak]` and no compiled CSS to be correct, and it
+  works with scripting off. A collapsible control here would add a failure mode
+  to save one row of vertical space.
+- **POST, not a link.** Switching changes what every later page shows, so a GET
+  would let any page on the internet move someone's club with an `<img>` tag.
+  `club_id` is coerced to int before it reaches the ORM -- a non-numeric pk
+  raises out of `get_prep_value` and would turn a malformed POST into a 500.
+- **Absent for single-club users**, who are almost everyone. A chooser offered
+  to someone with one choice is clutter -- but the club **name** still renders,
+  in the mobile header and the sidebar kicker, because "which club am I looking
+  at" has to be answerable on every screen without opening the drawer.
+- The active row is marked with `aria-current`, not colour alone.
+- **Switching lands on Today.** Staying put would leave the viewer on a detail
+  page belonging to the club they just left, which then 404s.
+- **A live match in the club you switch away from keeps running.** Switching is
+  a viewing change; the match is server state keyed on its own pk and the
+  scorekeeper reaches it by URL. It is waiting when they switch back.
+- `get_user_memberships()` answers **which clubs, which is active, and what
+  role** from one memoized query. Asking separately put three queries on every
+  page in the app -- one of them purely to decide whether to draw a single menu
+  row. The match-list query ceiling moved 14 -> 15 for this, deliberately.
+
 ### Club invites are bearer credentials
 
 `ClubInvite` + `/pingpong/join/<token>/` is how a second group onboards itself

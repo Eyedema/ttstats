@@ -58,17 +58,22 @@ class TestMatchListViewPerformance:
         # 7.   Confirmations
         # Total ~10. Was ~27 when players were reached through three separate
         # team prefetches and the template called Team.__str__ per row.
+        # +1 since KAN-19: the nav renders the active club's name on every
+        # page, which costs one indexed membership lookup. It is memoized for
+        # the request and answers three questions at once (which clubs, which
+        # is active, what role) -- the alternative was three separate queries.
+        # Raising the ceiling deliberately rather than hiding the cost.
         print(f"\nQuery count: {query_count}")
-        print(f"Expected: <= 14 queries")
+        print(f"Expected: <= 15 queries")
 
-        if query_count > 14:
+        if query_count > 15:
             print("\n\nAll queries:")
             for i, q in enumerate(context.captured_queries):
                 print(f"\n{i+1}. {q['sql']}")
 
-        assert query_count <= 14, (
+        assert query_count <= 15, (
             f"Too many queries: {query_count}. "
-            f"Expected <= 14 with participant prefetching. "
+            f"Expected <= 15 with participant prefetching. "
             f"(Note: This is still much better than the original 300-500 queries!)"
         )
 
@@ -157,4 +162,5 @@ class TestMatchListViewPerformanceForRegularUser:
         assert sorted(pks) == sorted(mine)
         assert len(pks) == len(set(pks))
         print(f"\nRegular-user query count: {len(context.captured_queries)}")
-        assert len(context.captured_queries) <= 14
+        # See the note on the ceiling above: +1 for the nav's club lookup.
+        assert len(context.captured_queries) <= 15

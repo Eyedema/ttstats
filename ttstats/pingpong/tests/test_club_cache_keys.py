@@ -13,18 +13,18 @@ import pytest
 from django.core.cache import cache
 
 from pingpong import cache_utils
-from ttstats.middleware import _thread_locals
+from ttstats.middleware import REQUEST_LOCAL_ATTRS, _thread_locals
 
 from .conftest import ClubFactory, MatchFactory, PlayerFactory, UserFactory
 
 
 @pytest.fixture(autouse=True)
 def _clean_context():
-    for attr in ("user", "session", "club", "user_clubs", "flag_memo"):
+    for attr in REQUEST_LOCAL_ATTRS:
         if hasattr(_thread_locals, attr):
             delattr(_thread_locals, attr)
     yield
-    for attr in ("user", "session", "club", "user_clubs", "flag_memo"):
+    for attr in REQUEST_LOCAL_ATTRS:
         if hasattr(_thread_locals, attr):
             delattr(_thread_locals, attr)
 

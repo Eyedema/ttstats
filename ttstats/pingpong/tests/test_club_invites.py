@@ -22,7 +22,11 @@ from pingpong.models import (
     ClubRole,
     Player,
 )
-from ttstats.middleware import ACTIVE_CLUB_SESSION_KEY, _thread_locals
+from ttstats.middleware import (
+    ACTIVE_CLUB_SESSION_KEY,
+    REQUEST_LOCAL_ATTRS,
+    _thread_locals,
+)
 
 from .conftest import ClubFactory, ClubMembershipFactory, PlayerFactory, UserFactory
 
@@ -31,11 +35,11 @@ SETTINGS_URL = reverse("pingpong:club_settings")
 
 @pytest.fixture(autouse=True)
 def _clean_context():
-    for attr in ("user", "session", "club", "user_clubs", "flag_memo", "request_path"):
+    for attr in REQUEST_LOCAL_ATTRS:
         if hasattr(_thread_locals, attr):
             delattr(_thread_locals, attr)
     yield
-    for attr in ("user", "session", "club", "user_clubs", "flag_memo", "request_path"):
+    for attr in REQUEST_LOCAL_ATTRS:
         if hasattr(_thread_locals, attr):
             delattr(_thread_locals, attr)
 

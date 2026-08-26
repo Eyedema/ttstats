@@ -5,6 +5,22 @@ from django.conf import settings
 
 _thread_locals = local()
 
+# Everything this middleware may stash on the thread-local, in one place.
+#
+# It exists because the list was duplicated across six test cleanup fixtures
+# and adding a seventh attribute silently left stale state in all of them --
+# which shows up as a test reading another test's club. Tests clear
+# REQUEST_LOCAL_ATTRS rather than their own hand-copied tuple.
+REQUEST_LOCAL_ATTRS = (
+    'user',
+    'session',
+    'club',
+    'user_clubs',
+    'user_memberships',
+    'flag_memo',
+    'request_path',
+)
+
 
 # Where the switcher stores the viewer's chosen club. The session is the right
 # home: SessionMiddleware runs before CurrentUserMiddleware, it survives
@@ -51,26 +67,51 @@ def get_current_club():
     return club
 
 
-def get_user_clubs():
-    """The current viewer's clubs, memoized for the request.
+def get_user_memberships():
+    """The viewer's memberships, club preloaded, memoized for the request.
 
-    One indexed query, shared by `get_current_club()` and the club context
-    processor -- they used to ask separately, which put two identical queries
-    on every authenticated page render.
+    **One query answers three questions**: which clubs the user is in, which is
+    active, and what role they hold in it. Asking separately put two identical
+    queries on every authenticated page render, and adding the role check for
+    the switcher's "Club settings" row would have made it three -- on every
+    page in the app, to decide whether to draw one menu row.
     """
-    if hasattr(_thread_locals, 'user_clubs'):
-        return _thread_locals.user_clubs
+    if hasattr(_thread_locals, 'user_memberships'):
+        return _thread_locals.user_memberships
 
     user = get_current_user()
     if not user or not getattr(user, 'is_authenticated', False):
-        clubs = []
+        memberships = []
     else:
-        from pingpong.models import Club
+        from pingpong.models import ClubMembership
 
-        clubs = list(Club.objects.for_user(user))
+        memberships = list(
+            ClubMembership.objects.filter(user=user)
+            .select_related('club')
+            .order_by('club__name')
+        )
 
-    _thread_locals.user_clubs = clubs
-    return clubs
+    _thread_locals.user_memberships = memberships
+    return memberships
+
+
+def get_user_clubs():
+    """The clubs the viewer belongs to, ordered by name."""
+    return [membership.club for membership in get_user_memberships()]
+
+
+def get_current_membership():
+    """The viewer's membership of their *active* club, or None.
+
+    Read from the same memoized list, so a role check costs no extra query.
+    """
+    club = get_current_club()
+    if club is None:
+        return None
+    for membership in get_user_memberships():
+        if membership.club_id == club.pk:
+            return membership
+    return None
 
 
 def _resolve_active_club(user, session):
@@ -150,7 +191,7 @@ class CurrentUserMiddleware:
         # test that set the thread-local by hand -- would hand this request a
         # club resolved for somebody else. Entering a request must start from a
         # known state, not a hoped-for one.
-        for attr in ('club', 'user_clubs'):
+        for attr in ('club', 'user_clubs', 'user_memberships'):
             if hasattr(_thread_locals, attr):
                 delattr(_thread_locals, attr)
 
@@ -168,8 +209,7 @@ class CurrentUserMiddleware:
             # thread serves next -- with two thread-locals plus the flag memo
             # the leak surface is three times what it was, and a leaked *club*
             # is a cross-tenant read rather than merely a stale badge count.
-            for attr in ('user', 'session', 'club', 'user_clubs',
-                         'request_path'):
+            for attr in REQUEST_LOCAL_ATTRS:
                 if hasattr(_thread_locals, attr):
                     delattr(_thread_locals, attr)
 

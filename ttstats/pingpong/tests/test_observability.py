@@ -12,18 +12,22 @@ from django.test import RequestFactory
 
 from pingpong import observability
 from pingpong.models import Match, Player
-from ttstats.middleware import CurrentUserMiddleware, _thread_locals
+from ttstats.middleware import (
+    REQUEST_LOCAL_ATTRS,
+    CurrentUserMiddleware,
+    _thread_locals,
+)
 
 from .conftest import ClubFactory, ClubMembershipFactory, MatchFactory, PlayerFactory, UserFactory
 
 
 @pytest.fixture(autouse=True)
 def _clean_context():
-    for attr in ("user", "session", "club", "user_clubs", "flag_memo", "request_path"):
+    for attr in REQUEST_LOCAL_ATTRS:
         if hasattr(_thread_locals, attr):
             delattr(_thread_locals, attr)
     yield
-    for attr in ("user", "session", "club", "user_clubs", "flag_memo", "request_path"):
+    for attr in REQUEST_LOCAL_ATTRS:
         if hasattr(_thread_locals, attr):
             delattr(_thread_locals, attr)
 
