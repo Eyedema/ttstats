@@ -220,7 +220,18 @@ PWA_BACKGROUND_COLOR = '#0f172a'
 FEATURE_FLAGS = {
     # Club scoping of the row-level managers and caches (KAN-6).
     'clubs': False,
+    # The tenancy leak canary (KAN-21). Runs inside get_queryset(), which is
+    # the hottest path in the app, so it is separately killable without a
+    # deploy -- and gated again by TENANCY_CANARY_SAMPLE_RATE below.
+    'tenancy_canary': False,
 }
+
+# Fraction of scoped querysets the canary inspects. 0.0 means never; the flag
+# above must ALSO be on. Kept low in production: the canary exists to notice a
+# leak, and noticing does not require seeing every query.
+TENANCY_CANARY_SAMPLE_RATE = float(
+    os.environ.get('TENANCY_CANARY_SAMPLE_RATE', '0.0')
+)
 
 for _flag_name in os.environ.get('TTSTATS_FLAGS_ON', '').split(','):
     _flag_name = _flag_name.strip()

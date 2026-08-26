@@ -140,6 +140,9 @@ class CurrentUserMiddleware:
         # The session is stashed rather than the resolved club: resolution is
         # lazy, so a page that never touches a scoped manager pays no query.
         _thread_locals.session = getattr(request, 'session', None)
+        # For the log filter. The path only -- never the query string,
+        # which can carry tokens.
+        _thread_locals.request_path = request.path
 
         # Clear the memo on the way *in* as well as out. Clearing only on exit
         # assumes every prior request left through this middleware, and the one
@@ -165,7 +168,8 @@ class CurrentUserMiddleware:
             # thread serves next -- with two thread-locals plus the flag memo
             # the leak surface is three times what it was, and a leaked *club*
             # is a cross-tenant read rather than merely a stale badge count.
-            for attr in ('user', 'session', 'club', 'user_clubs'):
+            for attr in ('user', 'session', 'club', 'user_clubs',
+                         'request_path'):
                 if hasattr(_thread_locals, attr):
                     delattr(_thread_locals, attr)
 

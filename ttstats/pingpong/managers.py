@@ -85,6 +85,22 @@ class ScopedManagerMixin:
 
         return qs.filter(**{self.club_lookup: club})
 
+    def _canary(self, qs, user, source):
+        """Report, never enforce. See `observability.check_queryset_scope`.
+
+        Lives here rather than in six managers so there is one place to arm,
+        disarm and reason about it -- which was half the point of the mixin.
+        """
+        from pingpong import observability
+
+        if not observability.canary_enabled(user):
+            return
+        from ttstats.middleware import get_current_club
+
+        observability.check_queryset_scope(
+            qs, get_current_club(), self.club_lookup, source
+        )
+
     def get_queryset(self):
         from ttstats.middleware import get_current_user
 
@@ -111,6 +127,7 @@ class ScopedManagerMixin:
             return qs
 
         if not self.filters_by_user:
+            self._canary(qs, user, f"{type(self).__name__}.get_queryset")
             return qs
 
         try:
@@ -118,7 +135,9 @@ class ScopedManagerMixin:
         except (AttributeError, ObjectDoesNotExist):
             return self._queryset_for_user_without_player(qs)
 
-        return self._scope_to_user(qs, player)
+        scoped = self._scope_to_user(qs, player)
+        self._canary(scoped, user, f"{type(self).__name__}.get_queryset")
+        return scoped
 
 
 class MatchManager(ScopedManagerMixin, models.Manager):
@@ -321,4 +340,15 @@ def scope_to_active_club(queryset, club_lookup="club"):
     if club is None:
         return queryset.none()
 
-    return queryset.filter(**{club_lookup: club})
+    scoped = queryset.filter(**{club_lookup: club})
+
+    # These are the sites that bypass the managers on purpose, so they are
+    # exactly where a scoping mistake is most likely and least visible.
+    from pingpong import observability
+
+    if observability.canary_enabled(user):
+        observability.check_queryset_scope(
+            scoped, club, club_lookup, "scope_to_active_club"
+        )
+
+    return scoped

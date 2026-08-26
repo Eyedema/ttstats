@@ -718,6 +718,42 @@ namespace.
   each club's key with the whole database's numbers. A populated cache that is
   wrong is worse than a cold one.
 
+### Tenancy observability: context on every log line, plus a canary
+
+Production ran one console handler at INFO with no request context. For a
+change whose failure mode is *silent*, that means the first signal would be a
+user asking "who is Marco?".
+
+- **Every prod log record carries `path`, `user` and `club` ids**
+  (`observability.RequestContextFilter`, wired into `prod.py`'s `LOGGING`).
+  **Ids only, never identities** -- no usernames, emails, tokens or push
+  endpoints. A log aggregator is a copy of your data in someone else's system,
+  and an id answers "which tenant" while a username does not. The query string
+  is never logged; the email-verification flow puts a token in a URL.
+- The filter **always sets its three attributes**, so a formatter naming them
+  cannot blow up on a record from a management command or a startup exception.
+  It also swallows everything: logging must never be the thing that fails.
+- **The canary reports, it does not enforce.** The manager filter is the
+  security boundary. Turning a silent leak into a loud outage is the worse
+  trade, so `check_queryset_scope` never raises -- not on a leak, not on a
+  sliced queryset, not on a bad lookup.
+- **What it catches:** a queryset reaching a viewer *unfiltered* while that
+  viewer had a club -- a flag misread, a stale memo, an `all_objects` path that
+  skipped `scope_to_active_club`. **What it cannot:** a filter applied against
+  the *wrong* club, since it compares against the same `get_current_club()` the
+  filter used. Only Q1.11, asserting from outside with two real tenants, covers
+  that.
+- **Two gates, and the order is load-bearing.** `TENANCY_CANARY_SAMPLE_RATE`
+  is checked *before* the `tenancy_canary` flag, because a flag lookup for an
+  authenticated user costs a DB query on first use in a request and this runs
+  inside `get_queryset()`. Flag-first added that query to every page for a
+  feature that is off by default -- `test_match_list_performance.py` caught it.
+- **Measured overhead:** +30-40% at 100% sampling, **+2-3% at 1-2%**, which is
+  the intended production setting and inside the 5% budget. Sampling is not a
+  nicety here; it is what makes the canary affordable.
+- It lives in `ScopedManagerMixin._canary()` and in `scope_to_active_club()` --
+  one place to arm and disarm, which was half the point of the mixin.
+
 ### Feature flags fail closed
 
 `pingpong/flags.py` is the whole mechanism: `is_enabled(name, user=None)`,
