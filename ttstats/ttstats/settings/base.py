@@ -203,6 +203,29 @@ PWA_APP_DESCRIPTION = 'Table tennis matches, Elo and championships.'
 PWA_THEME_COLOR = '#0f172a'
 PWA_BACKGROUND_COLOR = '#0f172a'
 
+# Feature flags
+#
+# Fail closed: a flag is off unless something actively turns it on, and an
+# undeclared name resolves to off with a warning rather than raising. See
+# pingpong/flags.py for the resolution order and the propagation delay.
+#
+# Per-user overrides (FeatureFlagOverride rows) win over these defaults in both
+# directions, which is what makes a staff-only rollout -- and a per-user kill
+# switch -- possible without a deploy.
+#
+# The env override exists so the flag can be flipped in .env.prod and picked up
+# by a container restart, without a code change. Anything in TTSTATS_FLAGS_ON
+# (comma-separated) starts on.
+FEATURE_FLAGS = {
+    # Club scoping of the row-level managers and caches (KAN-6).
+    'clubs': False,
+}
+
+for _flag_name in os.environ.get('TTSTATS_FLAGS_ON', '').split(','):
+    _flag_name = _flag_name.strip()
+    if _flag_name in FEATURE_FLAGS:
+        FEATURE_FLAGS[_flag_name] = True
+
 # Redis Cache Configuration
 REDIS_URL = os.environ.get('REDIS_URL')
 

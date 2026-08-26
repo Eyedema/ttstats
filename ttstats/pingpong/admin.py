@@ -15,6 +15,7 @@ from .models import (
     Achievement,
     Championship,
     EloHistory,
+    FeatureFlagOverride,
     Game,
     Location,
     Match,
@@ -954,3 +955,27 @@ class NotificationPreferenceAdmin(admin.ModelAdmin):
     list_filter = ('push_match_confirmation', 'push_match_result',
                    'push_scheduled_match', 'push_leaderboard_overtake')
     search_fields = ('user__username',)
+
+
+@admin.register(FeatureFlagOverride)
+class FeatureFlagOverrideAdmin(admin.ModelAdmin):
+    """Per-user feature-flag overrides — how a rollout reaches staff first.
+
+    `name` is a free-text field rather than a choices field on purpose: the
+    settings dict is the source of truth and is edited per environment, so a
+    hardcoded choices list here would go stale. A row naming an undeclared flag
+    is inert — flags.is_enabled() rejects the name before it looks for an
+    override — and the changelist marks it so, rather than hiding the mistake.
+    """
+
+    list_display = ('name', 'user', 'enabled', 'is_declared', 'note', 'created_at')
+    list_filter = ('name', 'enabled')
+    search_fields = ('name', 'user__username', 'note')
+    readonly_fields = ('created_at',)
+    autocomplete_fields = ('user',)
+
+    @admin.display(boolean=True, description='Declared in settings')
+    def is_declared(self, obj):
+        from . import flags
+
+        return obj.name in flags.all_flags()

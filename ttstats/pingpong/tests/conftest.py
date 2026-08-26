@@ -293,6 +293,26 @@ def _clear_cache():
     django_cache.clear()
 
 
+@pytest.fixture(autouse=True)
+def _clear_flag_memo():
+    """Drop any leftover per-request feature-flag memo.
+
+    `flags.request_scope()` clears itself, but a test that calls `is_enabled()`
+    outside a request (most of them do) never opens a scope, and one that
+    manipulates the thread-local by hand can leave one behind. Same shape as
+    the `_thread_locals.user` cleanup `test_managers.py` already needs.
+    """
+    from ttstats.middleware import _thread_locals
+
+    for attr in ("flag_memo",):
+        if hasattr(_thread_locals, attr):
+            delattr(_thread_locals, attr)
+    yield
+    for attr in ("flag_memo",):
+        if hasattr(_thread_locals, attr):
+            delattr(_thread_locals, attr)
+
+
 @pytest.fixture
 def user(db):
     return UserFactory()

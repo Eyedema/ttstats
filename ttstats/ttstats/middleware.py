@@ -27,10 +27,18 @@ class CurrentUserMiddleware:
         # Store current user in thread-local storage
         _thread_locals.user = getattr(request, 'user', None)
 
+        # Feature-flag resolution is memoized for the life of the request.
+        # `managers.get_queryset()` checks the clubs flag and runs constantly,
+        # so without this every query would touch the cache backend.
+        from pingpong import flags
+
         try:
-            response = self.get_response(request)
+            with flags.request_scope():
+                response = self.get_response(request)
         finally:
-            # Clean up thread-local storage after request
+            # Clean up thread-local storage after request. In a `finally` so an
+            # exception inside the view cannot leave this set for whatever the
+            # thread serves next.
             if hasattr(_thread_locals, 'user'):
                 del _thread_locals.user
 

@@ -1200,3 +1200,43 @@ class PushSubscription(models.Model):
 
     def __str__(self):
         return f"Push subscription for {self.user.username} ({self.endpoint[:40]}...)"
+
+
+class FeatureFlagOverride(models.Model):
+    """Per-user override of a flag declared in ``settings.FEATURE_FLAGS``.
+
+    Wins in both directions, which is what makes it both the staff-only
+    rollout mechanism and the per-user kill switch. It cannot invent a flag:
+    ``flags.is_enabled`` rejects an undeclared name before ever looking here,
+    so a stale row for a retired flag is inert rather than dangerous.
+    """
+
+    name = models.CharField(
+        max_length=64,
+        db_index=True,
+        help_text="Flag name, as declared in settings.FEATURE_FLAGS",
+    )
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="feature_flag_overrides",
+    )
+    enabled = models.BooleanField(default=True)
+    note = models.CharField(
+        max_length=200,
+        blank=True,
+        help_text="Why this override exists (e.g. 'tenancy rollout, staff phase')",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["name", "user_id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["name", "user"], name="unique_flag_override_per_user"
+            )
+        ]
+
+    def __str__(self):
+        state = "on" if self.enabled else "off"
+        return f"{self.name}={state} for {self.user.username}"
