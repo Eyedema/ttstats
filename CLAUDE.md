@@ -187,6 +187,15 @@ or conflating them, is the whole failure mode:
 - Managers filter querysets: no user = unfiltered, anonymous = empty, staff = all, regular = own matches only
 - **Staff bypass the user filter. NOTHING bypasses the club filter.** A staff
   account is global; a club is not.
+- **"Green with the `clubs` flag on" means something specific.** Forcing the
+  flag on for the *whole* suite fails ~200 tests, and that is not a defect:
+  those fixtures build a pre-backfill world (a logged-in user with no club),
+  where the designed answer is "see nothing". Production is never in that state
+  once step 3 of `docs/tenancy-rollout.md` passes its gate. The real claim --
+  **once a user has a club, the flag changes nothing they can see** -- is
+  asserted directly by
+  `test_tenancy_isolation.py::TestABackfilledWorldBehavesIdenticallyWithTheFlagOn`.
+  Suites that are *about* tenancy opt the flag on per class.
 - **All six managers share `ScopedManagerMixin`.** They used to be six
   near-duplicate copies of the same staff/anonymous/regular branch. Adding a
   second boundary to six copies is how one gets missed, and a missed one is a

@@ -676,3 +676,73 @@ class TestLegacyBehaviourWithTheFlagOff:
     def test_the_player_list_still_shows_everyone(self, alpha, bravo):
         response = alpha.client().get(reverse("pingpong:player_list"))
         assert BRAVO in response.content.decode(errors="ignore")
+
+
+# ---------------------------------------------------------------------------
+# What "green with the flag on" actually means
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+class TestABackfilledWorldBehavesIdenticallyWithTheFlagOn:
+    """The claim these tests exist to make precise.
+
+    Running the *whole* suite with `clubs` forced on fails ~200 tests. That is
+    not a defect: those fixtures build a pre-backfill world -- a logged-in user
+    with no club -- and the designed answer there is "see nothing". Failing
+    open instead would make "no club" the widest permission in the app.
+
+    Production is never in that state once step 3 of the rollout runbook
+    passes its gate, which is exactly why the gate asserts
+    `memberships >= users`.
+
+    So the honest claim is not "the old suite passes with the flag on" -- it
+    cannot, without rewriting 35 pre-tenancy test files, which would contradict
+    S1.1's promise that no existing test needed changing. The claim is this:
+    **once a user has a club, the flag changes nothing they can see.** That is
+    what a post-backfill production looks like, and it is what these assert.
+    """
+
+    def _observations(self, tenant):
+        from pingpong.models import Championship, Game, ScheduledMatch
+
+        _as(tenant.user, tenant.club)
+        return {
+            "players": set(Player.objects.values_list("pk", flat=True)),
+            "matches": set(Match.objects.values_list("pk", flat=True)),
+            "games": set(Game.objects.values_list("pk", flat=True)),
+            "scheduled": set(ScheduledMatch.objects.values_list("pk", flat=True)),
+            "championships": set(Championship.objects.values_list("pk", flat=True)),
+        }
+
+    def test_a_single_club_user_sees_the_same_rows_either_way(
+        self, alpha, settings
+    ):
+        """The single-club case -- i.e. every current user, after the backfill.
+        The default club should be invisible to them."""
+        settings.FEATURE_FLAGS = {"clubs": False}
+        without = self._observations(alpha)
+
+        for attr in REQUEST_LOCAL_ATTRS:
+            if hasattr(_thread_locals, attr):
+                delattr(_thread_locals, attr)
+
+        settings.FEATURE_FLAGS = {"clubs": True}
+        with_flag = self._observations(alpha)
+
+        assert with_flag == without
+
+    def test_the_pages_a_backfilled_user_loads_are_unchanged(self, alpha, settings):
+        settings.FEATURE_FLAGS = {"clubs": False}
+        before = {
+            name: alpha.client().get(_url(name, alpha)).status_code
+            for name in LIST_URLS
+        }
+
+        settings.FEATURE_FLAGS = {"clubs": True}
+        after = {
+            name: alpha.client().get(_url(name, alpha)).status_code
+            for name in LIST_URLS
+        }
+
+        assert after == before
