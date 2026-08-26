@@ -83,6 +83,25 @@ URL_EXPECTATIONS = {
     "email_verify": ("agnostic", "Token-addressed, pre-login, renders no club data."),
     "email_resend_verification": ("agnostic", "Pre-login."),
 
+    # --- Club administration (KAN-17) ---------------------------------------
+    # Scoped to the viewer's *active* club, not to a pk in the URL, so there is
+    # no cross-club pk to sweep. The membership ids in the two POST routes are
+    # looked up through `self.club.memberships`, which makes a foreign id a 404
+    # -- covered directly in test_club_roles.py.
+    "club_settings": (
+        "list",
+        None,
+    ),
+    "club_member_role": (
+        "agnostic",
+        "Acts on the active club only; a foreign membership id 404s. "
+        "Cross-club refusal is asserted in test_club_roles.py.",
+    ),
+    "club_member_remove": (
+        "agnostic",
+        "Same as club_member_role.",
+    ),
+
     # --- Per-user settings: scoped to request.user, never to a club ---------
     "passkey_management": (
         "agnostic",

@@ -15,7 +15,7 @@ from django.core.mail import send_mail
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db import transaction
 from django.db.models import Count, F, Prefetch, Q, Sum
-from django.http import HttpResponse, JsonResponse
+from django.http import Http404, HttpResponse, JsonResponse
 from django.urls import reverse
 from django.views.decorators.http import require_POST
 from django.shortcuts import get_object_or_404, redirect, render
@@ -49,7 +49,7 @@ from .elo import (
 )
 from . import cache_utils
 from .managers import scope_to_active_club
-from .models import Game, Location, Match, MatchParticipant, Player, UserProfile, MatchConfirmation, ScheduledMatch, ScheduledMatchParticipant, Side, Championship, EloHistory, format_side_label, NotificationKind, NotificationPreference, PushSubscription
+from .models import Game, Location, Match, MatchParticipant, Player, UserProfile, MatchConfirmation, ScheduledMatch, ScheduledMatchParticipant, Side, Championship, ClubRole, EloHistory, format_side_label, NotificationKind, NotificationPreference, PushSubscription
 from .emails import send_scheduled_match_email, send_passkey_deleted_email
 from .services import set_match_sides, set_scheduled_match_sides
 
@@ -3194,3 +3194,173 @@ class NotificationSettingsView(LoginRequiredMixin, View):
         prefs.save()
         messages.success(request, "Notification preferences saved")
         return redirect("pingpong:notification_settings")
+
+
+# ---------------------------------------------------------------------------
+# Club administration (KAN-17 / S1.7)
+# ---------------------------------------------------------------------------
+
+
+class ClubAdminRequiredMixin(LoginRequiredMixin):
+    """Gate a view on the viewer being an admin of their active club.
+
+    One helper, used by every club-admin view. The ticket's requirement is
+    precise about this: a role check must not be an inline comparison copied
+    per view, because the copy that gets missed is the one that matters.
+
+    Raises `PermissionDenied` (403) rather than redirecting, so a forged POST
+    is refused rather than quietly bounced to a page that looks like success.
+    Templates are still expected not to render controls the viewer cannot use
+    -- the 403 is a correctness backstop, not the UX.
+    """
+
+    def get_active_club(self):
+        from ttstats.middleware import get_current_club
+
+        club = get_current_club()
+        if club is None:
+            raise Http404("No active club.")
+        return club
+
+    def dispatch(self, request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            return super().dispatch(request, *args, **kwargs)
+
+        self.club = self.get_active_club()
+        if not self.club.user_can_administer(request.user):
+            raise PermissionDenied(
+                "Only a club admin or owner can do that."
+            )
+        return super().dispatch(request, *args, **kwargs)
+
+
+class ClubSettingsView(ClubAdminRequiredMixin, View):
+    """Edit the active club, and manage its members' roles."""
+
+    template_name = "pingpong/club_settings.html"
+
+    def get(self, request):
+        return render(request, self.template_name, self._context())
+
+    def _context(self, form=None):
+        from .forms import ClubSettingsForm
+
+        memberships = list(self.club.memberships.select_related("user").all())
+        viewer = self.club.membership_for(self.request.user)
+
+        # Which rows the viewer may actually act on, decided HERE rather than
+        # in template logic. The template must not render a control the viewer
+        # cannot use -- a 403 on submit is a correctness backstop, not the UX --
+        # and the rules (outranking, last-owner) are the same ones the POST
+        # handlers enforce, so they are computed once and read twice.
+        owners = sum(1 for m in memberships if m.is_owner)
+        actionable_ids = {
+            m.pk
+            for m in memberships
+            if viewer.outranks(m) and not (m.is_owner and owners <= 1)
+        }
+
+        return {
+            "club": self.club,
+            "form": form or ClubSettingsForm(instance=self.club),
+            "memberships": memberships,
+            "viewer_membership": viewer,
+            "actionable_ids": actionable_ids,
+            "role_choices": ClubRole.choices,
+        }
+
+    def post(self, request):
+        from .forms import ClubSettingsForm
+
+        form = ClubSettingsForm(request.POST, instance=self.club)
+        if form.is_valid():
+            form.save()
+            messages.success(request, "Club settings saved.")
+            return redirect("pingpong:club_settings")
+        return render(request, self.template_name, self._context(form))
+
+
+class ClubMemberRoleView(ClubAdminRequiredMixin, View):
+    """Change one member's role.
+
+    Two rules, both enforced here rather than in the template:
+
+    * You cannot act on someone who outranks you or is your equal. An admin
+      promoting themselves past the owner would make the owner role meaningless.
+    * The last owner cannot be demoted. A club with no owner has no one who can
+      appoint one, which is unrecoverable without a shell.
+    """
+
+    def post(self, request, membership_id):
+        membership = get_object_or_404(
+            self.club.memberships.select_related("user"), pk=membership_id
+        )
+        viewer = self.club.membership_for(request.user)
+        new_role = request.POST.get("role")
+
+        if new_role not in dict(ClubRole.choices):
+            messages.error(request, "Unknown role.")
+            return redirect("pingpong:club_settings")
+
+        if membership.pk != viewer.pk and not viewer.outranks(membership):
+            messages.error(
+                request,
+                f"You cannot change the role of a club {membership.get_role_display().lower()}.",
+            )
+            return redirect("pingpong:club_settings")
+
+        if (
+            membership.is_owner
+            and new_role != ClubRole.OWNER
+            and self.club.owner_count <= 1
+        ):
+            messages.error(
+                request,
+                "This is the club's only owner. Promote someone else to owner first.",
+            )
+            return redirect("pingpong:club_settings")
+
+        if new_role == ClubRole.OWNER and not viewer.is_owner:
+            messages.error(request, "Only an owner can appoint another owner.")
+            return redirect("pingpong:club_settings")
+
+        membership.role = new_role
+        membership.save(update_fields=["role"])
+        messages.success(
+            request,
+            f"{membership.user.username} is now a club {membership.get_role_display().lower()}.",
+        )
+        return redirect("pingpong:club_settings")
+
+
+class ClubMemberRemoveView(ClubAdminRequiredMixin, View):
+    """Remove a member from the club.
+
+    The last owner cannot be removed -- including by themselves. "I am the only
+    owner and I left" is the one mistake with no in-app recovery.
+    """
+
+    def post(self, request, membership_id):
+        membership = get_object_or_404(
+            self.club.memberships.select_related("user"), pk=membership_id
+        )
+        viewer = self.club.membership_for(request.user)
+
+        if membership.pk != viewer.pk and not viewer.outranks(membership):
+            messages.error(
+                request,
+                "You cannot remove someone with an equal or higher role.",
+            )
+            return redirect("pingpong:club_settings")
+
+        if membership.is_owner and self.club.owner_count <= 1:
+            messages.error(
+                request,
+                "A club must always have an owner. Promote someone else first.",
+            )
+            return redirect("pingpong:club_settings")
+
+        username = membership.user.username
+        membership.delete()
+        messages.success(request, f"{username} was removed from the club.")
+        return redirect("pingpong:club_settings")

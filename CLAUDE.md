@@ -718,6 +718,44 @@ namespace.
   each club's key with the whole database's numbers. A populated cache that is
   wrong is worse than a cold one.
 
+### Club roles
+
+`ClubMembership.role` is owner / admin / member. Before it, `user.is_staff` was
+the app's only privilege distinction -- and staff is *global*, so it cannot
+express "runs our club".
+
+- **A role is per membership, never per user.** Someone can own one club and be
+  an ordinary member of another. Conflating them is how a person ends up
+  administering a club they merely play in.
+- **Every check goes through `Club.user_can_administer()` / `user_is_owner()` /
+  `role_for()` / `membership_for()`** -- on the model, following
+  `Player.user_can_edit` and `PlayerManager.editable_by`. Never an inline
+  `is_staff` comparison in a view; the copy that gets missed is the one that
+  matters.
+- **Django staff get no standing inside a club.** A staff account that is not a
+  member cannot administer it, and one that *is* a member is governed by its
+  role like anyone else. Same reasoning as the S1.4 decision. A staff member
+  who needs to run a club joins it.
+- **A club can never be left ownerless.** The last owner cannot be demoted or
+  removed, including by themselves -- it is the one mistake with no in-app
+  recovery.
+- **You cannot act on an equal or a superior** (`ClubMembership.outranks`), and
+  only an owner may appoint another owner. Otherwise the owner role is
+  decorative: an admin would simply promote themselves.
+- `ClubAdminRequiredMixin` raises `PermissionDenied` (403), never a redirect --
+  a forged POST is refused, not bounced to a page that looks like success. A
+  viewer with no active club at all gets 404, matching the app's existing
+  "invisible things 404, they do not 403" rule.
+- **Templates must not render controls the viewer cannot use.** `ClubSettingsView`
+  computes `actionable_ids` with the same rules the POST handlers enforce, so
+  the two cannot disagree. The 403 is a correctness backstop, not the UX.
+- **The backfill grants existing users `admin`, not `member`, and appoints one
+  `owner`.** That looks generous and is the conservative choice: before roles
+  existed every verified user could create and start championships, so `member`
+  would silently strip capability from everyone at cutover. Users who join
+  *later* get the model default. The generosity is a migration artefact, not
+  the policy.
+
 ### Tenancy observability: context on every log line, plus a canary
 
 Production ran one console handler at INFO with no request context. For a

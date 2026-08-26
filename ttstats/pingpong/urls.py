@@ -51,6 +51,20 @@ urlpatterns = [
     path("scheduled-matches/<int:scheduled_match_pk>/convert/", views.ScheduledMatchConvertView.as_view(), name="scheduled_match_convert"),
     path("scheduled-matches/<int:pk>/edit/", views.ScheduledMatchEditView.as_view(), name="scheduled_match_edit"),
 
+    # Club administration (KAN-17). Not a tab: a club is a context, not a
+    # destination -- see TAB_FOR_URL_NAME.
+    path("club/settings/", views.ClubSettingsView.as_view(), name="club_settings"),
+    path(
+        "club/members/<int:membership_id>/role/",
+        views.ClubMemberRoleView.as_view(),
+        name="club_member_role",
+    ),
+    path(
+        "club/members/<int:membership_id>/remove/",
+        views.ClubMemberRemoveView.as_view(),
+        name="club_member_remove",
+    ),
+
     # Passkey management
     path("passkeys/", views.PasskeyManagementView.as_view(), name="passkey_management"),
 

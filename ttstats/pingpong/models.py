@@ -84,17 +84,81 @@ class Club(models.Model):
             suffix += 1
         return slug
 
+    # -- permissions ---------------------------------------------------------
+    #
+    # On the model rather than scattered across views, following
+    # `Player.user_can_edit` and `PlayerManager.editable_by`. Every role check
+    # in the app goes through these methods -- the ticket's "one shared helper,
+    # not an inline is_staff comparison copied per view".
+
+    def membership_for(self, user):
+        """This user's membership, or None. The basis of every check below."""
+        if not user or not getattr(user, "is_authenticated", False):
+            return None
+        return self.memberships.filter(user=user).first()
+
+    def role_for(self, user):
+        membership = self.membership_for(user)
+        return membership.role if membership else None
+
+    def user_is_member(self, user):
+        return self.membership_for(user) is not None
+
+    def user_can_administer(self, user):
+        """May this user invite, remove, edit settings, change roles?
+
+        **Django staff get no special standing here.** `is_staff` is global and
+        a club is not; a staff account that is not in this club has no business
+        administering it. This is the S1.4 decision applied consistently -- see
+        CLAUDE.md. A staff member who needs to run a club joins it.
+        """
+        membership = self.membership_for(user)
+        return bool(membership and membership.is_admin)
+
+    def user_is_owner(self, user):
+        membership = self.membership_for(user)
+        return bool(membership and membership.is_owner)
+
+    @property
+    def owner_count(self):
+        return self.memberships.filter(role=ClubRole.OWNER).count()
+
     def __str__(self):
         return self.name
 
 
+class ClubRole(models.TextChoices):
+    """What a member may do inside their club.
+
+    Before this, `user.is_staff` was the only privilege distinction in the app
+    -- and staff is global, so it cannot express "runs our club". Every club
+    needs its own administrator who is not a Django superuser.
+
+    The ordering matters: `ClubRole.rank()` compares them, so an admin cannot
+    act on an owner.
+    """
+
+    OWNER = "owner", "Owner"
+    ADMIN = "admin", "Admin"
+    MEMBER = "member", "Member"
+
+    @staticmethod
+    def rank(role):
+        """Higher outranks lower. Unknown/None is below everything."""
+        return {ClubRole.OWNER: 3, ClubRole.ADMIN: 2, ClubRole.MEMBER: 1}.get(role, 0)
+
+
 class ClubMembership(models.Model):
-    """A user's membership of a club.
+    """A user's membership of a club, and the role they hold in it.
 
     Keyed on `User` rather than `Player` because membership is about who may
     *log in and see* the club, and the app supports Players with no linked
     User (guests entered by someone else). Those players belong to a club via
     `Player.club`; they do not have a membership because they cannot sign in.
+
+    **A role is per membership, never per user.** Someone can run one club and
+    be an ordinary member of another, and conflating the two is how a person
+    ends up administering a club they merely play in.
     """
 
     club = models.ForeignKey(
@@ -107,6 +171,12 @@ class ClubMembership(models.Model):
         on_delete=models.CASCADE,
         related_name="club_memberships",
     )
+    role = models.CharField(
+        max_length=16,
+        choices=ClubRole.choices,
+        default=ClubRole.MEMBER,
+        db_index=True,
+    )
     joined_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -117,8 +187,20 @@ class ClubMembership(models.Model):
             )
         ]
 
+    @property
+    def is_admin(self):
+        """Owner or admin. The single question most callers actually have."""
+        return self.role in (ClubRole.OWNER, ClubRole.ADMIN)
+
+    @property
+    def is_owner(self):
+        return self.role == ClubRole.OWNER
+
+    def outranks(self, other):
+        return ClubRole.rank(self.role) > ClubRole.rank(other.role)
+
     def __str__(self):
-        return f"{self.user.username} in {self.club.name}"
+        return f"{self.user.username} in {self.club.name} ({self.get_role_display()})"
 
 
 class Location(models.Model):
@@ -1202,16 +1284,29 @@ class Championship(models.Model):
             return False
 
     def user_can_edit(self, user):
-        """Check if user can edit this championship"""
+        """Check if user can edit this championship.
+
+        The creator keeps their existing power. A **club admin** gains it too:
+        running the club is exactly the authority to run its competitions, and
+        without this a championship whose creator leaves becomes uneditable by
+        anyone but a Django superuser.
+
+        Staff keep the bypass they have always had here. That is a *global*
+        privilege on a per-object check, which is the pre-tenancy shape; the
+        club filter has already decided which championships this user can see
+        at all, so staff cannot reach another club's through it.
+        """
         if not user or not user.is_authenticated:
             return False
         if user.is_staff or user.is_superuser:
             return True
         try:
             player = user.player
-            return self.created_by == player
         except (AttributeError, Player.DoesNotExist):
             return False
+        if self.created_by == player:
+            return True
+        return bool(self.club and self.club.user_can_administer(user))
 
 
 class ChampionshipEntry(models.Model):

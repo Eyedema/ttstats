@@ -270,12 +270,29 @@ def _assign_championships(
             ).update(club_id=club_id)
 
 
+# Roles the backfill hands out. See _assign_memberships for why they are not
+# the model default.
+BACKFILL_ROLE = "admin"
+OWNER_ROLE = "owner"
+
+
 def _assign_memberships(models, default_club_id, report, batch_size, dry_run):
     """Give every existing user a membership of the club their player is in.
 
     Without this the backfill assigns every row correctly and the app is still
     empty for everyone: S1.4 resolves the active club from memberships, and a
     user with no membership has no active club at all.
+
+    **Existing users are made admins, not members**, and one is made owner.
+    That looks generous and is actually the conservative choice: before roles
+    existed, every verified user could create a championship, start it, and
+    edit anything they were party to. Handing them the model's `member` default
+    would silently strip capability from every current user at the cutover --
+    the exact user-visible regression S1.2 exists to prevent. `admin` is the
+    faithful translation of "what you could do yesterday".
+
+    Users who join *later*, through the invite flow, get the model default
+    (`member`). The generosity is a migration artefact, not the new policy.
     """
     ClubMembership = models.ClubMembership
     entry = report.for_entity("membership")
@@ -289,6 +306,11 @@ def _assign_memberships(models, default_club_id, report, batch_size, dry_run):
         )
     )
 
+    # A club must never be ownerless (S1.7). Pick deterministically: the
+    # lowest-pk superuser if there is one, else the lowest-pk user -- in
+    # practice the person who set the instance up.
+    owner_ids = _pick_owner_ids(models, player_club, default_club_id)
+
     to_create = []
     for pks in _batched(models.User.objects.all(), batch_size):
         entry.examined += len(pks)
@@ -298,13 +320,37 @@ def _assign_memberships(models, default_club_id, report, batch_size, dry_run):
                 entry.skipped += 1
                 continue
             already.add((user_id, club_id))
+            role = OWNER_ROLE if owner_ids.get(club_id) == user_id else BACKFILL_ROLE
             to_create.append(
-                ClubMembership(user_id=user_id, club_id=club_id)
+                ClubMembership(user_id=user_id, club_id=club_id, role=role)
             )
             entry.updated += 1
 
     if to_create and not dry_run:
         ClubMembership.objects.bulk_create(to_create, batch_size=batch_size)
+
+
+def _pick_owner_ids(models, player_club, default_club_id):
+    """{club_id: user_id} -- one owner per club that is about to get members.
+
+    Deterministic so a re-run after a reverse produces the same owner, and so
+    two racing runs cannot disagree about who runs the club.
+    """
+    candidates = {}
+    users = models.User.objects.order_by("pk").values_list(
+        "pk", "is_superuser"
+    )
+    for user_id, is_superuser in users:
+        club_id = player_club.get(user_id) or default_club_id
+        if club_id is None:
+            continue
+        current = candidates.get(club_id)
+        if current is None:
+            candidates[club_id] = (user_id, is_superuser)
+        elif is_superuser and not current[1]:
+            # A superuser outranks an earlier ordinary account.
+            candidates[club_id] = (user_id, is_superuser)
+    return {club_id: user_id for club_id, (user_id, _) in candidates.items()}
 
 
 def run(models, batch_size=DEFAULT_BATCH_SIZE, dry_run=False):

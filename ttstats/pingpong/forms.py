@@ -3,7 +3,7 @@ from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.models import User
 
 from . import live_scoring
-from .models import Game, Match, Player, ScheduledMatch, Championship
+from .models import Club, Game, Match, Player, ScheduledMatch, Championship
 
 # The set of legal match lengths. match_form.html used to hard-code these as
 # five hand-written <option> tags; they belong with the other match rules.
@@ -591,4 +591,24 @@ class ScheduledMatchEditForm(StyledFormMixin, forms.ModelForm):
                 attrs={'type': 'time'}
             ),
             'location': forms.Select()
+        }
+
+
+class ClubSettingsForm(ScopedChoicesMixin, StyledFormMixin, forms.ModelForm):
+    """Edit the club's own identity.
+
+    Deliberately does NOT expose `slug`. It is baked into invite links and
+    cache namespaces, so letting an admin change it turns every outstanding
+    invite into a 404 for no visible benefit.
+    """
+
+    class Meta:
+        model = Club
+        fields = ["name", "description"]
+        labels = {"name": "Club name"}
+        help_texts = {
+            "description": "Shown to members. Optional.",
+        }
+        widgets = {
+            "description": forms.Textarea(attrs={"rows": 3}),
         }

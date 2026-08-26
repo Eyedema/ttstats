@@ -1,0 +1,83 @@
+{% extends "pingpong/base.html" %}
+{% load icon_tags %}
+
+{% block title %}{{ club.name }} settings - TTStats{% endblock %}
+{% block nav_title %}Club settings{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto space-y-6">
+
+  <div>
+    <h2 class="text-title">{{ club.name }}</h2>
+    <p class="text-muted-foreground mt-1 text-sm">
+      Who is in this club, and what they can do.
+    </p>
+  </div>
+
+  <div class="border bg-card p-4 md:p-6">
+    <h3 class="text-heading mb-4">Details</h3>
+    <form method="post" class="space-y-4">
+      {% csrf_token %}
+      {% include "pingpong/_field.html" with field=form.name %}
+      {% include "pingpong/_field.html" with field=form.description %}
+      <button type="submit"
+              class="inline-flex items-center justify-center gap-2 bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground min-h-[44px]">
+        {% icon "check" css="w-4 h-4" %}
+        Save
+      </button>
+    </form>
+  </div>
+
+  <div class="border bg-card p-4 md:p-6">
+    <h3 class="text-heading mb-1">Members</h3>
+    <p class="text-muted-foreground text-sm mb-4">
+      Owners and admins can invite and remove people. A club always has at
+      least one owner.
+    </p>
+
+    <ul class="divide-y">
+      {% for membership in memberships %}
+      <li class="py-3 flex flex-wrap items-center justify-between gap-3">
+        <div class="min-w-0">
+          <p class="font-medium truncate">{{ membership.user.username }}</p>
+          <p class="label-cap text-muted-foreground">{{ membership.get_role_display }}</p>
+        </div>
+
+        {% comment %}
+          Controls are rendered only where they would actually work. The view
+          re-checks on POST -- that is the backstop, not the UX. A member who
+          outranks the viewer, or the last owner, gets no controls at all.
+        {% endcomment %}
+        {% if viewer_membership.pk != membership.pk and membership.pk in actionable_ids %}
+        <div class="flex items-center gap-2">
+          <form method="post"
+                action="{% url 'pingpong:club_member_role' membership.pk %}"
+                class="flex items-center gap-2">
+            {% csrf_token %}
+            <select name="role" class="field-input py-1.5 text-sm">
+              {% for value, label in role_choices %}
+              <option value="{{ value }}" {% if value == membership.role %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+            <button type="submit" class="text-sm px-3 py-1.5 border min-h-[36px]">Set</button>
+          </form>
+
+          <form method="post"
+                action="{% url 'pingpong:club_member_remove' membership.pk %}">
+            {% csrf_token %}
+            <button type="submit"
+                    class="text-sm px-3 py-1.5 border text-paddle min-h-[36px]">
+              Remove
+            </button>
+          </form>
+        </div>
+        {% endif %}
+      </li>
+      {% empty %}
+      <li class="py-3 text-muted-foreground text-sm">Nobody yet.</li>
+      {% endfor %}
+    </ul>
+  </div>
+
+</div>
+{% endblock %}
