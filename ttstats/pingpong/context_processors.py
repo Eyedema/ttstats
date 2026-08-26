@@ -4,7 +4,7 @@ from django.core.cache import cache
 from django.middleware.csrf import get_token
 from django.urls import reverse
 
-from .models import Championship, Match, Player
+from .models import Championship, Club, Match, Player
 
 # --- The navigation spine ---------------------------------------------------
 # Nine identical sidebar links became four daily destinations in a bottom tab
@@ -124,4 +124,37 @@ def push_context(request):
                 'test': reverse('pingpong:push_test'),
             },
         }
+    }
+
+
+def club_context(request):
+    """The active club and the viewer's clubs, for every page render.
+
+    Kept separate from `pingpong_context` for the same reason `push_context`
+    is: that function early-returns in three places, and a user without a
+    Player would lose the club name from their chrome on exactly the pages a
+    half-set-up account sees.
+
+    **Every value is lazy.** A context processor runs on every render, and
+    until the S1.8 switcher exists no template reads any of this -- so
+    resolving eagerly would add a query to every page in the app in exchange
+    for nothing. `SimpleLazyObject` means the membership query fires on first
+    *read*, and `get_user_clubs()` memoizes it, so a page that renders the club
+    name and the switcher still costs exactly one query.
+
+    `active_club` is None for anonymous users and for someone who belongs to no
+    club yet -- every template using it must handle that, because a fresh
+    signup is in that state until they accept an invite.
+    """
+    from django.utils.functional import SimpleLazyObject
+
+    from ttstats.middleware import get_current_club, get_user_clubs
+
+    if not request.user.is_authenticated:
+        return {'active_club': None, 'user_clubs': [], 'has_multiple_clubs': False}
+
+    return {
+        'active_club': SimpleLazyObject(get_current_club),
+        'user_clubs': SimpleLazyObject(get_user_clubs),
+        'has_multiple_clubs': SimpleLazyObject(lambda: len(get_user_clubs()) > 1),
     }

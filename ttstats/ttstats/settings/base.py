@@ -79,6 +79,7 @@ TEMPLATES = [
                 'django.contrib.messages.context_processors.messages',
                 'pingpong.context_processors.pingpong_context',
                 'pingpong.context_processors.push_context',
+                'pingpong.context_processors.club_context',
             ],
         },
     },

@@ -179,6 +179,41 @@ These are non-obvious behaviors that aren't clear from reading individual source
 - Managers filter querysets: no user = unfiltered, anonymous = empty, staff = all, regular = own matches only
 - **Bypass:** Use `Model.all_objects` (e.g., `Match.all_objects`) to skip row-level filtering (needed in championship views)
 
+#### The active club, and what `None` means
+
+`get_current_club()` sits alongside `get_current_user()` in
+`ttstats/middleware.py`. **`None` means two different things and the
+difference is the entire security contract:**
+
+- **No user in context** (management command, migration) -- there is no viewer,
+  so queries stay *unfiltered*. Identical to the `get_current_user() is None`
+  contract.
+- **An authenticated user with no club** -- there is a viewer and they belong
+  nowhere, so they see *nothing*. Failing open here would make "no club" the
+  widest permission in the app, which is exactly backwards.
+
+Managers therefore branch on the **user first**, and only then consult the club.
+
+- **Membership is re-checked on every single request.** A club id in the
+  session is an untrusted claim: someone removed from a club mid-session still
+  holds its id, and a forged one costs nothing to try. The stored id may only
+  *choose among* `Club.objects.for_user()`; it can never introduce a club.
+  `set_active_club()` records a choice -- it is **not** an authorization check.
+- **Staff do NOT bypass club scoping.** They keep the *user*-filter bypass, which
+  is what makes admin work, but stay inside their clubs. Otherwise every staff
+  page is a cross-tenant firehose and the isolation suite has to except its most
+  privileged user. A staff member who needs to see a club joins it.
+- **Resolution is lazy and memoized per request** (`_thread_locals.club`,
+  `_thread_locals.user_clubs`). A page that never touches a scoped manager pays
+  no query; a page that renders the club name and the switcher pays exactly one.
+  `club_context` returns `SimpleLazyObject`s for the same reason.
+- **The thread-locals are cleared on the way IN as well as out.** Clearing only
+  on exit assumes every prior request left through the middleware; the one that
+  did not -- a crash above it, a recycled worker, a test setting the value by
+  hand -- would hand the next request a club resolved for somebody else.
+- Two tabs in two clubs means last write wins. Accepted: a club is a viewing
+  context, and per-tab state is not expressible in a session.
+
 ### Match Confirmation & Elo
 - When winner is set for the first time: if any player is unverified, auto-confirm all; if all verified, send confirmation emails
 - `match_confirmed` property: True when all verified players confirmed. Empty verified set = True (unverified players don't need confirmation)
