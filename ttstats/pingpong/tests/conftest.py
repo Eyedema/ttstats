@@ -6,7 +6,7 @@ from django.core.cache import cache as django_cache
 from django.test import Client
 from factory.django import DjangoModelFactory
 
-from pingpong.models import Championship, ChampionshipEntry, ChampionshipEntryMember, Game, Location, Match, MatchConfirmation, Player, ScheduledMatch, Side
+from pingpong.models import Championship, ChampionshipEntry, ChampionshipEntryMember, Club, ClubMembership, Game, Location, Match, MatchConfirmation, Player, ScheduledMatch, Side
 from pingpong.services import set_match_sides, set_scheduled_match_sides
 
 
@@ -28,6 +28,27 @@ class UserFactory(DjangoModelFactory):
         return manager.create_user(*args, password=password, **kwargs)
 
 
+class ClubFactory(DjangoModelFactory):
+    """A tenancy boundary. Deliberately NOT a default anywhere else: every
+    other factory leaves `club` None so the ~35 pre-tenancy test files keep
+    asserting pre-tenancy behaviour without modification."""
+
+    class Meta:
+        model = Club
+
+    name = factory.Sequence(lambda n: f"Club {n}")
+    slug = factory.Sequence(lambda n: f"club-{n}")
+    description = ""
+
+
+class ClubMembershipFactory(DjangoModelFactory):
+    class Meta:
+        model = ClubMembership
+
+    club = factory.SubFactory(ClubFactory)
+    user = factory.SubFactory(UserFactory)
+
+
 class LocationFactory(DjangoModelFactory):
     class Meta:
         model = Location
@@ -44,6 +65,9 @@ class PlayerFactory(DjangoModelFactory):
     name = factory.Sequence(lambda n: f"Player {n}")
     nickname = ""
     playing_style = "normal"
+    # None by default on purpose. Every pre-tenancy test must keep describing
+    # pre-tenancy behaviour; pass club= explicitly where tenancy is the subject.
+    club = None
 
     class Params:
         with_user = factory.Trait(

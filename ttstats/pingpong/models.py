@@ -13,11 +13,128 @@ from .managers import ChampionshipManager, GameManager, LiveMatchManager, MatchM
 VERIFICATION_TOKEN_EXPIRY = timedelta(hours=24)
 
 
+class ClubManager(models.Manager):
+    """Clubs are not row-level filtered.
+
+    A club row is a name and a slug; the *data* inside it is what tenancy
+    protects, and that is enforced by the managers in managers.py. Filtering
+    the club table itself would only break the switcher, which has to be able
+    to list the clubs a user belongs to.
+    """
+
+    def for_user(self, user):
+        """The clubs `user` is actually a member of. Empty for anonymous/None.
+
+        This is the tenancy boundary for club *selection*: nothing may resolve
+        an active club that does not come out of this queryset.
+        """
+        if not user or not getattr(user, "is_authenticated", False):
+            return self.none()
+        return self.filter(memberships__user=user).order_by("name")
+
+
+class Club(models.Model):
+    """A group of people who play together.
+
+    The unit of tenancy. Before this existed the only boundary in the app was
+    "matches I participated in", `Player` was one global pool, and the Everyone
+    screen was a directory of every account in the database -- workable for
+    exactly one friend group and a privacy problem for two.
+    """
+
+    name = models.CharField(max_length=100)
+    slug = models.SlugField(
+        max_length=100,
+        unique=True,
+        help_text="URL-safe identifier. Derived from the name if left blank.",
+    )
+    description = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    created_by = models.ForeignKey(
+        "Player",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="clubs_created",
+    )
+
+    objects = ClubManager()
+
+    class Meta:
+        ordering = ["name"]
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            self.slug = self._unique_slug_for(self.name)
+        super().save(*args, **kwargs)
+
+    @staticmethod
+    def _unique_slug_for(name):
+        """A slug from `name`, suffixed until it is free.
+
+        Two clubs called "Sunday Bashers" is an entirely reasonable thing for
+        two unrelated groups to do, and the second one must not fail to save.
+        """
+        from django.utils.text import slugify
+
+        base = slugify(name) or "club"
+        slug, suffix = base, 2
+        while Club.objects.filter(slug=slug).exists():
+            slug = f"{base}-{suffix}"
+            suffix += 1
+        return slug
+
+    def __str__(self):
+        return self.name
+
+
+class ClubMembership(models.Model):
+    """A user's membership of a club.
+
+    Keyed on `User` rather than `Player` because membership is about who may
+    *log in and see* the club, and the app supports Players with no linked
+    User (guests entered by someone else). Those players belong to a club via
+    `Player.club`; they do not have a membership because they cannot sign in.
+    """
+
+    club = models.ForeignKey(
+        Club,
+        on_delete=models.PROTECT,
+        related_name="memberships",
+    )
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="club_memberships",
+    )
+    joined_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["club__name", "user__username"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["club", "user"], name="unique_club_membership"
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.user.username} in {self.club.name}"
+
+
 class Location(models.Model):
     """Location where matches are played"""
 
     name = models.CharField(max_length=100)
     address = models.TextField(blank=True)
+    # A table belongs to a place a club plays. Nullable until S1.2 backfills.
+    club = models.ForeignKey(
+        "Club",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        db_index=True,
+        related_name="locations",
+    )
     notes = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -64,6 +181,17 @@ class Player(models.Model):
     matches_for_elo = models.IntegerField(
         default=0,
         help_text="Number of confirmed matches that affected Elo (for new player boost)"
+    )
+
+    # The primary scoping column. Nullable until S1.2 backfills; PROTECT
+    # because a club holding players must not be deletable out from under them.
+    club = models.ForeignKey(
+        "Club",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        db_index=True,
+        related_name="players",
     )
 
     objects = PlayerManager()
@@ -223,6 +351,22 @@ class Match(SideLabelMixin, models.Model):
     # one. Written with a conditional queryset .update(), which makes it an
     # atomic compare-and-set -- see notifications.notify_match_confirmed.
     result_notified_at = models.DateTimeField(null=True, blank=True, editable=False)
+
+    # Denormalized rather than derived through MatchParticipant, so scoping is
+    # an indexed column filter and not a join on every query -- the same reason
+    # ChampionshipEntryMember carries its own championship FK.
+    #
+    # A match whose participants span two clubs is representable on purpose:
+    # the UI forbids it, but a future data fix needs somewhere to put the
+    # intermediate state.
+    club = models.ForeignKey(
+        "Club",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        db_index=True,
+        related_name="matches",
+    )
 
     all_objects = models.Manager()
     objects = MatchManager()
@@ -568,6 +712,16 @@ class ScheduledMatch(SideLabelMixin, models.Model):
         help_text="Linked match if this scheduled match was converted to a played match"
     )
 
+    # Denormalized for the same reason as Match.club.
+    club = models.ForeignKey(
+        "Club",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        db_index=True,
+        related_name="scheduled_matches",
+    )
+
     all_objects = models.Manager()
     objects = ScheduledMatchManager()
 
@@ -803,6 +957,17 @@ class Championship(models.Model):
         null=True,
         blank=True,
         help_text="Default location for championship matches"
+    )
+
+    # `is_public` means open to anyone *in this club* once scoping lands --
+    # cross-club anything is explicitly out of scope for the epic.
+    club = models.ForeignKey(
+        "Club",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        db_index=True,
+        related_name="championships",
     )
 
     all_objects = models.Manager()
