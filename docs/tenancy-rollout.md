@@ -304,6 +304,27 @@ dweb backfill_clubs        # must report 'Nothing to do' before you begin
 This migration does not exist yet — write it when you get here, as its own
 migration so it can be reverted independently of everything above.
 
+### Prerequisite: audit headless creation paths first
+
+`ClubStampedMixin` fills `club` on save **only when there is a viewer with an
+active club**. That is the correct contract for request paths, and it is exactly
+wrong for step 7, because anything creating rows *without* a request still
+produces a null:
+
+- `seed_demo` and `seed_e2e` (`Player.objects.create(...)`, no club)
+- any future management command, cron job, or data fix
+- `loaddata` from a fixture that predates the column
+
+Under non-null columns each of those becomes an `IntegrityError`. **Before this
+step**, grep for creation outside a request and give each one an explicit club:
+
+```bash
+grep -rn "objects.create\|objects.get_or_create" ttstats/pingpong/management/
+```
+
+This is not optional and it is not covered by any existing test — the suite runs
+with a viewer in context nearly everywhere.
+
 **Rollback:** restore the snapshot. There is no other route, which is why the
 soak is not optional.
 
