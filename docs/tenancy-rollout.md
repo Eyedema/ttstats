@@ -1,7 +1,11 @@
 # Tenancy rollout and rollback runbook (KAN-6 / T1.12)
 
 **What this changes:** what every user can see. Against a live database, on a
-single host, with no staging environment.
+single host.
+
+The nearest thing to a staging environment is the **Supabase clone of
+production** — steps 1–3 have been rehearsed against it (see the last section).
+Use it before touching the VPS.
 
 The failure mode is silent. A tenancy leak does not raise, does not 500 and
 does not appear in any log — a user simply sees a name that is not theirs. The
@@ -129,9 +133,19 @@ PostgreSQL 16 with rows present; row counts are identical at every step.
 **Take a snapshot first.** This is the highest-consequence data change in the
 epic.
 
-Migration `0033_backfill_clubs` runs as part of the deploy's `migrate`. If the
-dataset ever grows enough for that to be a concern, deploy with the migration
-and run `backfill_clubs` separately instead.
+Migration `0035_backfill_clubs` runs as part of the deploy's `migrate`, and it
+is deliberately **last in the chain** — it writes `Player.club`, `Match.club`
+*and* `ClubMembership.role`, so every column it touches has to exist first.
+
+> It used to be `0033`, ahead of the roles migration, which is exactly the
+> mistake this ordering prevents: a migration runs against *historical* models,
+> so the `role` column was not there yet and the run died with
+> `TypeError: ClubMembership() got unexpected keyword arguments: 'role'`.
+> It reached a real database because the failing line only runs when there are
+> Users, and the test database has none.
+
+If the dataset ever grows enough for the in-deploy run to be a concern, deploy
+and run `backfill_clubs` separately instead — it is the same code.
 
 ```bash
 dweb backfill_clubs --dry-run      # read the summary before writing anything
@@ -168,7 +182,7 @@ dweb backfill_clubs            # run twice: must say 'Nothing to do'
 Review any anomalies the command printed. They are assigned, not skipped, so
 nothing is hidden — but a match reported as spanning clubs is worth a look.
 
-**Rollback:** `dweb migrate pingpong 0032` (clears every assignment, deletes
+**Rollback:** `dweb migrate pingpong 0034` (clears every assignment, deletes
 the memberships and the default club — nulls the FKs *before* deleting the club,
 because they are all `PROTECT`). Restore the snapshot only if that fails.
 
@@ -176,9 +190,14 @@ because they are all `PROTECT`). Restore the snapshot only if that fails.
 
 ## Step 4 — Deploy the scoping code, flag OFF (KAN-14/15/16/21)
 
-Migrations `0034_club_roles` and `0035_club_invites`. The managers, cache keys,
+Migrations `0033_club_roles` and `0034_club_invites`. The managers, cache keys,
 roles, invites and canary all ship here, **inert**: `clubs` is still `False`, so
 every query is byte-identical to pre-tenancy.
+
+> **In practice steps 1–4 are a single deploy.** One `migrate` applies
+> `0031`→`0035` in order, ending with the backfill. The steps are kept separate
+> because their *gates* and *rollbacks* differ — run step 3's verification block
+> after that deploy regardless, since it is the check that matters.
 
 **Verify**
 
