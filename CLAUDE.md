@@ -232,6 +232,32 @@ or conflating them, is the whole failure mode:
 | `achievements.py`, `notifications.py` | Background/system paths with no viewer | **Left club-wide** — `get_current_user()` is None, the unfiltered contract |
 | `seed_demo`, `seed_e2e`, `award_achievements`, `backfill_clubs` | Management commands | **Left club-wide** — same |
 
+#### New rows are stamped with the viewer's club
+
+**Scoping reads without wiring writes is a silent data-loss bug.** With `clubs`
+on, a row created through the UI got `club=NULL`, and the scoped managers filter
+on `club=<active club>` -- which NULL never matches. The thing you just created
+was invisible the instant you created it. This shipped and was found during the
+rollout rehearsal, not by the test suite, because every isolation fixture
+assigns `club` explicitly and nothing exercised a *creation path*.
+
+`ClubStampedMixin` (models.py) fills the column in `save()` for `Player`,
+`Location`, `Match`, `ScheduledMatch` and `Championship`.
+
+- **At the model layer, not per view.** Five scoped models are reachable from a
+  dozen creation paths -- views, the admin, `register_entry`,
+  `generate_schedule`, whatever gets added next -- and the failure mode of the
+  per-view approach is the path somebody forgot, which is exactly how this was
+  missed.
+- **An explicit club always wins.** Stamping fills a blank; it never overrules a
+  caller. The backfill and any future data fix depend on that.
+- **No viewer means no stamping**, and **flag off means no stamping** -- the
+  same two contracts the managers keep. Without the first, this would fight
+  `backfill_clubs` for the column.
+- A *null* club on an existing row is filled on save (the repair case). A row
+  that already has one is **never** re-stamped: re-saving must not move data
+  between clubs, or an admin edit becomes a migration.
+
 #### The active club, and what `None` means
 
 #### The active club, and what `None` means

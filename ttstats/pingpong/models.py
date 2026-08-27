@@ -13,6 +13,54 @@ from .managers import ChampionshipManager, GameManager, LiveMatchManager, MatchM
 VERIFICATION_TOKEN_EXPIRY = timedelta(hours=24)
 
 
+class ClubStampedMixin:
+    """Stamp the viewer's active club onto a row that does not have one.
+
+    **The epic scoped every read and originally wired no writes.** With `clubs`
+    on, a row created through the UI got `club=NULL`, and the scoped managers
+    filter on `club=<active club>` -- which NULL never matches. The thing you
+    just created was invisible the instant you created it: exactly the "data
+    appearing to vanish" failure tenancy exists to prevent, arriving through
+    the one door nobody was watching.
+
+    Done at the model layer rather than in each view on purpose. There are five
+    scoped models reachable from a dozen creation paths (views, the admin,
+    `register_entry`, `generate_schedule`, future code), and the failure mode of
+    the per-view approach is a path somebody forgot -- which is silent, and
+    which is how this was missed in the first place.
+
+    Three rules, and all three matter:
+
+    * **An explicit club always wins.** Stamping fills a blank; it never
+      overrules a caller who said what they meant. The backfill and any future
+      data fix depend on that.
+    * **No viewer means no stamping.** A management command, a migration, the
+      backfill itself -- same contract the managers keep, and without it this
+      would fight `backfill_clubs` for control of the column.
+    * **Flag off means no stamping**, so the pre-cutover path stays exactly as
+      it was.
+
+    A *null* club on an existing row is filled in on save, which is the repair
+    case: `backfill_clubs` would do the same thing later, and leaving it null
+    keeps the row invisible in the meantime.
+    """
+
+    def save(self, *args, **kwargs):
+        if self.club_id is None:
+            from pingpong import flags
+            from ttstats.middleware import get_current_club, get_current_user
+
+            user = get_current_user()
+            if user is not None and flags.is_enabled("clubs", user):
+                club = get_current_club()
+                if club is not None:
+                    self.club_id = club.pk
+                    update_fields = kwargs.get("update_fields")
+                    if update_fields is not None:
+                        kwargs["update_fields"] = set(update_fields) | {"club"}
+        return super().save(*args, **kwargs)
+
+
 class ClubManager(models.Manager):
     """Clubs are not row-level filtered.
 
@@ -203,7 +251,7 @@ class ClubMembership(models.Model):
         return f"{self.user.username} in {self.club.name} ({self.get_role_display()})"
 
 
-class Location(models.Model):
+class Location(ClubStampedMixin, models.Model):
     """Location where matches are played"""
 
     name = models.CharField(max_length=100)
@@ -227,7 +275,7 @@ class Location(models.Model):
         return self.name
 
 
-class Player(models.Model):
+class Player(ClubStampedMixin, models.Model):
     """General player model"""
 
     user = models.OneToOneField(
@@ -357,7 +405,7 @@ class Side(models.IntegerChoices):
     TWO = 2, "Side 2"
 
 
-class Match(SideLabelMixin, models.Model):
+class Match(ClubStampedMixin, SideLabelMixin, models.Model):
     """Individual match between two players"""
 
     is_double = models.BooleanField(default=False)
@@ -737,7 +785,7 @@ class UserProfile(models.Model):
         return f"Profile of {self.user.username}"
 
 
-class ScheduledMatch(SideLabelMixin, models.Model):
+class ScheduledMatch(ClubStampedMixin, SideLabelMixin, models.Model):
     """A match scheduled for the future"""
 
     championship = models.ForeignKey(
@@ -968,7 +1016,7 @@ class PlayerAchievement(models.Model):
         return f"{self.player} - {self.achievement}"
 
 
-class Championship(models.Model):
+class Championship(ClubStampedMixin, models.Model):
     """Championship model"""
 
     class Status(models.TextChoices):
