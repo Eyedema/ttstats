@@ -260,8 +260,6 @@ assigns `club` explicitly and nothing exercised a *creation path*.
 
 #### The active club, and what `None` means
 
-#### The active club, and what `None` means
-
 `get_current_club()` sits alongside `get_current_user()` in
 `ttstats/middleware.py`. **`None` means two different things and the
 difference is the entire security contract:**
