@@ -60,8 +60,25 @@ def unbackfill(apps, schema_editor):
 
 class Migration(migrations.Migration):
 
+    # Runs LAST, after every column it writes to exists.
+    #
+    # This migration was originally 0033, immediately after the club columns --
+    # which looked right and was wrong: `_assign_memberships` sets
+    # `ClubMembership.role`, and that column is added by 0033_club_roles. A
+    # migration operates on *historical* models, so the field simply was not
+    # there yet and the run died with
+    # `TypeError: ClubMembership() got unexpected keyword arguments: 'role'`.
+    #
+    # It survived the test suite because the failing line only executes when
+    # there are Users to create memberships for, and the test database has none
+    # at migration time. It failed on the first real database it met.
+    #
+    # Reordering rather than making the helper role-agnostic is deliberate: the
+    # backfill's whole job is to leave a *complete* world behind it, and roles
+    # are part of that (S1.7's capability-preservation promise depends on
+    # existing users landing as `admin`, not on the model default).
     dependencies = [
-        ("pingpong", "0032_club_models"),
+        ("pingpong", "0034_club_invites"),
     ]
 
     operations = [

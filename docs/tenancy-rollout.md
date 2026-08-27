@@ -330,12 +330,25 @@ Run as a real user on a real phone, not just curl.
 
 ## What has and has not been rehearsed
 
-**Rehearsed** on PostgreSQL 16 in Docker, prod's engine, with rows present:
-steps 2 and 3 forward, the repair command twice (idempotent), the reverse of
-both, and forward again. Row counts identical at every step; zero null clubs
-after each forward pass.
+**Rehearsed against the Supabase copy of production** (3 users, 4 players, 101
+matches, 389 games, 202 participants, 2 locations) — steps 1 through 3 forward,
+then the repair command twice:
 
-**Not rehearsed:** the whole sequence against a *production snapshot*. The
-Supabase clone is unreachable (project paused or deleted) and there is no
-staging environment. If you can restore a dump to a scratch Postgres before
-step 3, do — the snapshot procedure above is the same one you would use.
+| check | result |
+|---|---|
+| null clubs, all five tables | **0** |
+| memberships vs users | **3 / 3** |
+| owners | **1** (roles: 1 owner, 2 admin, 0 member) |
+| row counts vs before | **identical** |
+| `backfill_clubs` re-run, twice | `Nothing to do — every row already has a club` |
+
+Also rehearsed on a scratch PostgreSQL 16 with synthetic data: the same steps
+forward, plus **reverse and re-forward**, row counts identical at every step.
+
+**Not yet rehearsed:** the *reverse* against the production copy, and steps 5–7
+anywhere. The flag-flip rollback (steps 5–6) is inherently a production action.
+
+> The Supabase clone was briefly believed unreachable — the credentials in
+> `.env.dev.local` are stale. Pass a working `DATABASE_URL` on the command line
+> instead. It is a **clone**, not production: rehearsing against it is safe, and
+> it is the closest thing to a staging environment this project has.
