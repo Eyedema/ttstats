@@ -361,11 +361,24 @@ then the repair command twice:
 | row counts vs before | **identical** |
 | `backfill_clubs` re-run, twice | `Nothing to do — every row already has a club` |
 
-Also rehearsed on a scratch PostgreSQL 16 with synthetic data: the same steps
-forward, plus **reverse and re-forward**, row counts identical at every step.
+**The step-3 rollback was then rehearsed on the same copy** — reverse, verify,
+re-forward:
 
-**Not yet rehearsed:** the *reverse* against the production copy, and steps 5–7
-anywhere. The flag-flip rollback (steps 5–6) is inherently a production action.
+| after `migrate pingpong 0034` | result |
+|---|---|
+| application rows (users, players, matches, games, locations, participants) | **all intact** |
+| clubs / memberships | **0 / 0** — tenancy state fully cleared |
+| rows still pointing at a club | **0** — no `ProtectedError`, the FKs are nulled before the club row is deleted |
+| `role` column | still present (0034 stays applied; reversing step 3 undoes the *data*, not the schema) |
+
+Rolling forward again reproduced the identical end state: zero null clubs,
+3/3 memberships, exactly 1 owner, row counts matching the original snapshot.
+**The backfill is safe to reverse and re-apply on live data.**
+
+Also rehearsed on a scratch PostgreSQL 16 with synthetic data, same result.
+
+**Not yet rehearsed:** steps 5–7. The flag-flip rollback (steps 5–6) is
+inherently a production action, and step 7's migration does not exist yet.
 
 > The Supabase clone was briefly believed unreachable — the credentials in
 > `.env.dev.local` are stale. Pass a working `DATABASE_URL` on the command line
