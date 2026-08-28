@@ -14,7 +14,10 @@ from .emails import send_verification_email
 from .models import (
     Achievement,
     Championship,
+    Club,
+    ClubMembership,
     EloHistory,
+    FeatureFlagOverride,
     Game,
     Location,
     Match,
@@ -954,3 +957,74 @@ class NotificationPreferenceAdmin(admin.ModelAdmin):
     list_filter = ('push_match_confirmation', 'push_match_result',
                    'push_scheduled_match', 'push_leaderboard_overtake')
     search_fields = ('user__username',)
+
+
+@admin.register(FeatureFlagOverride)
+class FeatureFlagOverrideAdmin(admin.ModelAdmin):
+    """Per-user feature-flag overrides — how a rollout reaches staff first.
+
+    `name` is a free-text field rather than a choices field on purpose: the
+    settings dict is the source of truth and is edited per environment, so a
+    hardcoded choices list here would go stale. A row naming an undeclared flag
+    is inert — flags.is_enabled() rejects the name before it looks for an
+    override — and the changelist marks it so, rather than hiding the mistake.
+    """
+
+    list_display = ('name', 'user', 'enabled', 'is_declared', 'note', 'created_at')
+    list_filter = ('name', 'enabled')
+    search_fields = ('name', 'user__username', 'note')
+    readonly_fields = ('created_at',)
+    autocomplete_fields = ('user',)
+
+    @admin.display(boolean=True, description='Declared in settings')
+    def is_declared(self, obj):
+        from . import flags
+
+        return obj.name in flags.all_flags()
+
+
+class ClubMembershipInline(admin.TabularInline):
+    """Members, edited from the club rather than from the user.
+
+    A membership is only meaningful in the context of a club, and this is where
+    someone looking for "who is in this group" will go.
+    """
+
+    model = ClubMembership
+    extra = 0
+    autocomplete_fields = ('user',)
+    readonly_fields = ('joined_at',)
+
+
+@admin.register(Club)
+class ClubAdmin(admin.ModelAdmin):
+    list_display = ('name', 'slug', 'member_count', 'player_count', 'created_at')
+    search_fields = ('name', 'slug')
+    prepopulated_fields = {'slug': ('name',)}
+    readonly_fields = ('created_at',)
+    inlines = [ClubMembershipInline]
+
+    @admin.display(description='Members')
+    def member_count(self, obj):
+        return obj.memberships.count()
+
+    @admin.display(description='Players')
+    def player_count(self, obj):
+        return obj.players.count()
+
+    def has_delete_permission(self, request, obj=None):
+        # Every club FK is PROTECT, so a populated club refuses to delete
+        # anyway -- but a ProtectedError traceback is a worse answer than the
+        # button not being there. An empty club is still deletable.
+        if obj is not None and (obj.memberships.exists() or obj.players.exists()):
+            return False
+        return super().has_delete_permission(request, obj)
+
+
+@admin.register(ClubMembership)
+class ClubMembershipAdmin(admin.ModelAdmin):
+    list_display = ('user', 'club', 'joined_at')
+    list_filter = ('club',)
+    search_fields = ('user__username', 'club__name')
+    autocomplete_fields = ('user', 'club')
+    readonly_fields = ('joined_at',)

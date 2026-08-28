@@ -2,7 +2,11 @@
 from django.core.management.base import BaseCommand
 from django.core.cache import cache
 
-from pingpong.cache_utils import invalidate_all_caches, get_cache_stats
+from pingpong.cache_utils import (
+    get_cache_stats,
+    get_cache_stats_by_club,
+    invalidate_all_caches,
+)
 
 
 class Command(BaseCommand):
@@ -42,6 +46,15 @@ class Command(BaseCommand):
                 self.stdout.write(f'  Cache hits: {stats["hits"]}')
                 self.stdout.write(f'  Cache misses: {stats["misses"]}')
                 self.stdout.write(f'  Hit rate: {stats["hit_rate"]:.2f}%')
+
+                # Per-club breakdown. This is why the club id is a key PREFIX
+                # rather than a suffix: `club7:*` is a scannable pattern and
+                # `*:club7` is not.
+                by_club = get_cache_stats_by_club()
+                if 'error' not in by_club:
+                    self.stdout.write('  Keys by club namespace:')
+                    for namespace, count in sorted(by_club.items()):
+                        self.stdout.write(f'    {namespace}: {count}')
 
         elif options['test']:
             self.stdout.write('Testing cache connectivity...')

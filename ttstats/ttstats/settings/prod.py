@@ -104,12 +104,43 @@ STORAGES = {
 }
 
 # Logging
+# Every record carries the request path, user id and active club id.
+#
+# A tenancy leak is silent -- no raise, no 500, no log line -- so the one thing
+# an incident needs from these logs is "which tenant was this". Without the
+# context there is no way to answer it, and the first signal would be a user
+# asking "who is Marco?".
+#
+# **Ids only, never identities.** No email addresses, usernames, tokens or push
+# endpoints: a log aggregator is a copy of your data somewhere else, and an id
+# answers "which tenant" while a username does not.
+#
+# Dev is deliberately left alone -- the plain console handler is the right thing
+# there, and the asymmetry is contained because the filter always sets its
+# attributes (see RequestContextFilter), so a record from a management command
+# formats fine.
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
+    'filters': {
+        'request_context': {
+            '()': 'pingpong.observability.RequestContextFilter',
+        },
+    },
+    'formatters': {
+        'tenant': {
+            'format': (
+                '%(asctime)s %(levelname)s %(name)s '
+                'path=%(request_path)s user=%(user_id)s club=%(club_id)s '
+                '%(message)s'
+            ),
+        },
+    },
     'handlers': {
         'console': {
             'class': 'logging.StreamHandler',
+            'filters': ['request_context'],
+            'formatter': 'tenant',
         },
     },
     'root': {
@@ -120,6 +151,21 @@ LOGGING = {
         'django': {
             'handlers': ['console'],
             'level': 'INFO',
+            'propagate': False,
+        },
+        # A 500 must be findable. Django logs unhandled exceptions here at
+        # ERROR with the full traceback; previously they went to the same
+        # undifferentiated INFO stream as everything else.
+        'django.request': {
+            'handlers': ['console'],
+            'level': 'ERROR',
+            'propagate': False,
+        },
+        # The leak canary. Kept at ERROR and on its own logger so it can be
+        # grepped, alerted on, or shipped separately.
+        'pingpong.tenancy': {
+            'handlers': ['console'],
+            'level': 'ERROR',
             'propagate': False,
         },
     },

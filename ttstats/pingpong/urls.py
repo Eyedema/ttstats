@@ -51,6 +51,39 @@ urlpatterns = [
     path("scheduled-matches/<int:scheduled_match_pk>/convert/", views.ScheduledMatchConvertView.as_view(), name="scheduled_match_convert"),
     path("scheduled-matches/<int:pk>/edit/", views.ScheduledMatchEditView.as_view(), name="scheduled_match_edit"),
 
+    # Club administration (KAN-17). Not a tab: a club is a context, not a
+    # destination -- see TAB_FOR_URL_NAME.
+    path("club/switch/", views.ClubSwitchView.as_view(), name="club_switch"),
+    path("club/settings/", views.ClubSettingsView.as_view(), name="club_settings"),
+    path(
+        "club/members/<int:membership_id>/role/",
+        views.ClubMemberRoleView.as_view(),
+        name="club_member_role",
+    ),
+    path(
+        "club/members/<int:membership_id>/remove/",
+        views.ClubMemberRemoveView.as_view(),
+        name="club_member_remove",
+    ),
+
+    path(
+        "club/invites/new/",
+        views.ClubInviteCreateView.as_view(),
+        name="club_invite_create",
+    ),
+    path(
+        "club/invites/<int:invite_id>/revoke/",
+        views.ClubInviteRevokeView.as_view(),
+        name="club_invite_revoke",
+    ),
+    # The accept link. Deliberately short and outside /club/ -- this is the URL
+    # people paste into WhatsApp.
+    path(
+        "join/<str:token>/",
+        views.ClubInviteAcceptView.as_view(),
+        name="club_invite_accept",
+    ),
+
     # Passkey management
     path("passkeys/", views.PasskeyManagementView.as_view(), name="passkey_management"),
 

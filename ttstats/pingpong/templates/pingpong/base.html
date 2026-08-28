@@ -203,7 +203,17 @@
                     class="-ml-2.5 flex h-11 w-11 flex-none items-center justify-center">
                 {% icon "menu" size="lg" %}
             </button>
-            <span class="mr-auto text-heading">{% block nav_title %}TTStats{% endblock %}</span>
+            <span class="mr-auto min-w-0">
+                <span class="block truncate text-heading">{% block nav_title %}TTStats{% endblock %}</span>
+                {% if active_club %}
+                {# Same reason as the sidebar kicker: the club must be legible #}
+                {# without opening the drawer, or every screen is ambiguous    #}
+                {# for a multi-club user. Truncated, so a long name cannot     #}
+                {# push the header controls off a 320px screen.                #}
+                <span class="block truncate text-[11px] font-semibold uppercase tracking-[0.1em] text-muted-foreground"
+                      data-active-club>{{ active_club.name }}</span>
+                {% endif %}
+            </span>
             {% if live_matches_count %}
             {% comment %}
             Amber, and amber appears nowhere else in the app. If this dot is
