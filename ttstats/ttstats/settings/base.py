@@ -79,6 +79,7 @@ TEMPLATES = [
                 'django.contrib.messages.context_processors.messages',
                 'pingpong.context_processors.pingpong_context',
                 'pingpong.context_processors.push_context',
+                'pingpong.context_processors.club_context',
             ],
         },
     },
@@ -202,6 +203,40 @@ PWA_APP_SHORT_NAME = 'TTStats'
 PWA_APP_DESCRIPTION = 'Table tennis matches, Elo and championships.'
 PWA_THEME_COLOR = '#0f172a'
 PWA_BACKGROUND_COLOR = '#0f172a'
+
+# Feature flags
+#
+# Fail closed: a flag is off unless something actively turns it on, and an
+# undeclared name resolves to off with a warning rather than raising. See
+# pingpong/flags.py for the resolution order and the propagation delay.
+#
+# Per-user overrides (FeatureFlagOverride rows) win over these defaults in both
+# directions, which is what makes a staff-only rollout -- and a per-user kill
+# switch -- possible without a deploy.
+#
+# The env override exists so the flag can be flipped in .env.prod and picked up
+# by a container restart, without a code change. Anything in TTSTATS_FLAGS_ON
+# (comma-separated) starts on.
+FEATURE_FLAGS = {
+    # Club scoping of the row-level managers and caches (KAN-6).
+    'clubs': False,
+    # The tenancy leak canary (KAN-21). Runs inside get_queryset(), which is
+    # the hottest path in the app, so it is separately killable without a
+    # deploy -- and gated again by TENANCY_CANARY_SAMPLE_RATE below.
+    'tenancy_canary': False,
+}
+
+# Fraction of scoped querysets the canary inspects. 0.0 means never; the flag
+# above must ALSO be on. Kept low in production: the canary exists to notice a
+# leak, and noticing does not require seeing every query.
+TENANCY_CANARY_SAMPLE_RATE = float(
+    os.environ.get('TENANCY_CANARY_SAMPLE_RATE', '0.0')
+)
+
+for _flag_name in os.environ.get('TTSTATS_FLAGS_ON', '').split(','):
+    _flag_name = _flag_name.strip()
+    if _flag_name in FEATURE_FLAGS:
+        FEATURE_FLAGS[_flag_name] = True
 
 # Redis Cache Configuration
 REDIS_URL = os.environ.get('REDIS_URL')

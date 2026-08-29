@@ -15,7 +15,7 @@ from django.core.mail import send_mail
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db import transaction
 from django.db.models import Count, F, Prefetch, Q, Sum
-from django.http import HttpResponse, JsonResponse
+from django.http import Http404, HttpResponse, JsonResponse
 from django.urls import reverse
 from django.views.decorators.http import require_POST
 from django.shortcuts import get_object_or_404, redirect, render
@@ -47,7 +47,9 @@ from .elo import (
     projected_elo_change_for,
     projected_elo_changes,
 )
-from .models import Game, Location, Match, MatchParticipant, Player, UserProfile, MatchConfirmation, ScheduledMatch, ScheduledMatchParticipant, Side, Championship, EloHistory, format_side_label, NotificationKind, NotificationPreference, PushSubscription
+from . import cache_utils
+from .managers import scope_to_active_club
+from .models import Game, Location, Match, MatchParticipant, Player, UserProfile, MatchConfirmation, ScheduledMatch, ScheduledMatchParticipant, Side, Championship, Club, ClubInvite, ClubMembership, ClubRole, EloHistory, format_side_label, NotificationKind, NotificationPreference, PushSubscription
 from .emails import send_scheduled_match_email, send_passkey_deleted_email
 from .services import set_match_sides, set_scheduled_match_sides
 
@@ -387,7 +389,9 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
         page = self.request.GET.get('page', 1)
 
         # Try cache for aggregate stats (10 minute TTL)
-        stats_cache_key = f'player_stats_{player.pk}'
+        # Namespaced by the player's own club: these are that player's stats,
+        # not a per-viewer view of them.
+        stats_cache_key = f'{cache_utils.club_prefix(player.club)}player_stats_{player.pk}'
         cached_stats = cache.get(stats_cache_key)
 
         if cached_stats is None:
@@ -742,10 +746,13 @@ class DashboardView(LoginRequiredMixin, TemplateView):
     # --- Shared helpers -----------------------------------------------------
 
     def _recent_matches(self):
-        recent_matches = cache.get("dashboard_recent_matches")
+        # Holds Match instances from a club-scoped query, so the key must carry
+        # the club or the first club to load the dashboard serves every other.
+        key = f"{cache_utils.club_prefix()}dashboard_recent_matches"
+        recent_matches = cache.get(key)
         if recent_matches is None:
             recent_matches = list(Match.objects.all().order_by("-date_played")[:5])
-            cache.set("dashboard_recent_matches", recent_matches, 300)
+            cache.set(key, recent_matches, 300)
         return recent_matches
 
     @staticmethod
@@ -1102,9 +1109,23 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
         return [self.template_name]
 
     def _leaderboard_cache_key(self, match_type, date_filter, start_date, end_date, top_x):
-        """Build a cache key that includes filter params and a generation counter."""
-        generation = cache.get('leaderboard_generation', 0)
-        return f'leaderboard_{generation}_{match_type}_{date_filter}_{start_date}_{end_date}_{top_x}'
+        """Cache key: club namespace, then generation, then the filter params.
+
+        The club goes in the *prefix* so `cache_control --stats` can group by
+        club and a targeted flush stays possible. Its generation counter is
+        per club too, so a match in Club A no longer invalidates Club B's
+        leaderboard -- previously correct, but wasteful, and it hid the missing
+        key component during testing.
+
+        With the flag off `club_prefix()` is empty and the key is byte-identical
+        to its pre-tenancy shape.
+        """
+        prefix = cache_utils.club_prefix()
+        generation = cache.get(cache_utils.leaderboard_generation_key(), 0)
+        return (
+            f'{prefix}leaderboard_{generation}_{match_type}_{date_filter}'
+            f'_{start_date}_{end_date}_{top_x}'
+        )
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -1154,7 +1175,13 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
 
         # Build base match query with filters applied at DB level
         # Use is_confirmed=True to filter at DB level instead of Python
-        matches_query = Match._base_manager.filter(is_confirmed=True)
+        # _base_manager deliberately bypasses row-level security: the
+        # leaderboard is a whole-club table, not "matches I played in".
+        # It must NOT also bypass tenancy -- this feeds the cached payload,
+        # which makes it the single highest-risk bypass in the app.
+        matches_query = scope_to_active_club(
+            Match._base_manager.filter(is_confirmed=True)
+        )
 
         # Apply match type filter at DB level
         if match_type == 'singles':
@@ -1331,7 +1358,10 @@ class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
             player2 = get_object_or_404(Player, pk=player2_id)
 
             # Try cache first (30 minute TTL)
-            h2h_cache_key = f'h2h_{min(player1.pk, player2.pk)}_{max(player1.pk, player2.pk)}'
+            h2h_cache_key = (
+                f'{cache_utils.club_prefix(player1.club)}'
+                f'h2h_{min(player1.pk, player2.pk)}_{max(player1.pk, player2.pk)}'
+            )
             cached_h2h = cache.get(h2h_cache_key)
 
             if cached_h2h is not None:
@@ -1608,6 +1638,12 @@ class PlayerRegistrationView(CreateView):
         """Log the user in after successful registration"""
         response = super().form_valid(form)
         user = self.object  # type: ignore
+
+        # If they arrived via an invite link, put them in the club now. The
+        # invite flow hooks into this view rather than forking it -- a second
+        # registration path would drift from this one, which already creates
+        # the Player, sends verification and logs the user in.
+        invited_club = consume_pending_invite(self.request, user=user)
         verification_url = self.request.build_absolute_uri(
             reverse_lazy(
                 "pingpong:email_verify", args=[user.profile.email_verification_token]
@@ -1628,6 +1664,7 @@ class PlayerRegistrationView(CreateView):
             {
                 "email": user.email,
                 "username": user.username,
+                "invited_club": invited_club,
             },
         )
 
@@ -2048,11 +2085,13 @@ class ScheduledMatchConvertView(LoginRequiredMixin, CreateView):
             return super().dispatch(request, *args, **kwargs)
 
         # User is authenticated, safe to fetch object
-        # Use _base_manager to bypass custom manager filtering
+        # _base_manager bypasses the *user* filter so a championship organiser
+        # can convert a match they are not playing in. Scoped, so it does not
+        # also bypass the club filter.
         try:
-            self.scheduled_match = ScheduledMatch._base_manager.get(
-                pk=self.kwargs['scheduled_match_pk']
-            )
+            self.scheduled_match = scope_to_active_club(
+                ScheduledMatch._base_manager.all()
+            ).get(pk=self.kwargs['scheduled_match_pk'])
         except ScheduledMatch.DoesNotExist:
             from django.http import Http404
             raise Http404("Scheduled match not found")
@@ -2673,8 +2712,9 @@ class ScheduledMatchEditView(LoginRequiredMixin, UpdateView):
     template_name = "pingpong/scheduled_match_edit.html"
 
     def get_queryset(self):
-        # Use all_objects to bypass manager filtering
-        return ScheduledMatch.all_objects.all()
+        # all_objects bypasses the *user* filter so a championship organiser
+        # can edit a match they are not playing in. Scoped to the club.
+        return scope_to_active_club(ScheduledMatch.all_objects.all())
 
     def dispatch(self, request, *args, **kwargs):
         if not request.user.is_authenticated:
@@ -2723,7 +2763,10 @@ def _get_live_match_for_scorekeeper(request, pk):
     Uses ``all_objects`` so the default manager's is_live=False filter
     doesn't hide our target.
     """
-    match = get_object_or_404(Match.all_objects, pk=pk)
+    # all_objects so the default manager's is_live=False filter doesn't hide
+    # the target -- but scoped, because bypassing the *user* filter for a
+    # scorekeeper is not a reason to expose another club's match.
+    match = get_object_or_404(scope_to_active_club(Match.all_objects.all()), pk=pk)
     try:
         user_player = request.user.player
     except (AttributeError, Player.DoesNotExist):
@@ -2909,8 +2952,9 @@ class LiveStateView(LoginRequiredMixin, View):
     """
 
     def get(self, request, pk):
-        # all_objects so we can return a completed match's redirect too
-        match = get_object_or_404(Match.all_objects, pk=pk)
+        # all_objects so we can return a completed match's redirect too,
+        # scoped so it cannot reach across clubs.
+        match = get_object_or_404(scope_to_active_club(Match.all_objects.all()), pk=pk)
         try:
             user_player = request.user.player
         except (AttributeError, Player.DoesNotExist):
@@ -3157,3 +3201,421 @@ class NotificationSettingsView(LoginRequiredMixin, View):
         prefs.save()
         messages.success(request, "Notification preferences saved")
         return redirect("pingpong:notification_settings")
+
+
+# ---------------------------------------------------------------------------
+# Club administration (KAN-17 / S1.7)
+# ---------------------------------------------------------------------------
+
+
+class ClubAdminRequiredMixin(LoginRequiredMixin):
+    """Gate a view on the viewer being an admin of their active club.
+
+    One helper, used by every club-admin view. The ticket's requirement is
+    precise about this: a role check must not be an inline comparison copied
+    per view, because the copy that gets missed is the one that matters.
+
+    Raises `PermissionDenied` (403) rather than redirecting, so a forged POST
+    is refused rather than quietly bounced to a page that looks like success.
+    Templates are still expected not to render controls the viewer cannot use
+    -- the 403 is a correctness backstop, not the UX.
+    """
+
+    def get_active_club(self):
+        from ttstats.middleware import get_current_club
+
+        club = get_current_club()
+        if club is None:
+            raise Http404("No active club.")
+        return club
+
+    def dispatch(self, request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            return super().dispatch(request, *args, **kwargs)
+
+        self.club = self.get_active_club()
+        if not self.club.user_can_administer(request.user):
+            raise PermissionDenied(
+                "Only a club admin or owner can do that."
+            )
+        return super().dispatch(request, *args, **kwargs)
+
+
+class ClubSettingsView(ClubAdminRequiredMixin, View):
+    """Edit the active club, and manage its members' roles."""
+
+    template_name = "pingpong/club_settings.html"
+
+    def get(self, request):
+        return render(request, self.template_name, self._context())
+
+    def _context(self, form=None):
+        from .forms import ClubSettingsForm
+
+        memberships = list(self.club.memberships.select_related("user").all())
+        viewer = self.club.membership_for(self.request.user)
+
+        # Which rows the viewer may actually act on, decided HERE rather than
+        # in template logic. The template must not render a control the viewer
+        # cannot use -- a 403 on submit is a correctness backstop, not the UX --
+        # and the rules (outranking, last-owner) are the same ones the POST
+        # handlers enforce, so they are computed once and read twice.
+        owners = sum(1 for m in memberships if m.is_owner)
+        actionable_ids = {
+            m.pk
+            for m in memberships
+            if viewer.outranks(m) and not (m.is_owner and owners <= 1)
+        }
+
+        from .forms import ClubInviteForm
+
+        return {
+            "club": self.club,
+            "form": form or ClubSettingsForm(instance=self.club),
+            "invite_form": ClubInviteForm(),
+            "invites": self.club.invites.all()[:10],
+            # Popped, not read: an invite link is a bearer credential, so it is
+            # shown once on the redirect after creation rather than living on
+            # the settings page forever.
+            "last_invite_url": self.request.session.pop("last_invite_url", None),
+            "memberships": memberships,
+            "viewer_membership": viewer,
+            "actionable_ids": actionable_ids,
+            "role_choices": ClubRole.choices,
+        }
+
+    def post(self, request):
+        from .forms import ClubSettingsForm
+
+        form = ClubSettingsForm(request.POST, instance=self.club)
+        if form.is_valid():
+            form.save()
+            messages.success(request, "Club settings saved.")
+            return redirect("pingpong:club_settings")
+        return render(request, self.template_name, self._context(form))
+
+
+class ClubMemberRoleView(ClubAdminRequiredMixin, View):
+    """Change one member's role.
+
+    Two rules, both enforced here rather than in the template:
+
+    * You cannot act on someone who outranks you or is your equal. An admin
+      promoting themselves past the owner would make the owner role meaningless.
+    * The last owner cannot be demoted. A club with no owner has no one who can
+      appoint one, which is unrecoverable without a shell.
+    """
+
+    def post(self, request, membership_id):
+        membership = get_object_or_404(
+            self.club.memberships.select_related("user"), pk=membership_id
+        )
+        viewer = self.club.membership_for(request.user)
+        new_role = request.POST.get("role")
+
+        if new_role not in dict(ClubRole.choices):
+            messages.error(request, "Unknown role.")
+            return redirect("pingpong:club_settings")
+
+        if membership.pk != viewer.pk and not viewer.outranks(membership):
+            messages.error(
+                request,
+                f"You cannot change the role of a club {membership.get_role_display().lower()}.",
+            )
+            return redirect("pingpong:club_settings")
+
+        if (
+            membership.is_owner
+            and new_role != ClubRole.OWNER
+            and self.club.owner_count <= 1
+        ):
+            messages.error(
+                request,
+                "This is the club's only owner. Promote someone else to owner first.",
+            )
+            return redirect("pingpong:club_settings")
+
+        if new_role == ClubRole.OWNER and not viewer.is_owner:
+            messages.error(request, "Only an owner can appoint another owner.")
+            return redirect("pingpong:club_settings")
+
+        membership.role = new_role
+        membership.save(update_fields=["role"])
+        messages.success(
+            request,
+            f"{membership.user.username} is now a club {membership.get_role_display().lower()}.",
+        )
+        return redirect("pingpong:club_settings")
+
+
+class ClubMemberRemoveView(ClubAdminRequiredMixin, View):
+    """Remove a member from the club.
+
+    The last owner cannot be removed -- including by themselves. "I am the only
+    owner and I left" is the one mistake with no in-app recovery.
+    """
+
+    def post(self, request, membership_id):
+        membership = get_object_or_404(
+            self.club.memberships.select_related("user"), pk=membership_id
+        )
+        viewer = self.club.membership_for(request.user)
+
+        if membership.pk != viewer.pk and not viewer.outranks(membership):
+            messages.error(
+                request,
+                "You cannot remove someone with an equal or higher role.",
+            )
+            return redirect("pingpong:club_settings")
+
+        if membership.is_owner and self.club.owner_count <= 1:
+            messages.error(
+                request,
+                "A club must always have an owner. Promote someone else first.",
+            )
+            return redirect("pingpong:club_settings")
+
+        username = membership.user.username
+        membership.delete()
+        messages.success(request, f"{username} was removed from the club.")
+        return redirect("pingpong:club_settings")
+
+
+# ---------------------------------------------------------------------------
+# Club invites (KAN-18 / S1.6)
+# ---------------------------------------------------------------------------
+
+# Where an invite token waits while an anonymous visitor goes through signup.
+# Session rather than a query parameter on the signup URL: the registration
+# form posts to itself, so a query parameter would be lost on the first
+# validation error and the invite would silently evaporate.
+PENDING_INVITE_SESSION_KEY = "pending_club_invite"
+
+
+def _find_invite(token):
+    """Look an invite up by token. Returns None rather than raising.
+
+    Compared in constant time. A plain `filter(token=token)` on an indexed
+    unique column is already not a timing oracle in any practical sense, but
+    the lookup result is then re-verified with `secrets.compare_digest` so the
+    property does not depend on how the database happens to index the column.
+
+    The token is never logged, here or anywhere -- it is a bearer credential.
+    """
+    import secrets
+
+    if not token or len(token) > 64:
+        return None
+    invite = ClubInvite.objects.filter(token=token).select_related("club").first()
+    if invite is None:
+        return None
+    if not secrets.compare_digest(str(invite.token), str(token)):
+        return None
+    return invite
+
+
+def accept_club_invite(request, invite, user=None):
+    """Put `user` (default: the request's user) in the invite's club.
+
+    One place, called from both the accept view and the post-signup hook, so
+    the two paths cannot drift about what "joined" means.
+
+    The explicit `user` argument is not optional decoration: at registration
+    time the new account exists but is **not logged in yet**, so `request.user`
+    is still anonymous and the invite would silently do nothing.
+    """
+    user = user or request.user
+    if not user or not user.is_authenticated:
+        return "invalid"
+
+    if invite.club.user_is_member(user):
+        return "already_member"
+
+    if not invite.claim():
+        return "invalid"
+
+    ClubMembership.objects.get_or_create(
+        club=invite.club,
+        user=user,
+        defaults={"role": ClubRole.MEMBER},
+    )
+
+    # base.html renders {% url 'pingpong:player_detail' user.player.pk %}
+    # unconditionally, so a member without a Player 500s every page in the app.
+    # An invite must never leave someone in that state.
+    player = getattr(user, "player", None)
+    if player is None:
+        Player.objects.create(user=user, name=user.username, club=invite.club)
+    elif player.club_id is None:
+        Player.objects.filter(pk=player.pk).update(club=invite.club)
+
+    from ttstats.middleware import set_active_club
+
+    set_active_club(request, invite.club)
+    return "joined"
+
+
+class ClubInviteCreateView(ClubAdminRequiredMixin, View):
+    """Generate an invite link for the active club. Admins only."""
+
+    def post(self, request):
+        from .forms import ClubInviteForm
+
+        form = ClubInviteForm(request.POST)
+        if not form.is_valid():
+            messages.error(request, "Could not create that invite.")
+            return redirect("pingpong:club_settings")
+
+        invite = ClubInvite.issue(
+            club=self.club,
+            created_by=request.user,
+            validity=timedelta(days=form.cleaned_data["valid_for_days"]),
+            max_uses=form.cleaned_data.get("max_uses") or None,
+            note=form.cleaned_data.get("note", ""),
+        )
+        messages.success(
+            request,
+            "Invite link created. Share it with the person you want to add.",
+        )
+        request.session["last_invite_url"] = request.build_absolute_uri(
+            reverse("pingpong:club_invite_accept", args=[invite.token])
+        )
+        return redirect("pingpong:club_settings")
+
+
+class ClubInviteRevokeView(ClubAdminRequiredMixin, View):
+    """Revoke an invite. Admins only, and only for their own club."""
+
+    def post(self, request, invite_id):
+        invite = get_object_or_404(self.club.invites, pk=invite_id)
+        invite.revoke()
+        messages.success(request, "That invite link no longer works.")
+        return redirect("pingpong:club_settings")
+
+
+@method_decorator(
+    # A token is guessable only by brute force, so the accept endpoint is the
+    # one place worth rate limiting: it is the only oracle for "is this token
+    # real". Keyed on IP because the attacker is by definition not logged in.
+    ratelimit(key="ip", rate="20/h", method="GET", block=True),
+    name="dispatch",
+)
+class ClubInviteAcceptView(View):
+    """Open an invite link.
+
+    Handles both visitors: an authenticated user joins immediately, an
+    anonymous one is sent through the *existing* signup flow with the token
+    parked in their session. Registration is not forked -- a second signup path
+    would drift from the first, and this one already creates the Player,
+    sends verification and logs the user in.
+    """
+
+    template_name = "pingpong/club_invite_invalid.html"
+
+    def get(self, request, token):
+        invite = _find_invite(token)
+
+        if invite is None or not invite.is_valid:
+            return self._invalid(request, invite)
+
+        if not request.user.is_authenticated:
+            # Park it and send them to signup. Survives the round trip,
+            # including a failed validation pass on the form.
+            request.session[PENDING_INVITE_SESSION_KEY] = invite.token
+            messages.info(
+                request,
+                f"Create an account to join {invite.club.name}.",
+            )
+            return redirect("pingpong:signup")
+
+        outcome = accept_club_invite(request, invite)
+
+        if outcome == "already_member":
+            messages.info(
+                request, f"You are already a member of {invite.club.name}."
+            )
+        elif outcome == "invalid":
+            # Lost the race for the last use of a single-use link.
+            invite.refresh_from_db()
+            return self._invalid(request, invite)
+        else:
+            messages.success(request, f"Welcome to {invite.club.name}!")
+
+        return redirect("pingpong:dashboard")
+
+    def _invalid(self, request, invite):
+        """Never a 500, and never silent membership."""
+        return render(
+            request,
+            self.template_name,
+            {
+                "reason": (
+                    invite.invalid_reason
+                    if invite is not None
+                    else "This invite link is not valid."
+                ),
+                "club": invite.club if invite is not None else None,
+            },
+            status=404 if invite is None else 410,
+        )
+
+
+def consume_pending_invite(request, user=None):
+    """Apply a parked invite after signup. Safe to call unconditionally.
+
+    Called from `PlayerRegistrationView.form_valid`, which is why the invite
+    flow does not need a registration path of its own. `user` is passed
+    explicitly there because the new account is not logged in yet.
+    """
+    token = request.session.pop(PENDING_INVITE_SESSION_KEY, None)
+    user = user or getattr(request, "user", None)
+    if not token or not user or not user.is_authenticated:
+        return None
+
+    invite = _find_invite(token)
+    if invite is None or not invite.is_valid:
+        return None
+
+    if accept_club_invite(request, invite, user=user) != "joined":
+        return None
+    return invite.club
+
+
+class ClubSwitchView(LoginRequiredMixin, View):
+    """Switch the viewer's active club.
+
+    POST only. Switching changes what every subsequent page shows, which makes
+    it a state change, not a navigation -- a GET link would let any page on the
+    internet move someone's club with an <img> tag.
+
+    Membership is checked here *and* re-checked by `_resolve_active_club` on
+    every later request. This one is the courtesy error message; that one is
+    the security boundary.
+    """
+
+    def post(self, request):
+        from ttstats.middleware import set_active_club
+
+        # Coerced before it reaches the ORM: a non-numeric pk raises ValueError
+        # out of the field's get_prep_value, which would turn a malformed POST
+        # into a 500 rather than a polite refusal.
+        try:
+            club_id = int(request.POST.get("club_id", ""))
+        except (TypeError, ValueError):
+            club_id = None
+
+        club = (
+            Club.objects.for_user(request.user).filter(pk=club_id).first()
+            if club_id is not None
+            else None
+        )
+
+        if club is None:
+            messages.error(request, "You are not a member of that club.")
+            return redirect("pingpong:dashboard")
+
+        set_active_club(request, club)
+        messages.success(request, f"Now viewing {club.name}.")
+        # Today, deliberately. Staying put would leave the viewer on a detail
+        # page belonging to the club they just left, which then 404s.
+        return redirect("pingpong:dashboard")

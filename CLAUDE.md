@@ -167,6 +167,7 @@ Maintain integration tests that exercise complete user flows end-to-end through 
 3. **Doubles match lifecycle:** Create match (4 players) -> add games -> confirm as all 4 players -> assert Elo updated for all.
 4. **Scheduled match conversion:** Schedule match -> assert emails -> convert to match -> add games -> confirm -> verify calendar status.
 5. **Head-to-head with data:** Create two players, play multiple confirmed matches -> GET head-to-head -> assert stats correct.
+6. **Club invite -> anonymous signup -> membership** (`test_club_invites.py::TestAnonymousSignupThroughAnInvite`): admin generates an invite -> anonymous visitor opens the link -> signs up -> assert they are a member with a Player, the invite is consumed exactly once, and registration's own behaviour (verification email) is unchanged.
 
 ---
 
@@ -175,9 +176,122 @@ Maintain integration tests that exercise complete user flows end-to-end through 
 These are non-obvious behaviors that aren't clear from reading individual source files.
 
 ### Row-Level Security
+
+**Two independent boundaries, applied in this order.** Getting them backwards,
+or conflating them, is the whole failure mode:
+
+1. **The club** (tenancy) -- whose data is this? Flag-gated on `clubs`.
+2. **The user** (participation) -- which of my club's rows am I party to?
+
 - `CurrentUserMiddleware` stores user in thread-local (`_thread_locals.user`)
 - Managers filter querysets: no user = unfiltered, anonymous = empty, staff = all, regular = own matches only
-- **Bypass:** Use `Model.all_objects` (e.g., `Match.all_objects`) to skip row-level filtering (needed in championship views)
+- **Staff bypass the user filter. NOTHING bypasses the club filter.** A staff
+  account is global; a club is not.
+- **"Green with the `clubs` flag on" means something specific.** Forcing the
+  flag on for the *whole* suite fails ~200 tests, and that is not a defect:
+  those fixtures build a pre-backfill world (a logged-in user with no club),
+  where the designed answer is "see nothing". Production is never in that state
+  once step 3 of `docs/tenancy-rollout.md` passes its gate. The real claim --
+  **once a user has a club, the flag changes nothing they can see** -- is
+  asserted directly by
+  `test_tenancy_isolation.py::TestABackfilledWorldBehavesIdenticallyWithTheFlagOn`.
+  Suites that are *about* tenancy opt the flag on per class.
+- **All six managers share `ScopedManagerMixin`.** They used to be six
+  near-duplicate copies of the same staff/anonymous/regular branch. Adding a
+  second boundary to six copies is how one gets missed, and a missed one is a
+  leak that raises nothing and logs nothing. Subclasses supply `club_lookup`,
+  `_base_queryset()`, `_scope_to_user()`, and the two opt-out knobs.
+- `filters_by_user = False` (PlayerManager, LiveMatchManager) skips the
+  *participation* filter only. It must never skip the club filter.
+- `anonymous_returns_none = False` exists solely to keep the flag-off path
+  byte-identical where the pre-tenancy manager served anonymous visitors.
+- **Bypass:** `Model.all_objects` / `_base_manager` skip row-level filtering
+  (championship views legitimately need every match in a championship, not just
+  the viewer's). **After tenancy they must not also skip the club filter** --
+  wrap them in `managers.scope_to_active_club(qs)`. See the audit table below.
+- **A `queryset=` written in a form class body is evaluated at import time**,
+  with no user and no club in context. The manager runs unfiltered and its
+  filters are then fixed forever. Harmless while `PlayerManager` returned
+  everyone to everyone; with tenancy it is a leak *with a write attached*, since
+  a picker offering another club's players lets a user build a cross-club match
+  through the UI. `ScopedChoicesMixin` re-binds them per instantiation.
+
+#### The `all_objects` / `_base_manager` audit (KAN-24)
+
+| Site | Why it bypasses | Resolution |
+|---|---|---|
+| `views.LeaderboardView` | Whole-club table, not "matches I played in" | **Scoped.** Highest risk: it feeds the cached payload |
+| `views._get_live_match_for_scorekeeper` | `is_live=False` default filter hides the target | **Scoped** |
+| `views.LiveStateView` | Must return a completed match's redirect | **Scoped** |
+| `views.ScheduledMatchConvertView` | Organiser converts a match they don't play in | **Scoped** |
+| `views.ScheduledMatchEditView` | Same | **Scoped** |
+| `context_processors.pingpong_context` | Badge counting only your own championships is not a badge | **Scoped** |
+| `ChampionshipDetailView` (4 sites) | Participants see all championship matches | **Left club-wide** — filtered by `championship=`, and the championship itself came through the club-scoped manager. Transitively safe |
+| `MatchManager` / `ScheduledMatchManager` `_scope_to_user` | `Championship.all_objects` inside an `Exists()` subquery | **Left club-wide** — correlated to `OuterRef('championship_id')` on an already-scoped row |
+| `models.Match.recompute`, `services` | Writes to a known pk | **Left club-wide** — no reads |
+| `achievements.py`, `notifications.py` | Background/system paths with no viewer | **Left club-wide** — `get_current_user()` is None, the unfiltered contract |
+| `seed_demo`, `seed_e2e`, `award_achievements`, `backfill_clubs` | Management commands | **Left club-wide** — same |
+
+#### New rows are stamped with the viewer's club
+
+**Scoping reads without wiring writes is a silent data-loss bug.** With `clubs`
+on, a row created through the UI got `club=NULL`, and the scoped managers filter
+on `club=<active club>` -- which NULL never matches. The thing you just created
+was invisible the instant you created it. This shipped and was found during the
+rollout rehearsal, not by the test suite, because every isolation fixture
+assigns `club` explicitly and nothing exercised a *creation path*.
+
+`ClubStampedMixin` (models.py) fills the column in `save()` for `Player`,
+`Location`, `Match`, `ScheduledMatch` and `Championship`.
+
+- **At the model layer, not per view.** Five scoped models are reachable from a
+  dozen creation paths -- views, the admin, `register_entry`,
+  `generate_schedule`, whatever gets added next -- and the failure mode of the
+  per-view approach is the path somebody forgot, which is exactly how this was
+  missed.
+- **An explicit club always wins.** Stamping fills a blank; it never overrules a
+  caller. The backfill and any future data fix depend on that.
+- **No viewer means no stamping**, and **flag off means no stamping** -- the
+  same two contracts the managers keep. Without the first, this would fight
+  `backfill_clubs` for the column.
+- A *null* club on an existing row is filled on save (the repair case). A row
+  that already has one is **never** re-stamped: re-saving must not move data
+  between clubs, or an admin edit becomes a migration.
+
+#### The active club, and what `None` means
+
+`get_current_club()` sits alongside `get_current_user()` in
+`ttstats/middleware.py`. **`None` means two different things and the
+difference is the entire security contract:**
+
+- **No user in context** (management command, migration) -- there is no viewer,
+  so queries stay *unfiltered*. Identical to the `get_current_user() is None`
+  contract.
+- **An authenticated user with no club** -- there is a viewer and they belong
+  nowhere, so they see *nothing*. Failing open here would make "no club" the
+  widest permission in the app, which is exactly backwards.
+
+Managers therefore branch on the **user first**, and only then consult the club.
+
+- **Membership is re-checked on every single request.** A club id in the
+  session is an untrusted claim: someone removed from a club mid-session still
+  holds its id, and a forged one costs nothing to try. The stored id may only
+  *choose among* `Club.objects.for_user()`; it can never introduce a club.
+  `set_active_club()` records a choice -- it is **not** an authorization check.
+- **Staff do NOT bypass club scoping.** They keep the *user*-filter bypass, which
+  is what makes admin work, but stay inside their clubs. Otherwise every staff
+  page is a cross-tenant firehose and the isolation suite has to except its most
+  privileged user. A staff member who needs to see a club joins it.
+- **Resolution is lazy and memoized per request** (`_thread_locals.club`,
+  `_thread_locals.user_clubs`). A page that never touches a scoped manager pays
+  no query; a page that renders the club name and the switcher pays exactly one.
+  `club_context` returns `SimpleLazyObject`s for the same reason.
+- **The thread-locals are cleared on the way IN as well as out.** Clearing only
+  on exit assumes every prior request left through the middleware; the one that
+  did not -- a crash above it, a recycled worker, a test setting the value by
+  hand -- would hand the next request a club resolved for somebody else.
+- Two tabs in two clubs means last write wins. Accepted: a club is a viewing
+  context, and per-tab state is not expressible in a session.
 
 ### Match Confirmation & Elo
 - When winner is set for the first time: if any player is unverified, auto-confirm all; if all verified, send confirmation emails
@@ -607,6 +721,213 @@ The app is installable and can push notifications. Two modules, deliberately spl
 - Leaderboard uses generation counter pattern: `cache.incr('leaderboard_generation')` versions keys instead of deleting all filter variants
 - `CacheDebugMiddleware` (dev only) adds `X-Request-Time`, `X-Cache-Hits`, `X-Cache-Misses` headers
 
+#### Every cache key carries its club
+
+**A correctly-scoped query served from a cache entry another club warmed is
+still a leak** -- and it is the one kind of leak a suite running against a cold
+cache will never see. `cache_utils.club_prefix()` is the single source of the
+namespace.
+
+- The club id is a key **prefix**, not a suffix, so `cache_control --stats` can
+  group by namespace and a targeted flush stays possible: `club7:*` is a
+  scannable pattern, `*:club7` is not.
+- **The generation counter is per club** (`club7:leaderboard_generation`). The
+  pattern itself is kept -- versioning keys beats deleting the cross-product of
+  every filter variant -- but a match in Club A no longer invalidates Club B's.
+- The new key name is a **clean break** from `leaderboard_generation`, never an
+  overlap. A deploy leaves old keys in Redis, and an ambiguous key is how one
+  club is served another's payload for a whole TTL.
+- **A viewer with no club gets its own `noclub:` namespace**, which collides
+  with neither a real club nor the flag-off (empty) namespace.
+- **A player's keys are namespaced by that player's club, not the viewer's.**
+  They summarise that player; a viewer-dependent key means one entry per viewer
+  and a hit rate near zero.
+- **A cross-club match invalidates both clubs.** They are representable by
+  design, and half-invalidating leaves one side reading a stale table.
+- With the flag off, `club_prefix()` is `""` and every key is byte-identical to
+  its pre-tenancy shape.
+- **`warm_cache` scopes by explicit filter, never by faking a request.** The
+  managers' contract is "no user means unfiltered" and a command has no user, so
+  a club in thread-local context alone leaves every query unscoped and writes
+  each club's key with the whole database's numbers. A populated cache that is
+  wrong is worse than a cold one.
+
+### The club switcher has no hidden state
+
+The switcher lives in `_nav_menu.html` -- **edited once**, rendered by both the
+drawer and the desktop sidebar, which is why they cannot diverge again.
+
+- **Placement is the drawer, never the tab bar.** The four tabs are
+  *destinations*; a club is a *context*. A fifth tab would also break the rule
+  that Play is a tab because it is the only thing that starts something.
+- **There is deliberately NO dropdown.** The fail-closed rule applies to
+  anything whose hidden state is managed by JavaScript, and the cheapest way to
+  obey it is to have no hidden state: this is a list of plain POST forms, two
+  or three rows long, never collapsed. It cannot render open-and-unusable, it
+  needs no Alpine, no `[x-cloak]` and no compiled CSS to be correct, and it
+  works with scripting off. A collapsible control here would add a failure mode
+  to save one row of vertical space.
+- **POST, not a link.** Switching changes what every later page shows, so a GET
+  would let any page on the internet move someone's club with an `<img>` tag.
+  `club_id` is coerced to int before it reaches the ORM -- a non-numeric pk
+  raises out of `get_prep_value` and would turn a malformed POST into a 500.
+- **Absent for single-club users**, who are almost everyone. A chooser offered
+  to someone with one choice is clutter -- but the club **name** still renders,
+  in the mobile header and the sidebar kicker, because "which club am I looking
+  at" has to be answerable on every screen without opening the drawer.
+- The active row is marked with `aria-current`, not colour alone.
+- **Switching lands on Today.** Staying put would leave the viewer on a detail
+  page belonging to the club they just left, which then 404s.
+- **A live match in the club you switch away from keeps running.** Switching is
+  a viewing change; the match is server state keyed on its own pk and the
+  scorekeeper reaches it by URL. It is waiting when they switch back.
+- `get_user_memberships()` answers **which clubs, which is active, and what
+  role** from one memoized query. Asking separately put three queries on every
+  page in the app -- one of them purely to decide whether to draw a single menu
+  row. The match-list query ceiling moved 14 -> 15 for this, deliberately.
+
+### Club invites are bearer credentials
+
+`ClubInvite` + `/pingpong/join/<token>/` is how a second group onboards itself
+with no admin creating accounts and no shell. The token *is* the authorization,
+which sets every rule below.
+
+- **The token follows the `UserProfile.email_verification_token` precedent** --
+  `uuid.uuid4().hex`, already working in production. Compared with
+  `secrets.compare_digest`, never logged, and the accept endpoint is rate
+  limited (`20/h` by IP) because it is the only oracle for "is this token real".
+- **Registration is hooked, never forked.** `PlayerRegistrationView.form_valid`
+  calls `consume_pending_invite()`. A second signup path would drift from the
+  one that already creates the Player, sends verification and handles the
+  form's error states.
+- **`accept_club_invite` takes an explicit `user`.** At registration time the
+  new account exists but is *not logged in yet*, so `request.user` is still
+  anonymous and the invite would silently do nothing.
+- **The token is parked in the session, not on the signup URL.** The
+  registration form posts to itself, so a query parameter is lost on the first
+  validation error and the invite evaporates.
+- **`claim()` is a conditional `.update()`**, so two people opening the same
+  single-use link at the same moment cannot both win. `if invite.is_used_up:`
+  in Python loses that race every time. Same shape as
+  `Match.result_notified_at`.
+- **An existing member's visit does not burn a use** -- otherwise a curious
+  member destroys a single-use link meant for someone else.
+- **Acceptance guarantees a Player exists.** `base.html` renders
+  `user.player.pk` unconditionally, so a member without one 500s every page.
+- **A dead link gets a real page**, with the *specific* reason (expired /
+  revoked / used up). Never a 500, never silent membership. The distinction is
+  not sensitive: the reader already holds the token.
+- **The generated link is shown once**, on the redirect after creation, and is
+  not re-rendered on later visits. A settings page that always displays every
+  live link is a settings page you cannot show anyone.
+
+### Club roles
+
+`ClubMembership.role` is owner / admin / member. Before it, `user.is_staff` was
+the app's only privilege distinction -- and staff is *global*, so it cannot
+express "runs our club".
+
+- **A role is per membership, never per user.** Someone can own one club and be
+  an ordinary member of another. Conflating them is how a person ends up
+  administering a club they merely play in.
+- **Every check goes through `Club.user_can_administer()` / `user_is_owner()` /
+  `role_for()` / `membership_for()`** -- on the model, following
+  `Player.user_can_edit` and `PlayerManager.editable_by`. Never an inline
+  `is_staff` comparison in a view; the copy that gets missed is the one that
+  matters.
+- **Django staff get no standing inside a club.** A staff account that is not a
+  member cannot administer it, and one that *is* a member is governed by its
+  role like anyone else. Same reasoning as the S1.4 decision. A staff member
+  who needs to run a club joins it.
+- **A club can never be left ownerless.** The last owner cannot be demoted or
+  removed, including by themselves -- it is the one mistake with no in-app
+  recovery.
+- **You cannot act on an equal or a superior** (`ClubMembership.outranks`), and
+  only an owner may appoint another owner. Otherwise the owner role is
+  decorative: an admin would simply promote themselves.
+- `ClubAdminRequiredMixin` raises `PermissionDenied` (403), never a redirect --
+  a forged POST is refused, not bounced to a page that looks like success. A
+  viewer with no active club at all gets 404, matching the app's existing
+  "invisible things 404, they do not 403" rule.
+- **Templates must not render controls the viewer cannot use.** `ClubSettingsView`
+  computes `actionable_ids` with the same rules the POST handlers enforce, so
+  the two cannot disagree. The 403 is a correctness backstop, not the UX.
+- **The backfill grants existing users `admin`, not `member`, and appoints one
+  `owner`.** That looks generous and is the conservative choice: before roles
+  existed every verified user could create and start championships, so `member`
+  would silently strip capability from everyone at cutover. Users who join
+  *later* get the model default. The generosity is a migration artefact, not
+  the policy.
+
+### Tenancy observability: context on every log line, plus a canary
+
+Production ran one console handler at INFO with no request context. For a
+change whose failure mode is *silent*, that means the first signal would be a
+user asking "who is Marco?".
+
+- **Every prod log record carries `path`, `user` and `club` ids**
+  (`observability.RequestContextFilter`, wired into `prod.py`'s `LOGGING`).
+  **Ids only, never identities** -- no usernames, emails, tokens or push
+  endpoints. A log aggregator is a copy of your data in someone else's system,
+  and an id answers "which tenant" while a username does not. The query string
+  is never logged; the email-verification flow puts a token in a URL.
+- The filter **always sets its three attributes**, so a formatter naming them
+  cannot blow up on a record from a management command or a startup exception.
+  It also swallows everything: logging must never be the thing that fails.
+- **The canary reports, it does not enforce.** The manager filter is the
+  security boundary. Turning a silent leak into a loud outage is the worse
+  trade, so `check_queryset_scope` never raises -- not on a leak, not on a
+  sliced queryset, not on a bad lookup.
+- **What it catches:** a queryset reaching a viewer *unfiltered* while that
+  viewer had a club -- a flag misread, a stale memo, an `all_objects` path that
+  skipped `scope_to_active_club`. **What it cannot:** a filter applied against
+  the *wrong* club, since it compares against the same `get_current_club()` the
+  filter used. Only Q1.11, asserting from outside with two real tenants, covers
+  that.
+- **Two gates, and the order is load-bearing.** `TENANCY_CANARY_SAMPLE_RATE`
+  is checked *before* the `tenancy_canary` flag, because a flag lookup for an
+  authenticated user costs a DB query on first use in a request and this runs
+  inside `get_queryset()`. Flag-first added that query to every page for a
+  feature that is off by default -- `test_match_list_performance.py` caught it.
+- **Measured overhead:** +30-40% at 100% sampling, **+2-3% at 1-2%**, which is
+  the intended production setting and inside the 5% budget. Sampling is not a
+  nicety here; it is what makes the canary affordable.
+- It lives in `ScopedManagerMixin._canary()` and in `scope_to_active_club()` --
+  one place to arm and disarm, which was half the point of the mixin.
+
+### Feature flags fail closed
+
+`pingpong/flags.py` is the whole mechanism: `is_enabled(name, user=None)`,
+a `FEATURE_FLAGS` dict in `settings/base.py`, and `FeatureFlagOverride` rows
+for per-user overrides. Deliberately **not** django-waffle -- a package for a
+dict lookup plus one table is disproportionate on a 3.7GB VPS with a pinned
+`requirements.txt`.
+
+- **An undeclared flag name resolves to False and logs a warning.** It never
+  raises and never fails open. A typo in a flag name must not silently enable
+  a half-finished cutover, so this follows the same convention as `[x-cloak]`,
+  the drawer's static `hidden` class and `push.js`.
+- **Overrides win in both directions**, which makes one table both the
+  staff-first rollout and the per-user kill switch. An override cannot invent
+  a flag: an undeclared name is rejected before the override is ever read.
+- **Resolution order is memo -> override -> settings.** The memo is opened by
+  `CurrentUserMiddleware` via `flags.request_scope()` and torn down in a
+  `finally`. It exists because `managers.get_queryset()` checks the `clubs`
+  flag and runs constantly -- without it, every query would touch Redis.
+- **Propagation delay.** Saving or deleting an override deletes its cache key,
+  so with Redis the change lands on the next request. Under the LocMemCache
+  fallback each process holds its own copy and the worst case is
+  `flags.OVERRIDE_CACHE_TIMEOUT` (30s). Flipping the *settings* default is a
+  deploy, hence a restart.
+- **A dead cache or a dead DB degrades to the settings value**, never to an
+  exception. A flag check is on nearly every request; it must not be able to
+  500 the app.
+- `TTSTATS_FLAGS_ON` (comma-separated, in `.env.prod`) turns declared flags on
+  without a code change -- the intended production flip, picked up on restart.
+- Templates use `{% load feature_tags %}{% feature_enabled "x" as on %}` and
+  then a plain `{% if %}`, so a guarded block is **absent** from the response
+  rather than hidden with CSS. A flag that only hides a control still ships it.
+
 ## Environment & Deployment
 
 - **Dev:** `DEBUG=True`, SQLite, Console email, `DJANGO_SETTINGS_MODULE=ttstats.settings.dev`
@@ -614,6 +935,14 @@ The app is installable and can push notifications. Two modules, deliberately spl
 - **Prod:** `DEBUG=False`, PostgreSQL, Mailgun, HTTPS, WhiteNoise, `DJANGO_SETTINGS_MODULE=ttstats.settings.prod`
 - **Docker services:** web (Django), db (PostgreSQL), redis (Redis 7 Alpine)
 - **Web push needs three vars in `.env.prod`** (`compose.prod.yml` already passes the whole file through): `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_ADMIN_EMAIL` (a `mailto:` URL). Until they are set the app emails as before -- push is not a hard dependency of any code path.
+- **The tenancy cutover has a runbook: `docs/tenancy-rollout.md`.** Seven steps,
+  each with its own verification command, gate and rollback. Steps 5 and 6 roll
+  back by flipping `TTSTATS_FLAGS_ON` -- no deploy, no migration, effective on
+  the next request. Step 7 (non-null columns) is the point of no return and is
+  the only one whose rollback is "restore the snapshot".
+- **Production is the `db` service in `compose.prod.yml`** (PostgreSQL 16,
+  volume `pgdata`). Supabase holds only a *dev clone* pulled from it by
+  `pg_dump` -- it is not authoritative and is not a fallback.
 - **CI/CD** (`.github/workflows/main.yml`): On push/PR runs tests with coverage; on master push deploys via SSH to VPS. The test job is gated on changed files -- **`.py` gates the test run, frontend extensions gate the asset build**, so a template-only commit still builds the CSS.
 - **Migration `0028_drop_team` is one-way.** Reversing would re-add NOT NULL FK columns with nothing to put in them, so it raises a `RuntimeError` naming the remedy: restore a pre-0028 snapshot.
 - **Deploy runs `collectstatic` under `set -e`** (`docker/django/entrypoint.sh`), and prod uses WhiteNoise's hashing manifest storage. A vendored file whose `sourceMappingURL` target is missing therefore **fails the deploy**, not just the page -- `scripts/vendor_assets.mjs` copies `.map` siblings for exactly this reason.

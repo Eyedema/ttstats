@@ -20,6 +20,71 @@ you are almost always after.
 {% endcomment %}
 
 <div class="py-4">
+
+  {% comment %}
+  The club, and switching between clubs.
+
+  Placement is the drawer, never the tab bar. The four tabs are *destinations*;
+  a club is a *context*. A fifth tab would also break the rule that Play is a
+  tab because it is the only thing that starts something.
+
+  THERE IS DELIBERATELY NO DROPDOWN. The fail-closed rule applies to anything
+  whose hidden state is managed by JavaScript, and the cheapest way to obey it
+  is to have no hidden state: this is a plain list of POST buttons, two or
+  three rows long. It cannot render open-and-unusable because it is never
+  closed, it needs no Alpine, no [x-cloak] and no compiled CSS to be correct,
+  and it works with scripting off. A collapsible control here would add a
+  failure mode to save one row of vertical space.
+
+  POST rather than links: switching changes what every later page shows, so a
+  GET would let any page on the internet move someone's club with an <img>.
+
+  The whole block is absent for a single-club user -- a chooser offered to
+  someone with one choice is clutter -- but the club NAME still shows, because
+  "which club am I looking at" must be answerable on every screen.
+  {% endcomment %}
+  {% if active_club %}
+  <p class="px-4 pb-2 text-[10px] font-extrabold uppercase tracking-[0.14em] text-muted-foreground">Club</p>
+
+  {% if has_multiple_clubs %}
+  <ul data-club-switcher>
+    {% for club in user_clubs %}
+    <li>
+      <form method="post" action="{% url 'pingpong:club_switch' %}">
+        {% csrf_token %}
+        <input type="hidden" name="club_id" value="{{ club.pk }}">
+        <button type="submit"
+                {% if club.pk == active_club.pk %}aria-current="true"{% endif %}
+                class="pressable-flat flex w-full min-h-[44px] items-center gap-3 py-2 pl-5 pr-4 text-left text-[15px] font-semibold
+                       {% if club.pk == active_club.pk %}bg-court-line text-bone{% else %}text-bone-dim hover:bg-court-line{% endif %}">
+          {% if club.pk == active_club.pk %}
+            {% icon "check" css="text-paddle" size="sm" %}
+          {% else %}
+            {% icon "users" css="text-muted-foreground" size="sm" %}
+          {% endif %}
+          {# min-w-0 + truncate: a long club name must not push the drawer wide at 320px. #}
+          <span class="min-w-0 flex-1 truncate">{{ club.name }}</span>
+        </button>
+      </form>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="flex min-h-[44px] items-center gap-3 py-2 pl-5 pr-4 text-[15px] font-semibold text-bone-dim"
+     data-club-name>
+    {% icon "users" css="text-muted-foreground" size="sm" %}
+    <span class="min-w-0 flex-1 truncate">{{ active_club.name }}</span>
+  </p>
+  {% endif %}
+
+  {% if club_admin %}
+    {% url 'pingpong:club_settings' as u %}
+    {% include 'pingpong/_nav_row.html' with url=u icon_name='settings' label='Club settings' match_urls='club_settings' %}
+  {% endif %}
+
+  <span class="mx-4 my-4 block h-0.5 bg-court-edge"></span>
+  {% endif %}
+
   <p class="px-4 pb-2 text-[10px] font-extrabold uppercase tracking-[0.14em] text-paddle">Daily</p>
 
   {% url 'pingpong:dashboard' as u %}

@@ -8,8 +8,8 @@ from .achievements import check_achievements_for_player
 from .cache_utils import invalidate_match_caches, invalidate_player_caches
 from .emails import send_match_confirmation_email, send_passkey_registered_email
 from .models import (
-    Game, Match, MatchConfirmation, NotificationPreference, Player,
-    ScheduledMatch, UserProfile,
+    FeatureFlagOverride, Game, Match, MatchConfirmation, NotificationPreference,
+    Player, ScheduledMatch, UserProfile,
 )
 from .elo import update_player_elo
 from .services import link_championship_entries
@@ -204,3 +204,18 @@ def notify_passkey_registered(sender, instance, created, **kwargs):
     """Send email when new passkey is registered"""
     if created:
         send_passkey_registered_email(instance.user, instance.name)
+
+
+@receiver(post_save, sender=FeatureFlagOverride)
+@receiver(post_delete, sender=FeatureFlagOverride)
+def invalidate_feature_flag_override(sender, instance, **kwargs):
+    """Drop the cached override so a flag flip lands on the next request.
+
+    With Redis this is immediate across every process. Under the LocMemCache
+    fallback each process holds its own copy, so the worst case is
+    flags.OVERRIDE_CACHE_TIMEOUT before they all agree -- documented on
+    flags.py rather than papered over here.
+    """
+    from . import flags
+
+    flags.invalidate_override(instance.name, instance.user_id)

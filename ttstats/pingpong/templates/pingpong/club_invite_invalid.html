@@ -1,0 +1,30 @@
+{% extends "pingpong/base.html" %}
+{% load icon_tags %}
+
+{% block title %}Invite not valid - TTStats{% endblock %}
+{% block nav_title %}Invite{% endblock %}
+
+{% block content %}
+{% comment %}
+  Never a 500, and never silent membership. Someone holding a dead link needs
+  to know whether to ask for a new one or check the date -- "no longer valid"
+  tells them nothing they can act on, and the distinction is not sensitive:
+  they already hold the token.
+{% endcomment %}
+<div class="max-w-md mx-auto text-center space-y-4 py-12">
+  <div class="flex justify-center text-muted-foreground">
+    {% icon "circle-x" css="w-10 h-10" %}
+  </div>
+
+  <h2 class="text-title">This invite doesn't work</h2>
+
+  <p class="text-muted-foreground">{{ reason }}</p>
+
+  <div class="pt-4">
+    <a href="{% url 'pingpong:dashboard' %}"
+       class="inline-flex items-center justify-center gap-2 bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground min-h-[44px]">
+      Go to Today
+    </a>
+  </div>
+</div>
+{% endblock %}

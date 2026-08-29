@@ -13,11 +13,258 @@ from .managers import ChampionshipManager, GameManager, LiveMatchManager, MatchM
 VERIFICATION_TOKEN_EXPIRY = timedelta(hours=24)
 
 
-class Location(models.Model):
+class ClubStampedMixin:
+    """Stamp the viewer's active club onto a row that does not have one.
+
+    **The epic scoped every read and originally wired no writes.** With `clubs`
+    on, a row created through the UI got `club=NULL`, and the scoped managers
+    filter on `club=<active club>` -- which NULL never matches. The thing you
+    just created was invisible the instant you created it: exactly the "data
+    appearing to vanish" failure tenancy exists to prevent, arriving through
+    the one door nobody was watching.
+
+    Done at the model layer rather than in each view on purpose. There are five
+    scoped models reachable from a dozen creation paths (views, the admin,
+    `register_entry`, `generate_schedule`, future code), and the failure mode of
+    the per-view approach is a path somebody forgot -- which is silent, and
+    which is how this was missed in the first place.
+
+    Three rules, and all three matter:
+
+    * **An explicit club always wins.** Stamping fills a blank; it never
+      overrules a caller who said what they meant. The backfill and any future
+      data fix depend on that.
+    * **No viewer means no stamping.** A management command, a migration, the
+      backfill itself -- same contract the managers keep, and without it this
+      would fight `backfill_clubs` for control of the column.
+    * **Flag off means no stamping**, so the pre-cutover path stays exactly as
+      it was.
+
+    A *null* club on an existing row is filled in on save, which is the repair
+    case: `backfill_clubs` would do the same thing later, and leaving it null
+    keeps the row invisible in the meantime.
+    """
+
+    def save(self, *args, **kwargs):
+        if self.club_id is None:
+            from pingpong import flags
+            from ttstats.middleware import get_current_club, get_current_user
+
+            user = get_current_user()
+            if user is not None and flags.is_enabled("clubs", user):
+                club = get_current_club()
+                if club is not None:
+                    self.club_id = club.pk
+                    update_fields = kwargs.get("update_fields")
+                    if update_fields is not None:
+                        kwargs["update_fields"] = set(update_fields) | {"club"}
+        return super().save(*args, **kwargs)
+
+
+class ClubManager(models.Manager):
+    """Clubs are not row-level filtered.
+
+    A club row is a name and a slug; the *data* inside it is what tenancy
+    protects, and that is enforced by the managers in managers.py. Filtering
+    the club table itself would only break the switcher, which has to be able
+    to list the clubs a user belongs to.
+    """
+
+    def for_user(self, user):
+        """The clubs `user` is actually a member of. Empty for anonymous/None.
+
+        This is the tenancy boundary for club *selection*: nothing may resolve
+        an active club that does not come out of this queryset.
+        """
+        if not user or not getattr(user, "is_authenticated", False):
+            return self.none()
+        return self.filter(memberships__user=user).order_by("name")
+
+
+class Club(models.Model):
+    """A group of people who play together.
+
+    The unit of tenancy. Before this existed the only boundary in the app was
+    "matches I participated in", `Player` was one global pool, and the Everyone
+    screen was a directory of every account in the database -- workable for
+    exactly one friend group and a privacy problem for two.
+    """
+
+    name = models.CharField(max_length=100)
+    slug = models.SlugField(
+        max_length=100,
+        unique=True,
+        help_text="URL-safe identifier. Derived from the name if left blank.",
+    )
+    description = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    created_by = models.ForeignKey(
+        "Player",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="clubs_created",
+    )
+
+    objects = ClubManager()
+
+    class Meta:
+        ordering = ["name"]
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            self.slug = self._unique_slug_for(self.name)
+        super().save(*args, **kwargs)
+
+    @staticmethod
+    def _unique_slug_for(name):
+        """A slug from `name`, suffixed until it is free.
+
+        Two clubs called "Sunday Bashers" is an entirely reasonable thing for
+        two unrelated groups to do, and the second one must not fail to save.
+        """
+        from django.utils.text import slugify
+
+        base = slugify(name) or "club"
+        slug, suffix = base, 2
+        while Club.objects.filter(slug=slug).exists():
+            slug = f"{base}-{suffix}"
+            suffix += 1
+        return slug
+
+    # -- permissions ---------------------------------------------------------
+    #
+    # On the model rather than scattered across views, following
+    # `Player.user_can_edit` and `PlayerManager.editable_by`. Every role check
+    # in the app goes through these methods -- the ticket's "one shared helper,
+    # not an inline is_staff comparison copied per view".
+
+    def membership_for(self, user):
+        """This user's membership, or None. The basis of every check below."""
+        if not user or not getattr(user, "is_authenticated", False):
+            return None
+        return self.memberships.filter(user=user).first()
+
+    def role_for(self, user):
+        membership = self.membership_for(user)
+        return membership.role if membership else None
+
+    def user_is_member(self, user):
+        return self.membership_for(user) is not None
+
+    def user_can_administer(self, user):
+        """May this user invite, remove, edit settings, change roles?
+
+        **Django staff get no special standing here.** `is_staff` is global and
+        a club is not; a staff account that is not in this club has no business
+        administering it. This is the S1.4 decision applied consistently -- see
+        CLAUDE.md. A staff member who needs to run a club joins it.
+        """
+        membership = self.membership_for(user)
+        return bool(membership and membership.is_admin)
+
+    def user_is_owner(self, user):
+        membership = self.membership_for(user)
+        return bool(membership and membership.is_owner)
+
+    @property
+    def owner_count(self):
+        return self.memberships.filter(role=ClubRole.OWNER).count()
+
+    def __str__(self):
+        return self.name
+
+
+class ClubRole(models.TextChoices):
+    """What a member may do inside their club.
+
+    Before this, `user.is_staff` was the only privilege distinction in the app
+    -- and staff is global, so it cannot express "runs our club". Every club
+    needs its own administrator who is not a Django superuser.
+
+    The ordering matters: `ClubRole.rank()` compares them, so an admin cannot
+    act on an owner.
+    """
+
+    OWNER = "owner", "Owner"
+    ADMIN = "admin", "Admin"
+    MEMBER = "member", "Member"
+
+    @staticmethod
+    def rank(role):
+        """Higher outranks lower. Unknown/None is below everything."""
+        return {ClubRole.OWNER: 3, ClubRole.ADMIN: 2, ClubRole.MEMBER: 1}.get(role, 0)
+
+
+class ClubMembership(models.Model):
+    """A user's membership of a club, and the role they hold in it.
+
+    Keyed on `User` rather than `Player` because membership is about who may
+    *log in and see* the club, and the app supports Players with no linked
+    User (guests entered by someone else). Those players belong to a club via
+    `Player.club`; they do not have a membership because they cannot sign in.
+
+    **A role is per membership, never per user.** Someone can run one club and
+    be an ordinary member of another, and conflating the two is how a person
+    ends up administering a club they merely play in.
+    """
+
+    club = models.ForeignKey(
+        Club,
+        on_delete=models.PROTECT,
+        related_name="memberships",
+    )
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="club_memberships",
+    )
+    role = models.CharField(
+        max_length=16,
+        choices=ClubRole.choices,
+        default=ClubRole.MEMBER,
+        db_index=True,
+    )
+    joined_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["club__name", "user__username"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["club", "user"], name="unique_club_membership"
+            )
+        ]
+
+    @property
+    def is_admin(self):
+        """Owner or admin. The single question most callers actually have."""
+        return self.role in (ClubRole.OWNER, ClubRole.ADMIN)
+
+    @property
+    def is_owner(self):
+        return self.role == ClubRole.OWNER
+
+    def outranks(self, other):
+        return ClubRole.rank(self.role) > ClubRole.rank(other.role)
+
+    def __str__(self):
+        return f"{self.user.username} in {self.club.name} ({self.get_role_display()})"
+
+
+class Location(ClubStampedMixin, models.Model):
     """Location where matches are played"""
 
     name = models.CharField(max_length=100)
     address = models.TextField(blank=True)
+    # A table belongs to a place a club plays. Nullable until S1.2 backfills.
+    club = models.ForeignKey(
+        "Club",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        db_index=True,
+        related_name="locations",
+    )
     notes = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -28,7 +275,7 @@ class Location(models.Model):
         return self.name
 
 
-class Player(models.Model):
+class Player(ClubStampedMixin, models.Model):
     """General player model"""
 
     user = models.OneToOneField(
@@ -64,6 +311,17 @@ class Player(models.Model):
     matches_for_elo = models.IntegerField(
         default=0,
         help_text="Number of confirmed matches that affected Elo (for new player boost)"
+    )
+
+    # The primary scoping column. Nullable until S1.2 backfills; PROTECT
+    # because a club holding players must not be deletable out from under them.
+    club = models.ForeignKey(
+        "Club",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        db_index=True,
+        related_name="players",
     )
 
     objects = PlayerManager()
@@ -147,7 +405,7 @@ class Side(models.IntegerChoices):
     TWO = 2, "Side 2"
 
 
-class Match(SideLabelMixin, models.Model):
+class Match(ClubStampedMixin, SideLabelMixin, models.Model):
     """Individual match between two players"""
 
     is_double = models.BooleanField(default=False)
@@ -223,6 +481,22 @@ class Match(SideLabelMixin, models.Model):
     # one. Written with a conditional queryset .update(), which makes it an
     # atomic compare-and-set -- see notifications.notify_match_confirmed.
     result_notified_at = models.DateTimeField(null=True, blank=True, editable=False)
+
+    # Denormalized rather than derived through MatchParticipant, so scoping is
+    # an indexed column filter and not a join on every query -- the same reason
+    # ChampionshipEntryMember carries its own championship FK.
+    #
+    # A match whose participants span two clubs is representable on purpose:
+    # the UI forbids it, but a future data fix needs somewhere to put the
+    # intermediate state.
+    club = models.ForeignKey(
+        "Club",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        db_index=True,
+        related_name="matches",
+    )
 
     all_objects = models.Manager()
     objects = MatchManager()
@@ -511,7 +785,7 @@ class UserProfile(models.Model):
         return f"Profile of {self.user.username}"
 
 
-class ScheduledMatch(SideLabelMixin, models.Model):
+class ScheduledMatch(ClubStampedMixin, SideLabelMixin, models.Model):
     """A match scheduled for the future"""
 
     championship = models.ForeignKey(
@@ -566,6 +840,16 @@ class ScheduledMatch(SideLabelMixin, models.Model):
         blank=True,
         related_name="scheduled_from",
         help_text="Linked match if this scheduled match was converted to a played match"
+    )
+
+    # Denormalized for the same reason as Match.club.
+    club = models.ForeignKey(
+        "Club",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        db_index=True,
+        related_name="scheduled_matches",
     )
 
     all_objects = models.Manager()
@@ -732,7 +1016,7 @@ class PlayerAchievement(models.Model):
         return f"{self.player} - {self.achievement}"
 
 
-class Championship(models.Model):
+class Championship(ClubStampedMixin, models.Model):
     """Championship model"""
 
     class Status(models.TextChoices):
@@ -803,6 +1087,17 @@ class Championship(models.Model):
         null=True,
         blank=True,
         help_text="Default location for championship matches"
+    )
+
+    # `is_public` means open to anyone *in this club* once scoping lands --
+    # cross-club anything is explicitly out of scope for the epic.
+    club = models.ForeignKey(
+        "Club",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        db_index=True,
+        related_name="championships",
     )
 
     all_objects = models.Manager()
@@ -1037,16 +1332,29 @@ class Championship(models.Model):
             return False
 
     def user_can_edit(self, user):
-        """Check if user can edit this championship"""
+        """Check if user can edit this championship.
+
+        The creator keeps their existing power. A **club admin** gains it too:
+        running the club is exactly the authority to run its competitions, and
+        without this a championship whose creator leaves becomes uneditable by
+        anyone but a Django superuser.
+
+        Staff keep the bypass they have always had here. That is a *global*
+        privilege on a per-object check, which is the pre-tenancy shape; the
+        club filter has already decided which championships this user can see
+        at all, so staff cannot reach another club's through it.
+        """
         if not user or not user.is_authenticated:
             return False
         if user.is_staff or user.is_superuser:
             return True
         try:
             player = user.player
-            return self.created_by == player
         except (AttributeError, Player.DoesNotExist):
             return False
+        if self.created_by == player:
+            return True
+        return bool(self.club and self.club.user_can_administer(user))
 
 
 class ChampionshipEntry(models.Model):
@@ -1200,3 +1508,170 @@ class PushSubscription(models.Model):
 
     def __str__(self):
         return f"Push subscription for {self.user.username} ({self.endpoint[:40]}...)"
+
+
+class FeatureFlagOverride(models.Model):
+    """Per-user override of a flag declared in ``settings.FEATURE_FLAGS``.
+
+    Wins in both directions, which is what makes it both the staff-only
+    rollout mechanism and the per-user kill switch. It cannot invent a flag:
+    ``flags.is_enabled`` rejects an undeclared name before ever looking here,
+    so a stale row for a retired flag is inert rather than dangerous.
+    """
+
+    name = models.CharField(
+        max_length=64,
+        db_index=True,
+        help_text="Flag name, as declared in settings.FEATURE_FLAGS",
+    )
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="feature_flag_overrides",
+    )
+    enabled = models.BooleanField(default=True)
+    note = models.CharField(
+        max_length=200,
+        blank=True,
+        help_text="Why this override exists (e.g. 'tenancy rollout, staff phase')",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["name", "user_id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["name", "user"], name="unique_flag_override_per_user"
+            )
+        ]
+
+    def __str__(self):
+        state = "on" if self.enabled else "off"
+        return f"{self.name}={state} for {self.user.username}"
+
+
+CLUB_INVITE_DEFAULT_VALIDITY = timedelta(days=14)
+
+
+class ClubInvite(models.Model):
+    """A shareable link that lets someone join a club.
+
+    This is what makes onboarding a second group self-serve, which is the point
+    of the whole tenancy epic: no admin creating accounts by hand, no shell.
+
+    Token generation follows the `UserProfile.email_verification_token`
+    precedent already working in production -- `uuid.uuid4().hex`, 32 hex
+    characters of CSPRNG output. Expiry is a stored timestamp rather than an
+    interval computed at read time, because an invite's lifetime is a property
+    of the invite, not of whenever someone happens to open it.
+
+    A link forwarded to the wrong person is the expected failure, not an exotic
+    one, which is why expiry, revocation and a use cap are all in scope rather
+    than optional.
+    """
+
+    club = models.ForeignKey(
+        Club, on_delete=models.CASCADE, related_name="invites"
+    )
+    token = models.CharField(max_length=64, unique=True, db_index=True)
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="club_invites_created",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    max_uses = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Leave blank for unlimited uses until expiry.",
+    )
+    uses = models.PositiveIntegerField(default=0)
+    note = models.CharField(
+        max_length=120,
+        blank=True,
+        help_text="Who this was sent to, for your own records.",
+    )
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    @classmethod
+    def issue(cls, club, created_by, validity=None, max_uses=None, note=""):
+        return cls.objects.create(
+            club=club,
+            created_by=created_by,
+            token=uuid.uuid4().hex,
+            expires_at=timezone.now() + (validity or CLUB_INVITE_DEFAULT_VALIDITY),
+            max_uses=max_uses,
+            note=note,
+        )
+
+    # -- state ---------------------------------------------------------------
+
+    @property
+    def is_revoked(self):
+        return self.revoked_at is not None
+
+    @property
+    def is_expired(self):
+        return timezone.now() >= self.expires_at
+
+    @property
+    def is_used_up(self):
+        return self.max_uses is not None and self.uses >= self.max_uses
+
+    @property
+    def is_valid(self):
+        return not (self.is_revoked or self.is_expired or self.is_used_up)
+
+    @property
+    def invalid_reason(self):
+        """Why this link no longer works, in words a recipient can act on.
+
+        Deliberately specific. "This invite is no longer valid" tells someone
+        holding a link nothing about whether to ask for a new one or check the
+        date, and the distinction is not sensitive -- the token holder already
+        has the token.
+        """
+        if self.is_revoked:
+            return "This invite has been revoked by a club admin."
+        if self.is_expired:
+            return "This invite has expired. Ask a club admin for a new link."
+        if self.is_used_up:
+            return "This invite has already been used."
+        return ""
+
+    def revoke(self):
+        if self.revoked_at is None:
+            self.revoked_at = timezone.now()
+            self.save(update_fields=["revoked_at"])
+
+    def claim(self):
+        """Consume one use, atomically. True if the claim succeeded.
+
+        A conditional queryset `.update()`, which the database evaluates as a
+        single compare-and-set -- the same shape `Match.result_notified_at`
+        uses for exactly-once push. Two people opening the same single-use link
+        at the same moment is a real race, and `if invite.is_used_up: ...` in
+        Python loses it every time.
+
+        An unlimited invite still counts uses; it just has no ceiling to test.
+        """
+        rows = ClubInvite.objects.filter(
+            pk=self.pk,
+            revoked_at__isnull=True,
+            expires_at__gt=timezone.now(),
+        ).filter(
+            models.Q(max_uses__isnull=True) | models.Q(uses__lt=models.F("max_uses"))
+        ).update(uses=models.F("uses") + 1)
+
+        if rows:
+            self.refresh_from_db(fields=["uses"])
+        return bool(rows)
+
+    def __str__(self):
+        return f"Invite to {self.club.name} ({'valid' if self.is_valid else 'invalid'})"

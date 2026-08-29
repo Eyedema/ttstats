@@ -3,7 +3,7 @@ from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.models import User
 
 from . import live_scoring
-from .models import Game, Match, Player, ScheduledMatch, Championship
+from .models import Club, Game, Match, Player, ScheduledMatch, Championship
 
 # The set of legal match lengths. match_form.html used to hard-code these as
 # five hand-written <option> tags; they belong with the other match rules.
@@ -30,6 +30,37 @@ def _best_of_field():
 # lives in `.field-input` in assets/app.css; Python should not be in the
 # business of knowing what a border looks like.
 FIELD_CSS = "field-input"
+
+
+class ScopedChoicesMixin:
+    """Re-bind Player/Location choice querysets when the form is instantiated.
+
+    **A `queryset=Player.objects.all()` written in a class body is evaluated at
+    import time**, when there is no request and therefore no user and no club
+    in thread-local context. The manager runs unfiltered, the resulting
+    QuerySet's filters are fixed, and every later render reuses them -- so the
+    picker silently ignores row-level security forever.
+
+    That was harmless while `PlayerManager` returned everyone to everyone. With
+    club scoping it is a leak *with a write attached*: a picker offering
+    another club's players lets a user build a cross-club match through the UI.
+
+    Re-binding here is deliberately a `.all()` on the manager rather than a
+    stored queryset, so `get_queryset()` runs per request.
+    """
+
+    scoped_choice_fields = ()
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for name in self.scoped_choice_fields:
+            field = self.fields.get(name)
+            if field is None:
+                continue
+            model = field.queryset.model
+            field.queryset = model._default_manager.all().order_by(
+                *model._meta.ordering or ["pk"]
+            )
 
 
 class StyledFormMixin:
@@ -81,7 +112,9 @@ def _player_field(number, required):
     )
 
 
-class MatchForm(StyledFormMixin, forms.ModelForm):
+class MatchForm(ScopedChoicesMixin, StyledFormMixin, forms.ModelForm):
+    scoped_choice_fields = ("player1", "player2", "player3", "player4", "location")
+
     best_of = _best_of_field()
     # The datetime-local control posts back in this shape too.
     date_played = forms.DateTimeField(
@@ -240,8 +273,10 @@ class PlayerRegistrationForm(StyledFormMixin, UserCreationForm):
         return user
 
 
-class ScheduledMatchForm(StyledFormMixin, forms.ModelForm):
+class ScheduledMatchForm(ScopedChoicesMixin, StyledFormMixin, forms.ModelForm):
     """Form for scheduling a future match"""
+
+    scoped_choice_fields = ("player1", "player2", "location")
 
     player1 = forms.ModelChoiceField(
     queryset=Player.objects.all(),
@@ -557,3 +592,53 @@ class ScheduledMatchEditForm(StyledFormMixin, forms.ModelForm):
             ),
             'location': forms.Select()
         }
+
+
+class ClubSettingsForm(ScopedChoicesMixin, StyledFormMixin, forms.ModelForm):
+    """Edit the club's own identity.
+
+    Deliberately does NOT expose `slug`. It is baked into invite links and
+    cache namespaces, so letting an admin change it turns every outstanding
+    invite into a 404 for no visible benefit.
+    """
+
+    class Meta:
+        model = Club
+        fields = ["name", "description"]
+        labels = {"name": "Club name"}
+        help_texts = {
+            "description": "Shown to members. Optional.",
+        }
+        widgets = {
+            "description": forms.Textarea(attrs={"rows": 3}),
+        }
+
+
+class ClubInviteForm(StyledFormMixin, forms.Form):
+    """Options for a new invite link.
+
+    Defaults are the cautious ones: two weeks, single use. A link forwarded to
+    the wrong person is the expected failure mode, not an exotic one, so the
+    default should be the one that limits the blast radius.
+    """
+
+    valid_for_days = forms.TypedChoiceField(
+        choices=[(1, "1 day"), (7, "1 week"), (14, "2 weeks"), (30, "30 days")],
+        coerce=int,
+        initial=14,
+        label="Valid for",
+    )
+    max_uses = forms.IntegerField(
+        min_value=1,
+        max_value=100,
+        required=False,
+        initial=1,
+        label="Maximum uses",
+        help_text="Leave blank for unlimited uses until it expires.",
+    )
+    note = forms.CharField(
+        max_length=120,
+        required=False,
+        label="Note",
+        help_text="Who is this for? For your records only.",
+    )
