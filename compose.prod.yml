@@ -34,6 +34,10 @@ services:
     env_file: .env.prod
     environment:
       DJANGO_ENV: prod
+      # Set by the deploy job to the commit SHA that WEB_IMAGE is pinned to.
+      # Empty when compose is run by hand on the box, which just means the
+      # issue carries no release -- never an error.
+      SENTRY_RELEASE: ${SENTRY_RELEASE:-}
     volumes:
       - static_volume:/app/static
     depends_on:
