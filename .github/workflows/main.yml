@@ -358,6 +358,10 @@ jobs:
           WEB_IMAGE: ${{ needs.build-image.outputs.image }}:${{ github.sha }}
           GHCR_USER: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The same SHA that pins the image, so a Sentry issue names the commit
+          # that is actually running. Without it every regression looks like it
+          # has always been there.
+          SENTRY_RELEASE: ${{ github.sha }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
@@ -368,13 +372,13 @@ jobs:
           command_timeout: 20m
           # GITHUB_TOKEN is what lets the VPS pull from GHCR without a
           # long-lived deploy key or making the package public.
-          envs: WEB_IMAGE,GHCR_TOKEN,GHCR_USER
+          envs: WEB_IMAGE,GHCR_TOKEN,GHCR_USER,SENTRY_RELEASE
           script: |
             set -e
             cd ${{ secrets.WORK_DIR }}
             git pull
             echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
-            export WEB_IMAGE
+            export WEB_IMAGE SENTRY_RELEASE
             docker compose -f compose.prod.yml pull web
             docker compose -f compose.prod.yml up -d
             docker compose -f compose.prod.yml exec -T web python manage.py migrate

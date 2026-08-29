@@ -171,6 +171,37 @@ LOGGING = {
     },
 }
 
+# Sentry
+#
+# Off unless SENTRY_DSN is set -- the same contract as web push, and what keeps
+# a missing key from being able to stop a deploy. See ttstats/sentry.py for the
+# scrubbing rules; the short version is that this app puts bearer tokens in URL
+# paths and they must not reach a third party.
+#
+# init() must happen at settings-import time. Anything later (an AppConfig.ready,
+# a middleware) is too late to catch an exception raised while Django is still
+# booting -- and a boot failure is precisely the outage nobody is watching a
+# console for.
+from ttstats.sentry import capture_4xx_statuses, init_sentry  # noqa: E402
+
+SENTRY_ENABLED = init_sentry(environment='production')
+
+# 4xx reporting is opt-in per status and empty by default. A 404 is what the
+# internet does to every public host; a 403 out of ClubAdminRequiredMixin is
+# somebody POSTing to an endpoint the UI never offered them. Only the second
+# belongs in an error inbox -- set SENTRY_CAPTURE_4XX=403 in .env.prod to get it.
+SENTRY_CAPTURE_4XX = capture_4xx_statuses()
+
+if SENTRY_ENABLED and SENTRY_CAPTURE_4XX:
+    # Directly below WhiteNoise, for the reason GZipMiddleware is: WhiteNoise
+    # short-circuits static requests in process_request, so a 404 for a missing
+    # asset never reaches this and cannot drown out an application 4xx.
+    MIDDLEWARE.insert(
+        MIDDLEWARE.index('whitenoise.middleware.WhiteNoiseMiddleware') + 1,
+        'ttstats.sentry.SentryHttpErrorMiddleware',
+    )
+
+
 EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
 EMAIL_HOST = os.environ.get('EMAIL_HOST', 'smtp.eu.mailgun.org')
 EMAIL_PORT = int(os.environ.get('EMAIL_PORT', 587))
