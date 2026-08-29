@@ -945,6 +945,62 @@ user asking "who is Marco?".
 - It lives in `ScopedManagerMixin._canary()` and in `scope_to_active_club()` --
   one place to arm and disarm, which was half the point of the mixin.
 
+### Sentry is the error inbox; the logs stay the record
+
+`ttstats/sentry.py` is the transport, the way `push.py` is for notifications.
+`pingpong/observability.py` remains the vocabulary. Init happens in
+`settings/prod.py` at **import time** -- an AppConfig.ready or a middleware is
+too late to catch an exception raised while Django is still booting, which is
+the outage nobody is watching a console for.
+
+- **Off unless `SENTRY_DSN` is set.** Same contract as VAPID: unset (dev, CI,
+  the suite, a fresh clone) every send is a no-op and the console handler
+  behaves exactly as before. Deliberately wired in `prod.py` **only** --
+  `settings/test.py` imports from `dev.py`, so initialising there would let a
+  `SENTRY_DSN` exported in a shell ship test events to the real project, the
+  same footgun `DATABASE_URL` is already guarded against.
+- **URLs in this app are bearer credentials.** `/pingpong/join/<token>/` and
+  `/pingpong/verify-email/<token>/` carry secrets in the *path*, so dropping
+  the query string is not enough. `scrub_url()` redacts them in the request URL
+  and in every breadcrumb, and `TOKEN_PATH_PREFIXES` is the entire defence --
+  **a new token-bearing route must be added there in the same commit it is
+  added to `urls.py`.** The query string goes wholesale rather than
+  per-parameter: an allowlist's forgotten entry is the one that leaks.
+- **Ids only, never identities**, matching `prod.py`'s log formatter.
+  `send_default_pii=False`, `max_request_body_size="never"`, and `before_send`
+  attaches `user_id` / `club_id` tags -- so an issue answers "which tenant"
+  without putting a username or an email in someone else's system.
+- **`before_send` reads `_thread_locals` directly and never calls
+  `get_current_club()`.** That resolver is lazy: on a request that touched no
+  scoped manager it would issue a membership query *from inside an exception
+  handler*, quite possibly on the connection that just failed, while
+  re-entering the logging stack trying to report it. An unresolved club is
+  worth no tag.
+- **Telemetry never raises.** Every hook is wrapped and swallows; `before_send`
+  returns the event unmodified rather than dropping it. Same trade as the
+  tenancy canary -- a monitor that can 500 the app is worse than no monitor.
+- **The `LoggingIntegration` is what makes the leak canary visible.**
+  `pingpong.tenancy` logs at ERROR and raises nothing by design; before this it
+  went to a console handler on a VPS nobody tails. INFO becomes breadcrumbs,
+  ERROR becomes an event.
+- **404s and 400s are deliberately NOT reported.** Django raises nothing for a
+  4xx it produced itself, so none reach Sentry by default -- and that is
+  correct. A 404 is what the internet does to every public host; routing
+  scanner traffic into the same inbox as a 500 does not add coverage, it buries
+  the one issue meaning a real user saw a broken page. `SENTRY_CAPTURE_4XX`
+  (empty by default) opts specific statuses in via
+  `SentryHttpErrorMiddleware`, which sits directly below WhiteNoise so a
+  missing-asset 404 cannot drown out an application one, and fingerprints by
+  status + resolved route so one broken URL is one issue. **403 is the value
+  worth setting**: no template renders a control that produces one, so it means
+  a forged POST or a permissions bug.
+- `DisallowedHost` is in `IGNORED_ERRORS` -- it is `ALLOWED_HOSTS` working, and
+  it would be the loudest issue in the project within a day.
+  `SuspiciousOperation` is deliberately *not*, since that is the tampering one.
+- **No browser SDK.** Adding one means `connect-src` in `prod.py`'s CSP *and*
+  in `PROD_CSP` in `tests/e2e/helpers.js`, or reports are silently blocked in
+  production and nowhere else.
+
 ### Feature flags fail closed
 
 `pingpong/flags.py` is the whole mechanism: `is_enabled(name, user=None)`,
@@ -985,6 +1041,7 @@ dict lookup plus one table is disproportionate on a 3.7GB VPS with a pinned
 - **Prod:** `DEBUG=False`, PostgreSQL, Mailgun, HTTPS, WhiteNoise, `DJANGO_SETTINGS_MODULE=ttstats.settings.prod`
 - **Docker services:** web (Django), db (PostgreSQL), redis (Redis 7 Alpine)
 - **Web push needs three vars in `.env.prod`** (`compose.prod.yml` already passes the whole file through): `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_ADMIN_EMAIL` (a `mailto:` URL). Until they are set the app emails as before -- push is not a hard dependency of any code path.
+- **Sentry needs one var in `.env.prod`**: `SENTRY_DSN`. `SENTRY_ENVIRONMENT`, `SENTRY_RELEASE` (the deploy's commit SHA), `SENTRY_TRACES_SAMPLE_RATE` and `SENTRY_CAPTURE_4XX` are optional and documented in `.env.prod.example`. Until the DSN is set nothing is sent and no code path changes.
 - **The tenancy cutover has a runbook: `docs/tenancy-rollout.md`.** Seven steps,
   each with its own verification command, gate and rollback. Steps 5 and 6 roll
   back by flipping `TTSTATS_FLAGS_ON` -- no deploy, no migration, effective on

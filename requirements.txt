@@ -23,3 +23,8 @@ gunicorn
 # chain caps it at <47. Bumping either one alone breaks `pip check`.
 pywebpush==2.3.0
 cryptography==46.0.7
+
+# Error monitoring. Pure-Python wheel, so it respects the Dockerfile's
+# --only-binary=:all: rule; its only runtime deps are urllib3 and certifi,
+# which psycopg2/requests already pull in. Inert without SENTRY_DSN.
+sentry-sdk[django]==2.68.1
