@@ -10,11 +10,88 @@ Use Match.all_objects throughout to bypass row-level security.
 import logging
 from collections import Counter
 
-from django.db.models import F, Prefetch
+from django.db.models import F, Prefetch, prefetch_related_objects
 
 from .models import Achievement, EloHistory, Game, Match, PlayerAchievement, Side
 
 logger = logging.getLogger(__name__)
+
+
+class PlayerContext:
+    """Everything the checkers need about one player, fetched once.
+
+    Eleven checkers run for every player of every confirmed match. Each used to
+    resolve its own inputs, so the player's whole match history was loaded five
+    separate times and `check_rivalry` resolved each historical opponent with
+    its own query -- making the cost of finishing a match grow forever with how
+    much table tennis the players had already played. Measured at 114 queries
+    for a two-player match, plus two more for every match in their history.
+
+    Everything below is loaded once and answered from memory afterwards. The
+    checkers still accept `ctx=None` and build their own when called directly,
+    which is how the existing per-checker tests keep working unchanged.
+    """
+
+    def __init__(self, player, match=None):
+        self.player = player
+        self.match = match
+        self._confirmed_matches = None
+        self._elo_by_player = None
+
+        if match is not None:
+            _ensure_match_prefetched(match)
+
+    @property
+    def confirmed_matches(self):
+        """The player's confirmed matches, newest first, fully prefetched."""
+        if self._confirmed_matches is None:
+            self._confirmed_matches = list(_player_confirmed_matches(self.player))
+        return self._confirmed_matches
+
+    @property
+    def won_count(self):
+        """Confirmed matches this player won -- counted in memory."""
+        return sum(
+            1 for m in self.confirmed_matches if _player_won_match(self.player, m)
+        )
+
+    @property
+    def elo_by_player(self):
+        """This match's EloHistory rows, keyed by player id.
+
+        Two checkers need them (giant slayer, peak performer) and each used to
+        fetch its own.
+        """
+        if self._elo_by_player is None:
+            if self.match is None:
+                self._elo_by_player = {}
+            else:
+                self._elo_by_player = {
+                    eh.player_id: eh
+                    for eh in EloHistory.objects.filter(match=self.match)
+                }
+        return self._elo_by_player
+
+
+def _ensure_match_prefetched(match):
+    """Load the match's participants and games onto the instance, once.
+
+    `match.participants.all()` issues a query every time it is called -- a
+    related manager is not cached the way a prefetch is -- and the checkers ask
+    repeatedly, via `_player_side`. Prefetching onto the instance turns all of
+    those into dictionary lookups.
+
+    Idempotent: the same match object is passed once per player, and this must
+    not re-query for the second player.
+    """
+    cache = getattr(match, "_prefetched_objects_cache", None)
+    if cache is not None and "participants" in cache and "games" in cache:
+        return
+    prefetch_related_objects(
+        [match],
+        "participants__player",
+        Prefetch("games", queryset=Game.all_objects.all()),
+    )
 
 # ---------------------------------------------------------------------------
 # Registry
@@ -40,9 +117,13 @@ def check_achievements_for_player(player, match):
         a.slug: a for a in Achievement.objects.all()
     }
 
+    # Built once and handed to every checker, instead of each resolving its
+    # own inputs. This is what makes the cost flat in the player's history.
+    ctx = PlayerContext(player, match)
+
     new_awards = []
     for checker in _CHECKERS:
-        slugs = checker(player, match)
+        slugs = checker(player, match, ctx)
         for slug in slugs:
             if slug in already_earned:
                 continue
@@ -78,17 +159,31 @@ def _player_confirmed_matches(player):
     )
 
 
-def _player_won_count(player):
+def _player_won_count(player, ctx=None):
     """How many confirmed matches the player has won.
 
     Both conditions live in one filter() so they apply to the same
     participant row -- the player's own side must be the winning one.
+
+    With a context, the answer comes from the already-loaded match list instead
+    of a second round trip -- two checkers ask for it.
     """
+    if ctx is not None:
+        return ctx.won_count
+
     return Match.all_objects.filter(
         participants__player=player,
         winner_side=F('participants__side'),
         is_confirmed=True,
     ).count()
+
+
+def _opponents_in(player, match):
+    """Players on the other side, read from prefetched participants."""
+    side = _player_side(player, match)
+    if side is None:
+        return []
+    return [p.player for p in match.participants.all() if p.side != side]
 
 
 def _player_side(player, match):
@@ -118,18 +213,20 @@ def _player_won_match(player, match):
 # ---------------------------------------------------------------------------
 
 @register_checker
-def check_first_blood(player, match):
+def check_first_blood(player, match, ctx=None):
+    ctx = ctx or PlayerContext(player, match)
     if not _player_won_match(player, match):
         return []
-    won_count = _player_won_count(player)
+    won_count = _player_won_count(player, ctx)
     if won_count >= 1:
         return ['first_blood']
     return []
 
 
 @register_checker
-def check_matches_played(player, match):
-    total = _player_confirmed_matches(player).count()
+def check_matches_played(player, match, ctx=None):
+    ctx = ctx or PlayerContext(player, match)
+    total = len(ctx.confirmed_matches)
     slugs = []
     if total >= 10:
         slugs.append('matches_played_bronze')
@@ -141,8 +238,9 @@ def check_matches_played(player, match):
 
 
 @register_checker
-def check_matches_won(player, match):
-    won = _player_won_count(player)
+def check_matches_won(player, match, ctx=None):
+    ctx = ctx or PlayerContext(player, match)
+    won = _player_won_count(player, ctx)
     slugs = []
     if won >= 10:
         slugs.append('matches_won_bronze')
@@ -154,9 +252,10 @@ def check_matches_won(player, match):
 
 
 @register_checker
-def check_win_streak(player, match):
+def check_win_streak(player, match, ctx=None):
     """Check current win streak across all confirmed matches."""
-    matches = _player_confirmed_matches(player)
+    ctx = ctx or PlayerContext(player, match)
+    matches = ctx.confirmed_matches
     streak = 0
     for m in matches:
         if _player_won_match(player, m):
@@ -175,8 +274,9 @@ def check_win_streak(player, match):
 
 
 @register_checker
-def check_perfect_game(player, match):
+def check_perfect_game(player, match, ctx=None):
     """Perfect Game: win a game 11-0 in this match."""
+    ctx = ctx or PlayerContext(player, match)
     side = _player_side(player, match)
     for game in match.games.all():
         if game.winner_side == side:
@@ -186,15 +286,16 @@ def check_perfect_game(player, match):
 
 
 @register_checker
-def check_comeback_king(player, match):
+def check_comeback_king(player, match, ctx=None):
     """Win after being down 0-2 in games."""
+    ctx = ctx or PlayerContext(player, match)
     if not _player_won_match(player, match):
         return []
     if match.best_of < 5:
         return []
 
     side = _player_side(player, match)
-    games = list(match.games.order_by('game_number'))
+    games = list(match.games.all())
     if len(games) < 3:
         return []
 
@@ -206,8 +307,9 @@ def check_comeback_king(player, match):
 
 
 @register_checker
-def check_iron_wall(player, match):
+def check_iron_wall(player, match, ctx=None):
     """Win a match conceding fewer than 20 total points."""
+    ctx = ctx or PlayerContext(player, match)
     if not _player_won_match(player, match):
         return []
 
@@ -225,21 +327,23 @@ def check_iron_wall(player, match):
 
 
 @register_checker
-def check_marathon_match(player, match):
+def check_marathon_match(player, match, ctx=None):
     """Win a match that goes to the maximum number of games."""
+    ctx = ctx or PlayerContext(player, match)
     if not _player_won_match(player, match):
         return []
 
-    total_games = match.games.count()
+    total_games = len(match.games.all())
     if total_games == match.best_of:
         return ['marathon_match']
     return []
 
 
 @register_checker
-def check_deuce_master(player, match):
+def check_deuce_master(player, match, ctx=None):
     """Win games that went to deuce (both scores >= 10)."""
-    all_matches = _player_confirmed_matches(player)
+    ctx = ctx or PlayerContext(player, match)
+    all_matches = ctx.confirmed_matches
     deuce_wins = 0
 
     for m in all_matches:
@@ -260,22 +364,22 @@ def check_deuce_master(player, match):
 
 
 @register_checker
-def check_giant_slayer(player, match):
+def check_giant_slayer(player, match, ctx=None):
     """Beat someone rated significantly higher (uses pre-match Elo)."""
+    ctx = ctx or PlayerContext(player, match)
     if not _player_won_match(player, match):
         return []
 
-    try:
-        player_history = EloHistory.objects.get(match=match, player=player)
-    except EloHistory.DoesNotExist:
+    elo = ctx.elo_by_player
+    player_history = elo.get(player.pk)
+    if player_history is None:
         return []
 
-    opponent_ratings = list(
-        EloHistory.objects.filter(
-            match=match,
-            player__in=match.players_on(_opponent_side(player, match)),
-        ).values_list('old_rating', flat=True)
-    )
+    opponent_ratings = [
+        elo[opponent.pk].old_rating
+        for opponent in _opponents_in(player, match)
+        if opponent.pk in elo
+    ]
     if not opponent_ratings:
         return []
 
@@ -293,18 +397,22 @@ def check_giant_slayer(player, match):
 
 
 @register_checker
-def check_rivalry(player, match):
+def check_rivalry(player, match, ctx=None):
     """Play the same opponent many times (singles only)."""
+    ctx = ctx or PlayerContext(player, match)
     if match.is_double:
         return []
 
-    all_matches = _player_confirmed_matches(player).filter(is_double=False)
     opponent_counts = Counter()
 
-    for m in all_matches:
-        opp_player = m.players_on(_opponent_side(player, m)).first()
-        if opp_player:
-            opponent_counts[opp_player.pk] += 1
+    # Filtered and resolved in memory. Asking the database for each historical
+    # opponent was the term that made this grow with the player's whole career.
+    for m in ctx.confirmed_matches:
+        if m.is_double:
+            continue
+        opponents = _opponents_in(player, m)
+        if opponents:
+            opponent_counts[opponents[0].pk] += 1
 
     if not opponent_counts:
         return []
@@ -321,11 +429,11 @@ def check_rivalry(player, match):
 
 
 @register_checker
-def check_peak_performer(player, match):
+def check_peak_performer(player, match, ctx=None):
     """Reach a new personal Elo peak from this match."""
-    try:
-        history = EloHistory.objects.get(match=match, player=player)
-    except EloHistory.DoesNotExist:
+    ctx = ctx or PlayerContext(player, match)
+    history = ctx.elo_by_player.get(player.pk)
+    if history is None:
         return []
 
     if history.new_rating >= player.elo_peak and history.rating_change > 0:

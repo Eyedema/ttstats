@@ -1067,3 +1067,124 @@ class TestSideHelpers:
 
         assert set(m.players_on(Side.ONE)) == set(players[:2])
         assert set(m.players_on(Side.TWO)) == set(players[2:])
+
+
+@pytest.mark.django_db
+class TestMatchParticipantCaching:
+    """`sides()` and `_confirmation_state()` memoize -- so they must invalidate.
+
+    Both were introduced to stop the completion pipeline re-reading the same
+    participant rows a dozen times per save. A memo that outlives the
+    rows it describes is worse than the queries it saved, so each of these
+    pins one way the cache has to be dropped.
+    """
+
+    def test_sides_reflects_a_line_up_change(self):
+        # ARRANGE
+        from pingpong import services
+
+        p1 = PlayerFactory(name="Ada")
+        p2 = PlayerFactory(name="Bob")
+        p3 = PlayerFactory(name="Cy")
+        match = MatchFactory(player1=p1, player2=p2)
+
+        # Prime the memo before mutating, which is the dangerous ordering.
+        assert match.sides() == ([p1], [p2])
+
+        # ACT
+        services.set_match_sides(match, [p1], [p3])
+
+        # ASSERT
+        assert match.sides() == ([p1], [p3])
+        assert match.all_players == [p1, p3]
+
+    def test_refresh_from_db_drops_both_memos(self):
+        # ARRANGE
+        p1 = PlayerFactory(name="Ada", with_user=True)
+        p2 = PlayerFactory(name="Bob", with_user=True)
+        match = MatchFactory(player1=p1, player2=p2)
+        match.sides()
+        match.match_confirmed
+
+        # ACT
+        match.refresh_from_db()
+
+        # ASSERT
+        assert getattr(match, "_sides_memo", None) is None
+        assert getattr(match, "_confirmation_state_memo", None) is None
+
+    def test_confirmation_state_reflects_a_new_confirmation(self):
+        """The memo must not outlive the row that changes the answer."""
+        # ARRANGE
+        p1 = _verified_player("Ada")
+        p2 = _verified_player("Bob")
+        match = MatchFactory(player1=p1, player2=p2)
+        assert match.match_confirmed is False
+
+        # ACT
+        MatchConfirmation.objects.create(match=match, player=p1)
+        MatchConfirmation.objects.create(match=match, player=p2)
+        match.invalidate_confirmation_state()
+
+        # ASSERT
+        assert match.match_confirmed is True
+
+    def test_unverified_players_still_do_not_need_to_confirm(self):
+        """The one-query rewrite must keep the LEFT JOIN semantics.
+
+        A player with no user, or an unverified one, was previously excluded by
+        `filter(email_verified=True)`. The annotated query returns them with a
+        NULL instead, and NULL has to read as "not verified" -- otherwise a
+        match between two unverified players would never confirm.
+        """
+        # ARRANGE: neither player has a verified email.
+        p1 = PlayerFactory(name="Ada")
+        p2 = PlayerFactory(name="Bob")
+        match = MatchFactory(player1=p1, player2=p2)
+
+        # ASSERT: an empty verified set counts as complete.
+        assert match._verified_player_ids(Side.ONE) == set()
+        assert match._verified_player_ids(Side.TWO) == set()
+        assert match.match_confirmed is True
+
+
+@pytest.mark.django_db
+class TestLoadedWinnerTracking:
+    """`from_db` replaced a per-save re-read; it must answer identically."""
+
+    def test_a_freshly_loaded_unfinished_match_has_no_recorded_winner(self):
+        p1 = PlayerFactory(name="Ada")
+        p2 = PlayerFactory(name="Bob")
+        match = MatchFactory(player1=p1, player2=p2, best_of=3)
+
+        reloaded = Match.all_objects.get(pk=match.pk)
+
+        assert reloaded._loaded_winner_side is None
+
+    def test_saving_records_the_new_winner_so_a_second_save_is_not_first(self):
+        """Guards the re-entrancy the old database re-read gave us for free."""
+        # ARRANGE
+        p1 = PlayerFactory(name="Ada")
+        p2 = PlayerFactory(name="Bob")
+        match = MatchFactory(player1=p1, player2=p2, best_of=3)
+        GameFactory(match=match, game_number=1, team1_score=11, team2_score=5)
+
+        # ACT: this game decides it.
+        GameFactory(match=match, game_number=2, team1_score=11, team2_score=5)
+        match.refresh_from_db()
+
+        # ASSERT: the winner is now the *recorded* value, so a further save
+        # does not look like the winner being set for the first time again.
+        assert match.winner_side == Side.ONE
+        assert match._loaded_winner_side == Side.ONE
+        match.save()
+        assert match._winner_just_set is False
+
+
+def _verified_player(name):
+    """A player whose account exists and whose email is verified."""
+    player = PlayerFactory(name=name, with_user=True)
+    profile = player.user.profile
+    profile.email_verified = True
+    profile.save()
+    return player

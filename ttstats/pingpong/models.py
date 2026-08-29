@@ -4,6 +4,7 @@ from datetime import timedelta
 
 from django.contrib.auth.models import User
 from django.db import models
+from django.db.models import Count, Exists, OuterRef, Q
 from django.utils import timezone
 
 from . import match_state, player_hues
@@ -544,16 +545,72 @@ class Match(ClubStampedMixin, SideLabelMixin, models.Model):
         return self.side_label(self.winner_side) if self.winner_side else ""
 
     def players_on(self, side):
-        """Players on one side of the match, read from MatchParticipant."""
+        """Players on one side of the match, read from MatchParticipant.
+
+        Returns a queryset; callers that only need to iterate should prefer
+        `sides()`, which answers both sides from one query.
+        """
         return Player.objects.filter(
             match_participations__match_id=self.pk,
             match_participations__side=side,
         )
 
+    def sides(self):
+        """(side 1 players, side 2 players) as lists, from one query, memoized.
+
+        `players_on()` is a queryset, so every call is another round trip --
+        and the completion pipeline asked for a side seven times per save
+        (twice in `projected_elo_changes`, twice more in `update_player_elo`,
+        twice in cache invalidation, and again for the labels). This answers
+        all of them once.
+
+        Reads the prefetch cache when `participants` is already loaded, so a
+        list view that prefetched participants pays nothing at all here.
+
+        Memoized like `_confirmation_state`, and dropped by the same
+        `refresh_from_db`. Participants do not change during a save; anything
+        that does change them goes through `services.set_match_sides`, which
+        operates on a freshly loaded match.
+        """
+        memo = getattr(self, "_sides_memo", None)
+        if memo is not None:
+            return memo
+
+        cache = getattr(self, "_prefetched_objects_cache", None)
+        if cache is not None and "participants" in cache:
+            participants = cache["participants"]
+        else:
+            # Everything the completion pipeline reads off a player, joined in
+            # one go: `club` for the cache key namespace, `user__profile` for
+            # the verified/notify checks. All 1:1 or many-to-one against at
+            # most four participant rows, so the join stays cheap.
+            participants = MatchParticipant.objects.filter(
+                match_id=self.pk
+            ).select_related(
+                "player", "player__club", "player__user", "player__user__profile"
+            )
+
+        side1, side2 = [], []
+        for participant in participants:
+            (side1 if participant.side == Side.ONE else side2).append(
+                participant.player
+            )
+
+        memo = (side1, side2)
+        self._sides_memo = memo
+        return memo
+
     @property
     def all_players(self):
-        """Everyone in the match, both sides."""
-        return Player.objects.filter(match_participations__match_id=self.pk)
+        """Everyone in the match, both sides.
+
+        A list, off the same memoized read as `sides()`. Every caller iterates
+        it -- none uses a queryset method -- and as a queryset it was another
+        round trip each time the completion pipeline asked, which it does
+        three times per save.
+        """
+        side1, side2 = self.sides()
+        return side1 + side2
 
     @property
     def side1_players(self):
@@ -563,39 +620,97 @@ class Match(ClubStampedMixin, SideLabelMixin, models.Model):
     def side2_players(self):
         return self.players_on(Side.TWO)
 
-    def _verified_player_ids(self, side):
-        """Ids of players on ``side`` whose email is verified."""
-        return set(
-            self.players_on(side)
-            .filter(user__profile__email_verified=True)
-            .values_list("id", flat=True)
+    def _confirmation_state(self):
+        """(side1 verified ids, side2 verified ids, confirmed ids), in one query.
+
+        These three sets used to be three separate queries, and the properties
+        below asked for them constantly -- `match_confirmed` alone cost three,
+        and the completion pipeline reads it about eight times per save. One
+        query over the participant rows answers all three, because a
+        confirmation is only ever meaningful for somebody who played.
+
+        **Memoized on the instance**, so repeated reads within one save are
+        free. The memo is dropped by `refresh_from_db()` and by
+        `invalidate_confirmation_state()`, which is what the confirmation
+        signal calls after writing a new row -- anything that changes who has
+        confirmed must clear it, or the pipeline decides against a stale
+        picture of who still owes an answer.
+        """
+        memo = getattr(self, "_confirmation_state_memo", None)
+        if memo is not None:
+            return memo
+
+        rows = MatchParticipant.objects.filter(match_id=self.pk).annotate(
+            has_confirmed=Exists(
+                MatchConfirmation.objects.filter(
+                    match_id=self.pk, player_id=OuterRef("player_id")
+                )
+            )
+        ).values_list(
+            "player_id",
+            "side",
+            # LEFT JOINs: a player with no user, or no profile, yields None,
+            # which is falsy -- exactly the old `filter(email_verified=True)`
+            # semantics, where such a player simply never appeared.
+            "player__user__profile__email_verified",
+            "has_confirmed",
         )
 
+        side1, side2, confirmed = set(), set(), set()
+        for player_id, side, verified, has_confirmed in rows:
+            if verified:
+                (side1 if side == Side.ONE else side2).add(player_id)
+            if has_confirmed:
+                confirmed.add(player_id)
+
+        memo = (side1, side2, confirmed)
+        self._confirmation_state_memo = memo
+        return memo
+
+    def invalidate_confirmation_state(self):
+        """Drop the memo. Call after writing MatchConfirmation rows."""
+        self._confirmation_state_memo = None
+
+    def invalidate_participant_cache(self):
+        """Drop everything derived from the participant rows.
+
+        `sides()` and `_confirmation_state()` both read those rows and both
+        memoize. Anything that rewrites them -- `services.set_match_sides` is
+        the only path that does -- must clear both, or the instance keeps
+        answering with the line-up it had before the edit.
+        """
+        self._sides_memo = None
+        self._confirmation_state_memo = None
+        cache = getattr(self, "_prefetched_objects_cache", None)
+        if cache is not None:
+            cache.pop("participants", None)
+
+    def _verified_player_ids(self, side):
+        """Ids of players on ``side`` whose email is verified."""
+        side1, side2, _ = self._confirmation_state()
+        return side1 if side == Side.ONE else side2
+
     def _confirmed_player_ids(self):
-        return set(self.confirmations.values_list("id", flat=True))
+        _, _, confirmed = self._confirmation_state()
+        return confirmed
 
     @property
     def team1_confirmed(self):
         """All verified Team 1 members have confirmed"""
-        return match_state.side_confirmed(
-            self._verified_player_ids(Side.ONE), self._confirmed_player_ids()
-        )
+        side1, _, confirmed = self._confirmation_state()
+        return match_state.side_confirmed(side1, confirmed)
 
     @property
     def team2_confirmed(self):
         """All verified Team 2 members have confirmed"""
-        return match_state.side_confirmed(
-            self._verified_player_ids(Side.TWO), self._confirmed_player_ids()
-        )
+        _, side2, confirmed = self._confirmation_state()
+        return match_state.side_confirmed(side2, confirmed)
 
     @property
     def match_confirmed(self):
         """Every verified player on both teams has confirmed."""
-        return match_state.confirmation_complete(
-            self._verified_player_ids(Side.ONE),
-            self._verified_player_ids(Side.TWO),
-            self._confirmed_player_ids(),
-        )
+        side1, side2, confirmed = self._confirmation_state()
+        return match_state.confirmation_complete(side1, side2, confirmed)
 
     def should_auto_confirm(self):
         return match_state.should_auto_confirm(
@@ -619,12 +734,15 @@ class Match(ClubStampedMixin, SideLabelMixin, models.Model):
     def _game_wins(self):
         """Games won per side. Uses Game.all_objects so the GameManager's
         user/is_live filters don't hide our own children.
+
+        One aggregate rather than two COUNTs: this runs inside `save()`, so it
+        is on the hot path of every game added to every match.
         """
-        games_qs = Game.all_objects.filter(match_id=self.pk)
-        return (
-            games_qs.filter(winner_side=Side.ONE).count(),
-            games_qs.filter(winner_side=Side.TWO).count(),
+        totals = Game.all_objects.filter(match_id=self.pk).aggregate(
+            side1=Count("pk", filter=Q(winner_side=Side.ONE)),
+            side2=Count("pk", filter=Q(winner_side=Side.TWO)),
         )
+        return totals["side1"] or 0, totals["side2"] or 0
 
     def recompute(self, save=True):
         """Single source of truth for winner, score caches and is_confirmed.
@@ -660,10 +778,40 @@ class Match(ClubStampedMixin, SideLabelMixin, models.Model):
                 is_confirmed=self.is_confirmed,
             )
 
+    @classmethod
+    def from_db(cls, db, field_names, values):
+        """Remember the persisted winner so `pre_save` needn't re-read it.
+
+        `track_match_winner_change` used to answer "was the winner already
+        set?" with a fresh `Match.objects.get()` on every single save. That was
+        a wasted query, and worse, it went through the *scoped* manager -- so a
+        match the current viewer could not see raised DoesNotExist and silently
+        skipped the entire completion pipeline. Tracking the loaded value costs
+        nothing and cannot be filtered out from under us.
+        """
+        instance = super().from_db(db, field_names, values)
+        # Guard against .only()/.defer(): touching a deferred field here would
+        # trigger the very query this exists to avoid.
+        if "winner_side" in field_names:
+            instance._loaded_winner_side = instance.winner_side
+        return instance
+
+    def refresh_from_db(self, *args, **kwargs):
+        # Both caches describe rows that have just been re-read. Keeping either
+        # across a refresh is how the pipeline ends up deciding against a stale
+        # picture of who has confirmed.
+        self._confirmation_state_memo = None
+        self._sides_memo = None
+        super().refresh_from_db(*args, **kwargs)
+        self._loaded_winner_side = self.winner_side
+
     def save(self, *args, **kwargs):
         if self.pk and not self.is_live:
             self.recompute(save=False)
         super().save(*args, **kwargs)
+        # A second save() of the same instance must see the winner as already
+        # persisted, matching what the old re-read from the database reported.
+        self._loaded_winner_side = self.winner_side
 
 
 class MatchConfirmation(models.Model):

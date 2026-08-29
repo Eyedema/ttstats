@@ -47,16 +47,21 @@ def link_entries_on_scheduled_match_save(sender, instance, **kwargs):
 
 @receiver(pre_save, sender=Match)
 def track_match_winner_change(sender, instance, **kwargs):
-    """Remember if winner is being set for the first time"""
-    if not instance.pk:
+    """Remember if winner is being set for the first time.
+
+    Reads the value `Match.from_db` recorded at load time rather than issuing
+    another SELECT. Besides saving a query on every save, it removes a real
+    bug: the old re-read went through the *scoped* manager, so a match invisible
+    to the current viewer raised DoesNotExist and quietly skipped completion.
+
+    An instance that never came from the database has no recorded value; a new
+    row is not "just set" either, so both fall through to False.
+    """
+    if not instance.pk or not hasattr(instance, "_loaded_winner_side"):
         instance._winner_just_set = False
         return
 
-    try:
-        old_match = sender.objects.get(pk=instance.pk)
-        instance._winner_just_set = (old_match.winner_side is None)
-    except sender.DoesNotExist:
-        instance._winner_just_set = False
+    instance._winner_just_set = instance._loaded_winner_side is None
 
 
 @receiver(post_save, sender=Match)
@@ -156,6 +161,9 @@ def update_elo_on_match_confirmation(sender, instance, created, **kwargs):
     """Update Elo ratings when a player confirms a match"""
     if created:
         match = instance.match
+
+        # This row is exactly what the memo would be stale about.
+        match.invalidate_confirmation_state()
 
         # Refresh the denormalized fields (no signal re-entry -- see recompute)
         match.recompute()

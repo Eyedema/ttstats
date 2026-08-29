@@ -32,6 +32,11 @@ def _set_sides(parent, participant_model, parent_field, side1_players, side2_pla
         )
         for player in players
     ])
+    # `Match.sides()` memoizes these rows. Rewriting them without saying so
+    # leaves the caller holding the previous line-up -- and this is the one
+    # path in the app that rewrites them.
+    if hasattr(parent, "invalidate_participant_cache"):
+        parent.invalidate_participant_cache()
 
 
 def link_championship_entries(obj):

@@ -127,8 +127,9 @@ def projected_elo_changes(match):
     if not match.winner_side:
         return nothing
 
-    team1_players = list(match.players_on(Side.ONE))
-    team2_players = list(match.players_on(Side.TWO))
+    # One query for both sides, memoized on the match -- update_player_elo
+    # calls this and then needs the same two lists itself.
+    team1_players, team2_players = match.sides()
     if not team1_players or not team2_players:
         return nothing
 
@@ -160,9 +161,10 @@ def projected_elo_change_for(match, player):
     if player is None:
         return 0
     projection = projected_elo_changes(match)
-    if any(p.pk == player.pk for p in match.players_on(Side.ONE)):
+    side1, side2 = match.sides()
+    if any(p.pk == player.pk for p in side1):
         return projection.side1_change
-    if any(p.pk == player.pk for p in match.players_on(Side.TWO)):
+    if any(p.pk == player.pk for p in side2):
         return projection.side2_change
     return 0
 
@@ -198,8 +200,7 @@ def update_player_elo(match):
 
     with transaction.atomic():
         # 1. IDENTIFY SIDES AND PLAYERS
-        team1_players = list(match.players_on(Side.ONE))
-        team2_players = list(match.players_on(Side.TWO))
+        team1_players, team2_players = match.sides()
 
         is_double = match.is_double
 

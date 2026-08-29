@@ -62,10 +62,7 @@ def invalidate_match_caches(match):
     Invalidate all caches related to a match.
     Call from signals when matches are created/updated/confirmed.
     """
-    from .models import Side
-
-    side1 = list(match.players_on(Side.ONE))
-    side2 = list(match.players_on(Side.TWO))
+    side1, side2 = match.sides()
 
     # A player's stats key is namespaced by the club whose data it summarises,
     # which for a player is their own club -- not the club of whoever is
