@@ -4,7 +4,6 @@ paths:
   - "tailwind.config.js"
   - "scripts/**"
   - "docker/**"
-  - "Dockerfile"
   - "compose*.yml"
   - ".github/workflows/**"
   - "ttstats/ttstats/settings/**"

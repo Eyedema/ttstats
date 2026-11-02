@@ -142,6 +142,21 @@ When adding a feature, also add an integration test for its happy path. These mu
 - **Dev sends no CSP; prod does.** Interactive behaviour is only verified under `applyProdCSP` in the e2e suite.
 - **UI whose hidden state is managed by JavaScript must fail closed.** pytest cannot see it; use the `frontend-verification` skill.
 
+## Maintaining these docs
+
+- CLAUDE.md is for what nearly every task needs. Budget: 1,500 words.
+- A rule about one subsystem goes in the matching `.claude/rules/<topic>.md`.
+  If none fits, create one with `paths:` frontmatter naming the files it
+  governs, and add it to the index below.
+- Decision records and history go in `docs/decisions/`, not in rules.
+- Write the rule plus one clause of why. Incident narratives and measurements
+  belong in the commit message.
+- When you change code a rule describes, update the rule in the same commit.
+  When you add or rename a module, update the `paths:` of the rules covering it.
+- Check a rule isn't already stated elsewhere before adding it.
+- `tests/test_claude_docs.py` enforces the budget, the index and that every
+  `paths:` glob still matches a file. `/docs-sync` checks content against code.
+
 ## Topic rules (loaded on demand)
 
 Subsystem details live in `.claude/rules/*.md`. Each declares `paths:` and loads
