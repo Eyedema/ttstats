@@ -91,6 +91,22 @@ test.describe('live scoreboard', () => {
     await page.unroute('**/live/point/');
   });
 
+  test('Undo takes the point back on the server, not just on screen', async ({ page }) => {
+    // KAN-28. The persisted point log is unwound by the same request that
+    // rolls the score back, so an Undo that only moved the optimistic overlay
+    // would leave the log holding a point the umpire retracted -- silently,
+    // and forever. The reload is the assertion that the server agreed.
+    const before = await currentScore(page);
+    await team1Zone(page).tap();
+    await expect(team1Score(page)).toHaveText(String(before + 1));
+
+    await page.getByRole('button', { name: 'Undo' }).tap();
+    await expect(team1Score(page)).toHaveText(String(before));
+
+    await page.reload();
+    await expect(team1Score(page)).toHaveText(String(before));
+  });
+
   test('the error toast does not collide with the team labels', async ({ page }) => {
     await page.route('**/live/point/', (route) => route.abort('failed'));
     await team1Zone(page).tap();

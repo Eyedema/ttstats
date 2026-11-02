@@ -5,7 +5,7 @@ import pytest
 from django.urls import reverse
 
 from pingpong import live_scoring as ls
-from pingpong.models import Game, Match, Side
+from pingpong.models import Game, Match, PointEvent, Side
 from .conftest import (
     GameFactory,
     MatchFactory,
@@ -253,6 +253,12 @@ class TestScoringRules:
     def test_cannot_score_before_initial_server_set(self):
         with pytest.raises(ValueError):
             ls.apply_point(ls.initial_state(5), "team1")
+
+    def test_cannot_score_when_started_without_an_initial_server(self):
+        """started=True alone is not enough: no server means no attribution."""
+        state = {**ls.initial_state(5), "started": True, "initial_server": None}
+        with pytest.raises(ValueError):
+            ls.apply_point(state, "team1")
 
     def test_invalid_side_rejected(self):
         with pytest.raises(ValueError):
@@ -1299,3 +1305,360 @@ class TestScoreboardResponsiveness:
         taps while a request is in flight."""
         body = self._page(auth_client)
         assert "enqueue" in body
+
+
+# ---------------------------------------------------------------------------
+# KAN-27 (S2.1): persisted point events
+# ---------------------------------------------------------------------------
+
+
+def _point(client, match, side):
+    """Score one point through the real endpoint."""
+    return client.post(
+        reverse("pingpong:live_point", args=[match.pk]),
+        data=json.dumps({"side": side}),
+        content_type="application/json",
+    )
+
+
+def _undo(client, match):
+    return client.post(
+        reverse("pingpong:live_undo", args=[match.pk]),
+        data="{}",
+        content_type="application/json",
+    )
+
+
+def _started_live_match(auth_client, best_of=5, initial_server="team1"):
+    """A live match already started, plus a client logged in as its scorekeeper."""
+    match, p1, p2 = _make_live_match(best_of=best_of)
+    state = ls.set_initial_server(match.live_state, initial_server)
+    Match.all_objects.filter(pk=match.pk).update(live_state=state)
+    return match, auth_client(p1.user), p1, p2
+
+
+@pytest.mark.django_db
+class TestPointEventWritePath:
+    """One row per point, with the server as live_scoring saw it."""
+
+    def test_one_row_per_point_with_scoring_side_and_score(self, auth_client):
+        match, client, _, _ = _started_live_match(auth_client)
+
+        _point(client, match, "team1")
+        _point(client, match, "team2")
+
+        events = list(PointEvent.objects.filter(match=match))
+        assert len(events) == 2
+
+        first, second = events
+        assert first.sequence == 1
+        assert first.scoring_side == Side.ONE
+        assert (first.team1_score, first.team2_score) == (1, 0)
+        assert first.game_number == 1
+
+        assert second.sequence == 2
+        assert second.scoring_side == Side.TWO
+        assert (second.team1_score, second.team2_score) == (1, 1)
+
+    def test_serving_side_is_who_served_the_point_not_who_serves_next(self, auth_client):
+        """The single easiest bug here: reading current_server() after the point."""
+        match, client, _, _ = _started_live_match(auth_client, initial_server="team1")
+
+        # team1 serves points 1 and 2; team2 serves points 3 and 4.
+        for _ in range(4):
+            _point(client, match, "team1")
+
+        serving = list(
+            PointEvent.objects.filter(match=match).values_list("serving_side", flat=True)
+        )
+        assert serving == [Side.ONE, Side.ONE, Side.TWO, Side.TWO]
+
+    def test_side_two_starting_is_recorded_as_serving_first(self, auth_client):
+        """initial_server is honoured, not assumed to be side 1 (KAN-36)."""
+        match, client, _, _ = _started_live_match(auth_client, initial_server="team2")
+
+        for _ in range(4):
+            _point(client, match, "team1")
+
+        serving = list(
+            PointEvent.objects.filter(match=match).values_list("serving_side", flat=True)
+        )
+        assert serving == [Side.TWO, Side.TWO, Side.ONE, Side.ONE]
+
+    @pytest.mark.parametrize("initial_server", ["team1", "team2"])
+    def test_server_attribution_matches_live_scoring_across_the_20_point_rotation(
+        self, auth_client, initial_server
+    ):
+        """Two serves each until 20 points total, then one per point."""
+        match, client, _, _ = _started_live_match(
+            auth_client, initial_server=initial_server
+        )
+
+        # Drive a long deuce game: alternate to 10-10, then push past it.
+        script = ["team1", "team2"] * 12  # reaches 12-12 without ending the game
+        oracle = ls.set_initial_server(ls.initial_state(5), initial_server)
+        expected = []
+        for side in script:
+            expected.append(ls.current_server(oracle))
+            oracle, _ = ls.apply_point(oracle, side)
+            _point(client, match, side)
+
+        stored = [
+            Side.to_live(e.serving_side)
+            for e in PointEvent.objects.filter(match=match)
+        ]
+        assert stored == expected
+        # The rotation boundary really was crossed: every point landed, and
+        # the game is at 12-12, past the 10-10 change of regime.
+        last = PointEvent.objects.filter(match=match).last()
+        assert (last.team1_score, last.team2_score) == (12, 12)
+
+    def test_sequence_is_contiguous_with_no_gaps_or_duplicates(self, auth_client):
+        match, client, _, _ = _started_live_match(auth_client)
+
+        for side in ["team1", "team2", "team1", "team1", "team2"]:
+            _point(client, match, side)
+
+        sequences = list(
+            PointEvent.objects.filter(match=match).values_list("sequence", flat=True)
+        )
+        assert sequences == [1, 2, 3, 4, 5]
+
+    def test_cap_on_live_state_events_does_not_apply_to_persisted_rows(self, auth_client):
+        """live_state["events"] is capped; the persisted log is the real history."""
+        match, client, _, _ = _started_live_match(auth_client, best_of=5)
+
+        played = 0
+        # Two long deuce games, 32 points each. Well past MAX_EVENTS (50),
+        # and the match is still live at 2-0 in a best-of-5.
+        one_deuce_game = (["team1", "team2"] * 15) + ["team1"] * 2  # 17-15
+        script = one_deuce_game * 2
+        for side in script:
+            resp = _point(client, match, side)
+            assert resp.status_code == 200
+            played += 1
+
+        assert played > ls.MAX_EVENTS
+        assert PointEvent.objects.filter(match=match).count() == played
+
+    def test_point_on_a_match_with_no_initial_server_is_rejected_unrecorded(
+        self, auth_client
+    ):
+        """No server chosen means no point and no row -- never a null server.
+
+        Recording it with ``serving_side=None`` would put a row in the log that
+        every serve statistic has to special-case, for a point the scoreboard
+        itself refuses to count (KAN-36).
+        """
+        match, p1, _ = _make_live_match()
+        client = auth_client(p1.user)
+        state_before = Match.all_objects.get(pk=match.pk).live_state
+
+        resp = _point(client, match, "team1")
+
+        assert resp.status_code == 409
+        assert "not started" in resp.json()["error"]
+        assert PointEvent.objects.filter(match=match).count() == 0
+        assert Match.all_objects.get(pk=match.pk).live_state == state_before
+
+    def test_point_on_a_started_match_with_no_initial_server_is_rejected_unrecorded(
+        self, auth_client
+    ):
+        """A state claiming to be started but naming no server (KAN-36).
+
+        set_initial_server() always sets both, so only a hand-edited or
+        corrupted live_state gets here -- which is exactly the state that would
+        otherwise write a row with a null server.
+        """
+        match, p1, _ = _make_live_match()
+        client = auth_client(p1.user)
+        corrupted = {**ls.initial_state(5), "started": True, "initial_server": None}
+        Match.all_objects.filter(pk=match.pk).update(live_state=corrupted)
+
+        resp = _point(client, match, "team1")
+
+        assert resp.status_code == 409
+        assert "initial_server" in resp.json()["error"]
+        assert PointEvent.objects.filter(match=match).count() == 0
+        assert Match.all_objects.get(pk=match.pk).live_state == corrupted
+
+    def test_match_not_scored_live_has_no_point_events(self, auth_client):
+        match = MatchFactory()
+        GameFactory(match=match, game_number=1, team1_score=11, team2_score=5)
+
+        assert PointEvent.objects.filter(match=match).count() == 0
+
+    def test_point_still_counts_when_the_event_write_fails(self, auth_client, monkeypatch):
+        """Recording history must never block scoring a match."""
+        match, client, _, _ = _started_live_match(auth_client)
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("no room at the inn")
+
+        monkeypatch.setattr(PointEvent.objects, "create", boom)
+
+        resp = _point(client, match, "team1")
+
+        assert resp.status_code == 200
+        assert resp.json()["state"]["team1_points"] == 1
+        match.refresh_from_db()
+        assert match.live_state["team1_points"] == 1
+        assert PointEvent.objects.filter(match=match).count() == 0
+
+    def test_game_ending_point_records_the_final_score_not_the_reset(self, auth_client):
+        match, client, _, _ = _started_live_match(auth_client)
+
+        for _ in range(11):
+            _point(client, match, "team1")
+
+        last = PointEvent.objects.filter(match=match).last()
+        assert last.game_number == 1
+        assert (last.team1_score, last.team2_score) == (11, 0)
+        # And the next game's points carry the new game number.
+        _point(client, match, "team2")
+        nxt = PointEvent.objects.filter(match=match).last()
+        assert nxt.game_number == 2
+        assert (nxt.team1_score, nxt.team2_score) == (0, 1)
+
+    def test_events_replay_to_the_final_games_and_match_winner(self, auth_client):
+        """The core guarantee: the log reproduces the match it recorded."""
+        match, client, _, _ = _started_live_match(auth_client, best_of=3)
+
+        script = (["team1"] * 11) + (["team2"] * 11) + (["team1"] * 11)
+        for side in script:
+            _point(client, match, side)
+
+        match.refresh_from_db()
+        assert match.is_live is False
+        assert match.winner_side == Side.ONE
+
+        # Replay: the last event of each game carries that game's final score.
+        events = list(PointEvent.objects.filter(match=match))
+        finals = {}
+        for e in events:
+            finals[e.game_number] = (e.team1_score, e.team2_score)
+
+        games = {
+            g.game_number: (g.team1_score, g.team2_score)
+            for g in Game.all_objects.filter(match=match)
+        }
+        assert finals == games
+
+        replayed_games_won = sum(
+            1 for t1, t2 in finals.values() if t1 > t2
+        )
+        assert replayed_games_won == 2
+
+
+# ---------------------------------------------------------------------------
+# KAN-28 (S2.2): the point log unwinds with undo
+# ---------------------------------------------------------------------------
+
+
+def _log(match):
+    """The persisted point log as comparable tuples."""
+    return [
+        (e.sequence, e.game_number, e.scoring_side, e.serving_side,
+         e.team1_score, e.team2_score)
+        for e in PointEvent.objects.filter(match=match)
+    ]
+
+
+@pytest.mark.django_db
+class TestPointLogSurvivesUndo:
+    def test_score_then_undo_is_identical_to_never_scored(self, auth_client):
+        match_a, client_a, _, _ = _started_live_match(auth_client)
+        for side in ["team1", "team2", "team1"]:
+            _point(client_a, match_a, side)
+        # One extra point, then take it back.
+        _point(client_a, match_a, "team2")
+        _undo(client_a, match_a)
+
+        match_b, client_b, _, _ = _started_live_match(auth_client)
+        for side in ["team1", "team2", "team1"]:
+            _point(client_b, match_b, side)
+
+        assert _log(match_a) == _log(match_b)
+
+    def test_undo_at_game_boundary_removes_both_rows(self, auth_client):
+        match, client, _, _ = _started_live_match(auth_client)
+
+        for _ in range(11):
+            _point(client, match, "team1")
+        assert Game.all_objects.filter(match=match, game_number=1).exists()
+        assert PointEvent.objects.filter(match=match).count() == 11
+
+        _undo(client, match)
+
+        assert not Game.all_objects.filter(match=match, game_number=1).exists()
+        sequences = list(
+            PointEvent.objects.filter(match=match).values_list("sequence", flat=True)
+        )
+        assert sequences == list(range(1, 11))  # gapless
+
+    def test_repeated_undos_unwind_one_point_at_a_time_in_reverse(self, auth_client):
+        match, client, _, _ = _started_live_match(auth_client)
+        for side in ["team1", "team2", "team1", "team2"]:
+            _point(client, match, side)
+
+        for expected_remaining in (3, 2, 1, 0):
+            _undo(client, match)
+            events = list(PointEvent.objects.filter(match=match))
+            assert len(events) == expected_remaining
+            assert [e.sequence for e in events] == list(
+                range(1, expected_remaining + 1)
+            )
+
+    def test_undo_with_an_empty_log_is_a_noop(self, auth_client):
+        match, client, _, _ = _started_live_match(auth_client)
+
+        resp = _undo(client, match)
+
+        assert resp.status_code == 200
+        assert PointEvent.objects.filter(match=match).count() == 0
+
+    def test_undo_beyond_the_live_state_cap_does_not_eat_earlier_rows(self, auth_client):
+        """live_state's event list is capped; the persisted log is not.
+
+        Once the capped list is exhausted, undo_last_point() is a no-op and
+        must not delete a row it did not undo.
+        """
+        match, client, _, _ = _started_live_match(auth_client, best_of=5)
+        script = (["team1", "team2"] * 15) + ["team1"] * 2  # 32-point deuce game
+        for side in script:
+            _point(client, match, side)
+
+        before = PointEvent.objects.filter(match=match).count()
+        assert before == len(script)
+
+        # Exhaust the capped in-memory log, then undo once more.
+        match.refresh_from_db()
+        capped = len(match.live_state["events"])
+        assert capped <= ls.MAX_EVENTS
+        for _ in range(capped):
+            _undo(client, match)
+        after_draining = PointEvent.objects.filter(match=match).count()
+        assert after_draining == before - capped
+
+        _undo(client, match)
+        assert PointEvent.objects.filter(match=match).count() == after_draining
+
+    def test_undo_then_a_different_point_reuses_the_sequence_number(self, auth_client):
+        match, client, _, _ = _started_live_match(auth_client)
+        _point(client, match, "team1")
+        _point(client, match, "team2")
+        _undo(client, match)
+        _point(client, match, "team1")
+
+        events = list(PointEvent.objects.filter(match=match))
+        assert [e.sequence for e in events] == [1, 2]
+        assert [e.scoring_side for e in events] == [Side.ONE, Side.ONE]
+
+    def test_undo_of_the_very_first_point_of_the_match(self, auth_client):
+        match, client, _, _ = _started_live_match(auth_client)
+        _point(client, match, "team2")
+        _undo(client, match)
+
+        assert PointEvent.objects.filter(match=match).count() == 0
+        match.refresh_from_db()
+        assert match.live_state["team2_points"] == 0

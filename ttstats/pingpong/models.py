@@ -405,6 +405,29 @@ class Side(models.IntegerChoices):
     ONE = 1, "Side 1"
     TWO = 2, "Side 2"
 
+    # live_scoring.py is deliberately Django-free, so it names sides "team1"
+    # and "team2" as plain strings. The translation between that vocabulary
+    # and this one lives here, once: writing `Side.ONE if side == "team1"`
+    # inline is how the two halves of the app drift apart, and a side that is
+    # silently wrong produces statistics nobody can spot by inspection.
+    @classmethod
+    def from_live(cls, name):
+        """`"team1"`/`"team2"` (live_scoring's vocabulary) -> Side. None passes through."""
+        if name is None:
+            return None
+        if name == "team1":
+            return cls.ONE
+        if name == "team2":
+            return cls.TWO
+        raise ValueError(f"Unknown live side: {name!r}")
+
+    @classmethod
+    def to_live(cls, side):
+        """Side -> `"team1"`/`"team2"`. None passes through."""
+        if side is None:
+            return None
+        return "team1" if int(side) == int(cls.ONE) else "team2"
+
 
 class Match(ClubStampedMixin, SideLabelMixin, models.Model):
     """Individual match between two players"""
@@ -892,6 +915,158 @@ class Game(models.Model):
 
         # Update match winner
         self.match.save()
+
+
+class PointEvent(models.Model):
+    """One point of one live-scored match, as the server decided it.
+
+    ``Match.live_state["events"]`` looks like a history but is not one: it is
+    capped at ``live_scoring.MAX_EVENTS``, it exists only to power Undo, and
+    it is set to NULL the moment the match completes. Nothing about a match
+    that happened before this table existed can ever be recovered, which is
+    why this ships recording silently ahead of anything that reads it.
+
+    **The persisted log is the source of truth, never `live_state`.** Rows are
+    written one per point at the moment the point is applied -- not
+    reconstructed at match end, which the cap makes impossible.
+
+    ``sequence`` is 1-based, contiguous and gapless across the whole match
+    (not per game), which is what makes "no gaps and no duplicates" usable as
+    an integrity check. Undo *deletes* the trailing row rather than appending
+    a compensating one, so the property is preserved by construction -- see
+    ``views.LiveUndoView``.
+
+    **Club scoping reaches through the match rather than duplicating the
+    column.** ``Match`` already denormalizes ``club`` because it is filtered
+    directly on every page; a point row is only ever read for a match already
+    resolved through the club-scoped manager, so a second copy here would buy
+    no index and add a column that can disagree with its parent.
+    """
+
+    match = models.ForeignKey(
+        Match, on_delete=models.CASCADE, related_name="point_events"
+    )
+    game_number = models.IntegerField(help_text="Which game of the match this point belongs to")
+
+    scoring_side = models.PositiveSmallIntegerField(choices=Side.choices)
+
+    # Derived from live_scoring.current_server() BEFORE the point is applied.
+    # Taken afterwards it names whoever serves *next*, which is the single
+    # easiest bug to ship here and is undetectable in the data.
+    #
+    # Nullable only for the degenerate case of a point applied with no
+    # initial_server recorded; apply_point() refuses to run in that state, so
+    # in practice it is always set.
+    serving_side = models.PositiveSmallIntegerField(
+        choices=Side.choices, null=True, blank=True
+    )
+
+    # The score of the game this point belongs to, *after* this point. At a
+    # game-ending point that is the game's final score -- live_state has
+    # already reset the in-progress counters to 0-0 by then, so these are
+    # taken from the completed-game payload instead.
+    team1_score = models.PositiveSmallIntegerField()
+    team2_score = models.PositiveSmallIntegerField()
+
+    sequence = models.PositiveIntegerField(
+        help_text="1-based position of this point within the match"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["sequence"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["match", "sequence"], name="uniq_point_match_sequence"
+            )
+        ]
+        indexes = [
+            models.Index(fields=["match", "sequence"]),
+            models.Index(fields=["match", "game_number"]),
+        ]
+
+    def __str__(self):
+        return (
+            f"Match {self.match_id} #{self.sequence}: game {self.game_number} "
+            f"point to side {self.scoring_side} ({self.team1_score}-{self.team2_score})"
+        )
+
+    @property
+    def served_and_won(self):
+        """True when the scoring side was also the serving side."""
+        if self.serving_side is None:
+            return None
+        return self.scoring_side == self.serving_side
+
+
+class MatchPointSummary(models.Model):
+    """One match's point-level record, rolled up per player (KAN-30 / S2.4).
+
+    A career serve win rate means scanning every point a player has ever
+    played -- 60-100 rows per match, tens of thousands within a season, and the
+    slowest query in the app. This is the same denormalization the ``Match``
+    row already uses for ``is_confirmed`` and the score caches: a derived
+    value, maintained on a known write path, so no screen ever runs the naive
+    query.
+
+    **The raw log stays the source of truth.** These rows are a cache. They are
+    rebuildable at any time from ``PointEvent`` by ``rebuild_point_rollups``,
+    and ``point_rollups.check_match`` compares the two.
+
+    **Keyed per player, not per side.** A side needs a join through
+    ``MatchParticipant`` to answer "this player's career", which is the query
+    that matters; a player id is an indexed column filter. Same reasoning as
+    ``ChampionshipEntryMember`` carrying its own championship FK. In doubles
+    both partners get the side's figures, which is the honest best available:
+    the scoreboard records which *side* served, and recording the individual
+    would need UI that does not exist.
+
+    Every count is stored alongside its denominator, because
+    ``point_stats.combine_side_stats`` folds by summing numerators and
+    denominators. Storing a rate instead would make a career figure an average
+    of averages -- a three-point match weighted like a five-game one.
+    """
+
+    match = models.ForeignKey(
+        Match, on_delete=models.CASCADE, related_name="point_summaries"
+    )
+    player = models.ForeignKey(
+        Player, on_delete=models.CASCADE, related_name="point_summaries"
+    )
+    side = models.PositiveSmallIntegerField(choices=Side.choices)
+
+    serve_won = models.PositiveIntegerField(default=0)
+    serve_total = models.PositiveIntegerField(default=0)
+    receive_won = models.PositiveIntegerField(default=0)
+    receive_total = models.PositiveIntegerField(default=0)
+    points_won = models.PositiveIntegerField(default=0)
+    points_total = models.PositiveIntegerField(default=0)
+    games_won = models.PositiveIntegerField(default=0)
+    games_total = models.PositiveIntegerField(default=0)
+    deuce_won = models.PositiveIntegerField(default=0)
+    deuce_total = models.PositiveIntegerField(default=0)
+
+    # Records of a single best. These are maxima, never sums -- adding two
+    # players' longest runs would invent a run nobody played.
+    comebacks = models.PositiveIntegerField(default=0)
+    largest_deficit_overcome = models.PositiveIntegerField(default=0)
+    longest_run = models.PositiveIntegerField(default=0)
+
+    computed_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["match", "player"], name="uniq_point_summary_match_player"
+            )
+        ]
+        indexes = [
+            models.Index(fields=["player"]),
+            models.Index(fields=["match"]),
+        ]
+
+    def __str__(self):
+        return f"Point summary for {self.player} in match {self.match_id}"
 
 
 class UserProfile(models.Model):

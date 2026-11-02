@@ -1,6 +1,7 @@
 {% extends "pingpong/base.html" %}
 {% load static %}
 {% load icon_tags %}
+{% load player_tags %}
 
 {% block title %}Head to Head Statistics - Table Tennis Tracker{% endblock %}
 {% block nav_title %}Head to head{% endblock %}
@@ -287,6 +288,115 @@
                 </div>
             </div>
         </div>
+
+        {% comment %}
+        Point-level comparison (KAN-33 / S2.7).
+
+        Restricted to the matches these two actually played against each other
+        -- the query does that, not a filter in Python, so a player's global
+        rate cannot leak into a comparison whose whole purpose is to say how
+        they do against THIS opponent.
+
+        Absent when they have no shared live-scored matches; everything else on
+        this page is then exactly as it was.
+
+        The two columns wear the players' own hues rather than two hard-coded
+        chart colours, so this section says "who" the same way the rest of the
+        app does.
+        {% endcomment %}
+        {% if has_point_comparison %}
+        <div class="rounded-lg border bg-card p-4 md:p-6">
+            <h3 class="text-base md:text-lg font-semibold mb-1 flex items-center gap-2">
+                {% icon "target" css="w-5 h-5" %}
+                Serving &amp; receiving, head to head
+            </h3>
+            <p class="text-xs text-muted-foreground mb-4">
+                From the matches between these two that were scored point by point.
+            </p>
+
+            <div class="grid grid-cols-2 gap-4 md:gap-6">
+                <div class="{{ player1|hue }}">
+                    <span class="hue-bar mb-2 block h-1 w-10"></span>
+                    <span class="label-cap truncate block">{{ player1.name }}</span>
+                    <dl class="mt-2 space-y-2">
+                        <div>
+                            <dt class="text-xs text-muted-foreground">Serving</dt>
+                            <dd class="text-lg font-semibold">
+                                <span class="n">{{ point_h2h_player1.serve.percent|floatformat:0 }}</span>%
+                                <span class="text-xs font-semibold text-muted-foreground">
+                                    (<span class="n">{{ point_h2h_player1.serve.won }}</span>/<span class="n">{{ point_h2h_player1.serve.total }}</span>)
+                                </span>
+                            </dd>
+                        </div>
+                        <div>
+                            <dt class="text-xs text-muted-foreground">Receiving</dt>
+                            <dd class="text-lg font-semibold">
+                                <span class="n">{{ point_h2h_player1.receive.percent|floatformat:0 }}</span>%
+                                <span class="text-xs font-semibold text-muted-foreground">
+                                    (<span class="n">{{ point_h2h_player1.receive.won }}</span>/<span class="n">{{ point_h2h_player1.receive.total }}</span>)
+                                </span>
+                            </dd>
+                        </div>
+                        <div>
+                            <dt class="text-xs text-muted-foreground">Deuce games</dt>
+                            <dd class="text-sm font-semibold">
+                                <span class="n">{{ point_h2h_player1.deuce.won }}</span> of
+                                <span class="n">{{ point_h2h_player1.deuce.total }}</span>
+                            </dd>
+                        </div>
+                        <div>
+                            <dt class="text-xs text-muted-foreground">Comebacks</dt>
+                            <dd class="text-sm font-semibold"><span class="n">{{ point_h2h_player1.comebacks }}</span></dd>
+                        </div>
+                    </dl>
+                </div>
+
+                <div class="{{ player2|hue }}">
+                    <span class="hue-bar mb-2 block h-1 w-10"></span>
+                    <span class="label-cap truncate block">{{ player2.name }}</span>
+                    <dl class="mt-2 space-y-2">
+                        <div>
+                            <dt class="text-xs text-muted-foreground">Serving</dt>
+                            <dd class="text-lg font-semibold">
+                                <span class="n">{{ point_h2h_player2.serve.percent|floatformat:0 }}</span>%
+                                <span class="text-xs font-semibold text-muted-foreground">
+                                    (<span class="n">{{ point_h2h_player2.serve.won }}</span>/<span class="n">{{ point_h2h_player2.serve.total }}</span>)
+                                </span>
+                            </dd>
+                        </div>
+                        <div>
+                            <dt class="text-xs text-muted-foreground">Receiving</dt>
+                            <dd class="text-lg font-semibold">
+                                <span class="n">{{ point_h2h_player2.receive.percent|floatformat:0 }}</span>%
+                                <span class="text-xs font-semibold text-muted-foreground">
+                                    (<span class="n">{{ point_h2h_player2.receive.won }}</span>/<span class="n">{{ point_h2h_player2.receive.total }}</span>)
+                                </span>
+                            </dd>
+                        </div>
+                        <div>
+                            <dt class="text-xs text-muted-foreground">Deuce games</dt>
+                            <dd class="text-sm font-semibold">
+                                <span class="n">{{ point_h2h_player2.deuce.won }}</span> of
+                                <span class="n">{{ point_h2h_player2.deuce.total }}</span>
+                            </dd>
+                        </div>
+                        <div>
+                            <dt class="text-xs text-muted-foreground">Comebacks</dt>
+                            <dd class="text-sm font-semibold"><span class="n">{{ point_h2h_player2.comebacks }}</span></dd>
+                        </div>
+                    </dl>
+                </div>
+            </div>
+
+            {% if not point_h2h_confident %}
+            <p class="mt-4 flex items-center gap-1 text-xs font-semibold text-muted-foreground">
+                {% icon "info" size="sm" %}
+                Small sample &mdash; under {{ point_min_sample }} served points each.
+            </p>
+            {% endif %}
+        </div>
+
+        {% endif %}
 
         <!-- Point Difference Chart -->
         <div class="rounded-lg border bg-card p-4 md:p-6">

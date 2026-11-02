@@ -8,12 +8,16 @@ from django.conf import settings
 from django.contrib.auth.models import User
 from django.core.management.base import BaseCommand, CommandError
 
-from pingpong import live_scoring as ls, services
-from pingpong.models import Club, ClubInvite, ClubMembership, ClubRole, Match, Player
+from pingpong import live_scoring as ls, point_rollups, services
+from pingpong.models import (
+    Club, ClubInvite, ClubMembership, ClubRole, Game, Match, MatchConfirmation,
+    Player,
+)
 
 E2E_USERNAME = "e2e"
 E2E_PASSWORD = "e2e-local-only"
 E2E_OPPONENT = "e2e-opponent"
+E2E_MOMENTUM_OPPONENT = "e2e-momentum"
 
 
 class Command(BaseCommand):
@@ -57,6 +61,8 @@ class Command(BaseCommand):
         )
         services.set_match_sides(match, [player], [opponent])
 
+        momentum_match = self._seed_completed_live_match(player)
+
         # A club, so the invite specs have something to point at. Idempotent
         # like everything else here: the suite re-seeds before every run.
         club, _ = Club.objects.get_or_create(
@@ -65,7 +71,12 @@ class Command(BaseCommand):
         ClubMembership.objects.get_or_create(
             club=club, user=user, defaults={"role": ClubRole.OWNER}
         )
-        Player.objects.filter(pk__in=[player.pk, opponent.pk]).update(club=club)
+        Player.objects.filter(
+            pk__in=[player.pk, opponent.pk, momentum_match.opponent_pk]
+        ).update(club=club)
+        Match.all_objects.filter(
+            pk__in=[match.pk, momentum_match.pk]
+        ).update(club=club)
 
         # A second club, so the switcher actually has something to switch
         # between. A single-club user sees no switcher by design, which would
@@ -89,7 +100,98 @@ class Command(BaseCommand):
         self.stdout.write(f"E2E_USERNAME={E2E_USERNAME}")
         self.stdout.write(f"E2E_PASSWORD={E2E_PASSWORD}")
         self.stdout.write(f"E2E_MATCH_PK={match.pk}")
+        self.stdout.write(f"E2E_MOMENTUM_MATCH_PK={momentum_match.pk}")
         self.stdout.write(f"E2E_INVITE_TOKEN={live_invite.token}")
         self.stdout.write(f"E2E_REVOKED_INVITE_TOKEN={dead_invite.token}")
         self.stdout.write(f"E2E_CLUB={club.name}")
         self.stdout.write(f"E2E_CLUB_TWO={second.name}")
+
+    def _seed_completed_live_match(self, player):
+        """A FINISHED live-scored match, so the momentum specs have a chart.
+
+        Driven through `live_scoring` and the app's own
+        `views._record_point_event`, deliberately: a hand-written fixture of
+        PointEvent rows would let the seed and the write path disagree, and
+        the specs would then be asserting against a log the app cannot
+        actually produce.
+
+        The scoreline is chosen to exercise all three shapes on one page: a
+        comeback from 5-9 down, a shutout, and a deuce game.
+        """
+        from pingpong.views import _record_point_event
+
+        opponent_user, _ = User.objects.get_or_create(
+            username=E2E_MOMENTUM_OPPONENT,
+            defaults={"email": "e2e-momentum@example.test"},
+        )
+        opponent_user.profile.email_verified = True
+        opponent_user.profile.save()
+        opponent, _ = Player.objects.get_or_create(name="E2E Momentum")
+        opponent.user = opponent_user
+        opponent.save()
+
+        # Idempotent, like everything else here.
+        Match.all_objects.filter(
+            participants__player=opponent
+        ).distinct().delete()
+
+        match = Match.all_objects.create(
+            best_of=3,
+            is_live=True,
+            scorekeeper=player,
+            live_state=ls.set_initial_server(ls.initial_state(3), "team1"),
+        )
+        services.set_match_sides(match, [player], [opponent])
+
+        script = (
+            (["team1", "team2"] * 5) + ["team2"] * 4 + ["team1"] * 6  # 11-9
+            + ["team2"] * 11                                          # 0-11
+            + (["team1", "team2"] * 10) + ["team1"] * 2               # 12-10
+        )
+        for side in script:
+            state_before = match.live_state
+            new_state, completed = ls.apply_point(state_before, side)
+            _record_point_event(
+                match,
+                state_before=state_before,
+                side=side,
+                completed=completed,
+                new_state=new_state,
+            )
+            if completed is None:
+                match.live_state = new_state
+                continue
+
+            if ls.is_match_complete(new_state):
+                # Same order as LivePointView: is_live off before the final
+                # Game row, so the normal winner/Elo pipeline runs.
+                Match.all_objects.filter(pk=match.pk).update(
+                    is_live=False, live_state=None
+                )
+                match.is_live = False
+                match.live_state = None
+            else:
+                match.live_state = new_state
+
+            Game.objects.create(
+                match=match,
+                game_number=completed["game_number"],
+                team1_score=completed["team1_score"],
+                team2_score=completed["team2_score"],
+            )
+
+        match.refresh_from_db()
+
+        # Both sides confirm, so the match reaches the confirmed set the
+        # head-to-head page works from. Without this the S2.7 comparison would
+        # correctly render nothing and its spec would pass for the wrong
+        # reason.
+        for participant in match.participants.select_related("player"):
+            MatchConfirmation.objects.get_or_create(
+                match=match, player=participant.player
+            )
+        match.refresh_from_db()
+
+        point_rollups.rebuild_match_summaries(match)
+        match.opponent_pk = opponent.pk
+        return match

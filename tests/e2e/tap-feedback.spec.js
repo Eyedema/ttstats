@@ -82,6 +82,12 @@ test('the bar does not arm for links that never leave the page', async ({ page }
     a.href = '#somewhere';
     a.id = 'in-page-link';
     a.textContent = 'jump';
+    // Pinned to the top of the viewport rather than appended at the end of a
+    // page whose length depends on how much data the fixture happens to hold:
+    // at the bottom it lands under the fixed tab bar, which intercepts the
+    // pointer event, and the spec then fails with a 30s timeout that looks
+    // like an app hang rather than a placement problem.
+    a.style.cssText = 'position:fixed;top:0;left:0;z-index:9999';
     document.body.appendChild(a);
   });
   await page.click('#in-page-link');

@@ -89,7 +89,53 @@ async function waitForDrawerSettled(page) {
     .toBe(0);
 }
 
+/** Open the seeded completed live-scored match ("E2E Momentum").
+ *
+ *  The match list links to a match by icon only, so there is no accessible
+ *  name to match on -- `getByRole('link', {name: /E2E Momentum/})` finds the
+ *  PLAYER link and lands on player detail, where every later assertion then
+ *  fails for the wrong reason. Read the row's href instead, which also works
+ *  at a viewport where the table is laid out differently.
+ */
+async function openMomentumMatch(page) {
+  await page.goto('/pingpong/matches/');
+  const row = page.locator('tr').filter({ hasText: 'E2E Momentum' }).first();
+  const href = await row
+    .locator('a[href^="/pingpong/matches/"]:not([href*="edit"])')
+    .first()
+    .getAttribute('href');
+  if (!href) throw new Error('No seeded momentum match in the match list');
+  await page.goto(href);
+  return href;
+}
+
+/** Open a player's detail page by name.
+ *
+ *  Same trap as the match list: a player's name appears in several places, and
+ *  some of the matching nodes are hidden (the desktop table at phone width),
+ *  so `.tap()` on a locator that resolves to one of them just times out. Read
+ *  the href and navigate.
+ */
+async function openPlayerByName(page, name) {
+  await page.goto('/pingpong/players/');
+  // The name is not inside the anchor -- it sits in a sibling cell of the
+  // same row -- so filtering the anchors themselves by text finds nothing.
+  // Scope to the row that mentions the player, then take its detail link.
+  const href = await page
+    .locator('tr')
+    .filter({ hasText: name })
+    .first()
+    .locator('a[href^="/pingpong/players/"]:not([href*="edit"])')
+    .first()
+    .getAttribute('href');
+  if (!href) throw new Error('No player named ' + name + ' in the player list');
+  await page.goto(href);
+  return href;
+}
+
 module.exports = {
+  openMomentumMatch,
+  openPlayerByName,
   PROD_CSP,
   applyProdCSP,
   waitForDrawerSettled,

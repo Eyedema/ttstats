@@ -14,7 +14,7 @@ from django.core.exceptions import PermissionDenied
 from django.core.mail import send_mail
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db import transaction
-from django.db.models import Count, F, Prefetch, Q, Sum
+from django.db.models import Count, F, Max, Prefetch, Q, Sum
 from django.http import Http404, HttpResponse, JsonResponse
 from django.urls import reverse
 from django.views.decorators.http import require_POST
@@ -37,7 +37,7 @@ from django_ratelimit.exceptions import Ratelimited
 
 logger = logging.getLogger(__name__)
 
-from . import live_scoring, notifications, push
+from . import live_scoring, notifications, player_hues, point_rollups, point_stats, push
 from .forms import GameForm, MatchEditForm, MatchForm, PlayerRegistrationForm, ScheduledMatchForm, MatchConvertForm, \
     ChampionshipCreateForm, ChampionshipEditForm, ScheduledMatchEditForm
 from .achievements import get_achievement_progress
@@ -49,7 +49,7 @@ from .elo import (
 )
 from . import cache_utils
 from .managers import scope_to_active_club
-from .models import Game, Location, Match, MatchParticipant, Player, UserProfile, MatchConfirmation, ScheduledMatch, ScheduledMatchParticipant, Side, Championship, Club, ClubInvite, ClubMembership, ClubRole, EloHistory, format_side_label, NotificationKind, NotificationPreference, PushSubscription
+from .models import Game, Location, Match, MatchParticipant, PointEvent, Player, UserProfile, MatchConfirmation, ScheduledMatch, ScheduledMatchParticipant, Side, Championship, Club, ClubInvite, ClubMembership, ClubRole, EloHistory, format_side_label, NotificationKind, NotificationPreference, PushSubscription
 from .emails import send_scheduled_match_email, send_passkey_deleted_email
 from .services import set_match_sides, set_scheduled_match_sides
 
@@ -272,6 +272,7 @@ class MatchDetailView(LoginRequiredMixin, DetailView):
 
         context.update(self._elo_deltas(match, context))
         context.update(self._viewer_context(match))
+        context.update(self._point_context(match))
         game_rows = self._game_rows(match)
         context['game_rows'] = game_rows
         context['long_games_note'] = self._long_games_note(game_rows)
@@ -334,6 +335,103 @@ class MatchDetailView(LoginRequiredMixin, DetailView):
                 side is not None and match.winner_side is not None and not has_confirmed
             ),
             'viewer_has_confirmed': has_confirmed,
+        }
+
+    @staticmethod
+    def _point_context(match):
+        """The momentum chart and run timeline, for a live-scored match only.
+
+        Computed here rather than in a fourth duplicated template branch --
+        the old template asked where the viewer stood in four places and they
+        came to disagree, which is what `_viewer_context` exists to prevent.
+
+        **Absent, not empty, when there is no point log.** Most matches in the
+        database were typed in as scorelines and always will be; a "no data"
+        box on every one of them would occupy space to say nothing. The
+        template gates the whole section on `has_point_data`.
+
+        One query. This reads the raw log rather than the S2.4 rollups on
+        purpose: the chart needs the per-point progression, which a rollup
+        deliberately does not store -- rollups exist so that *career* figures
+        never scan raw rows, and one match's log is ~60-100 of them.
+        """
+        stats = point_rollups.match_stats(match)
+        if not stats.has_data:
+            return {"has_point_data": False}
+
+        side1, side2 = match.sides()
+        # The raw hue value, which is what player_hues.hue_hex exists for:
+        # Chart.js resolves a CSS custom property to black, so a chart is one
+        # of the few places allowed a literal colour. It is still the player's
+        # own permanent hue, not a chart palette, so the two series are the
+        # two people -- and hues are byte-identical in both themes.
+        colours = [
+            player_hues.hue_hex(side1[0].pk if side1 else None),
+            player_hues.hue_hex(side2[0].pk if side2 else None),
+        ]
+        # Two players who happen to land on the same palette slot would draw
+        # two indistinguishable lines. Nudge the second one along rather than
+        # letting the chart lie about whose run it was.
+        if colours[0] == colours[1]:
+            fallback = (side2[0].pk if side2 else 0) or 0
+            colours[1] = player_hues.hue_hex(fallback + 1)
+
+        games = []
+        for game in stats.games:
+            games.append({
+                "game_number": game.game_number,
+                "labels": list(range(len(game.progression))),
+                "side1": [score[0] for score in game.progression],
+                "side2": [score[1] for score in game.progression],
+                "complete": game.complete,
+            })
+
+        # Resolved ONCE from the memoized sides(). `match.side_label()` goes
+        # through `players_on()`, which is a fresh queryset every call -- two
+        # per game here, so a five-game match would have added ten queries to
+        # the page for two strings.
+        side_labels = {
+            int(Side.ONE): format_side_label(side1) or "Side 1",
+            int(Side.TWO): format_side_label(side2) or "Side 2",
+        }
+
+        timeline = []
+        for game in stats.games:
+            winner_label = (
+                side_labels.get(game.winner_side) if game.winner_side else None
+            )
+            timeline.append({
+                "game_number": game.game_number,
+                "score": f"{game.team1_score}\u2013{game.team2_score}",
+                "complete": game.complete,
+                "winner_label": winner_label,
+                "lead_changes": game.lead_changes,
+                "deficit_overcome": game.deficit_overcome,
+                # The comeback stated in words as well as drawn, because a
+                # line going up does not say how far back it started.
+                "comeback_note": (
+                    f"{winner_label} came back from {game.deficit_overcome} "
+                    f"point{'s' if game.deficit_overcome != 1 else ''} down"
+                    if game.is_comeback and winner_label
+                    else None
+                ),
+                "longest_run": max(game.longest_run.values()) if game.longest_run else 0,
+                "longest_run_label": (
+                    side_labels.get(max(game.longest_run, key=game.longest_run.get))
+                    if game.longest_run and max(game.longest_run.values()) > 1
+                    else None
+                ),
+            })
+
+        return {
+            "has_point_data": True,
+            "point_chart_data": {
+                "games": games,
+                "colours": colours,
+                "labels": [side_labels[int(Side.ONE)], side_labels[int(Side.TWO)]],
+            },
+            "point_timeline": timeline,
+            "point_total": stats.total_points,
         }
 
     @staticmethod
@@ -486,6 +584,8 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
         # Achievement data
         achievement_progress = get_achievement_progress(player)
 
+        context.update(self._point_stats_context(player))
+
         context.update({
             'matches': confirmed_matches_page.object_list,
             'page_obj': confirmed_matches_page,
@@ -497,6 +597,39 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
         })
 
         return context
+
+    @staticmethod
+    def _point_stats_context(player):
+        """The player's career point-level record (KAN-32 / S2.6).
+
+        Reads the S2.4 rollups, never the raw point rows: one aggregate query
+        on a cache miss and none on a hit, against tens of thousands of point
+        rows for the naive version.
+
+        **Absent when the player has never been scored live**, which is most
+        players today. A section of zeroes is worse than no section: it invites
+        the reader to conclude something about a player it knows nothing about.
+
+        Every rate is shown with the counts it came from, so the number can be
+        verified rather than trusted -- and a rate off too small a sample is
+        marked, not hidden (see point_stats.MIN_SAMPLE_POINTS).
+        """
+        stats = point_rollups.player_point_stats(player)
+        if not stats.has_sample:
+            return {"has_point_stats": False}
+
+        return {
+            "has_point_stats": True,
+            "point_stats": stats,
+            "point_serve_confident": stats.serve.is_confident(),
+            "point_receive_confident": stats.receive.is_confident(),
+            "point_deuce_confident": stats.deuce.is_confident(
+                point_stats.MIN_SAMPLE_GAMES
+            ),
+            "point_min_sample": point_stats.MIN_SAMPLE_POINTS,
+            "point_min_sample_games": point_stats.MIN_SAMPLE_GAMES,
+            "point_comeback_deficit": point_stats.COMEBACK_DEFICIT,
+        }
 
     def _calculate_streaks(self, matches):
         current_streak = streak_type = 0
@@ -1366,6 +1499,13 @@ class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
 
             if cached_h2h is not None:
                 context.update(cached_h2h)
+                # Deliberately NOT part of the cached blob: the point fold has
+                # its own key and its own invalidation (cache_utils), so
+                # folding it in here would give one figure two TTLs and two
+                # ways to go stale.
+                context.update(
+                    self._point_comparison(player1, player2, cached_h2h.get("matches"))
+                )
                 return context
 
             # Check if any 2v2 matches exist between these players
@@ -1598,6 +1738,9 @@ class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
                 # Cache for 30 minutes
                 cache.set(h2h_cache_key, h2h_data, 1800)
                 context.update(h2h_data)
+                context.update(
+                    self._point_comparison(player1, player2, h2h_data["matches"])
+                )
             else:
                 p1_pct = round(calculate_expected_score(player1.elo_rating, player2.elo_rating) * 100)
                 h2h_data = {
@@ -1610,8 +1753,53 @@ class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
                 }
                 cache.set(h2h_cache_key, h2h_data, 1800)
                 context.update(h2h_data)
+                context.update(self._point_comparison(player1, player2, []))
 
         return context
+
+    @staticmethod
+    def _point_comparison(player1, player2, shared_matches):
+        """Both players' point records over the matches they shared (S2.7).
+
+        **Restricted at the query level, never by subtracting a career.**
+        Folding each player's whole history and taking a difference would put
+        their global rate into a comparison whose entire purpose is to say how
+        they do against *this* opponent -- the one number this screen exists
+        to deny. `point_rollups.head_to_head_point_stats` filters on
+        `match_id__in`.
+
+        The match set is the one the rest of the page already uses (confirmed
+        singles between the two), so the two halves of the screen cannot
+        describe different sets of matches.
+
+        Absent when they have no shared live-scored matches: the existing
+        head-to-head content is then unchanged.
+        """
+        # A player compared with themselves would render two identical
+        # columns, which says nothing and reads as a bug. The rest of this
+        # page has the same quirk and is left as it is -- widening the fix is
+        # not this ticket -- but a new section need not repeat it.
+        if player1.pk == player2.pk:
+            return {"has_point_comparison": False}
+
+        match_ids = [m.pk for m in (shared_matches or [])]
+        if not match_ids:
+            return {"has_point_comparison": False}
+
+        stats = point_rollups.head_to_head_point_stats(player1, player2, match_ids)
+        one, two = stats[player1.pk], stats[player2.pk]
+        if not one.has_sample and not two.has_sample:
+            return {"has_point_comparison": False}
+
+        return {
+            "has_point_comparison": True,
+            "point_h2h_player1": one,
+            "point_h2h_player2": two,
+            "point_h2h_confident": (
+                one.serve.is_confident() and two.serve.is_confident()
+            ),
+            "point_min_sample": point_stats.MIN_SAMPLE_POINTS,
+        }
 
 
 @method_decorator(
@@ -2792,6 +2980,59 @@ def _scoreboard_payload(match: Match, *, redirect_url: str | None = None) -> dic
     }
 
 
+def _record_point_event(match, *, state_before, side, completed, new_state):
+    """Persist one ``PointEvent`` for a point the server has just applied.
+
+    Called from inside ``LivePointView``'s transaction, with the match row
+    already locked, so sequence allocation is serialised: two taps arriving
+    while an earlier request is still in flight are applied -- and numbered --
+    in the order the server took them.
+
+    **Scoring wins over recording.** The write runs in its own savepoint and
+    swallows everything: a point that reached the server must count on the
+    scoreboard even if its history row cannot be stored. The savepoint is what
+    makes that true on Postgres, where an error inside an atomic block poisons
+    the whole transaction and would otherwise take the point down with it. A
+    dropped row leaves a gap, which the fidelity harness is built to notice.
+
+    ``state_before`` is passed in because the serving side must be read from
+    the state *before* the point: afterwards ``current_server()`` names whoever
+    serves next, and that mistake is invisible in the stored data.
+    """
+    try:
+        with transaction.atomic():
+            serving = live_scoring.current_server(state_before)
+            if completed is not None:
+                # live_state has already reset the in-progress score to 0-0,
+                # so the score after this point is the completed game's final.
+                team1_score = completed["team1_score"]
+                team2_score = completed["team2_score"]
+            else:
+                team1_score = new_state["team1_points"]
+                team2_score = new_state["team2_points"]
+
+            next_sequence = (
+                PointEvent.objects.filter(match=match).aggregate(
+                    last=Max("sequence")
+                )["last"] or 0
+            ) + 1
+
+            PointEvent.objects.create(
+                match=match,
+                game_number=state_before["current_game_number"],
+                scoring_side=Side.from_live(side),
+                serving_side=Side.from_live(serving),
+                team1_score=team1_score,
+                team2_score=team2_score,
+                sequence=next_sequence,
+            )
+    except Exception:
+        logger.exception(
+            "Failed to persist PointEvent for match %s; the point still counts",
+            match.pk,
+        )
+
+
 class LiveScoreboardView(LoginRequiredMixin, View):
     """Render the scoreboard page (KAN-27 fills in the template)."""
 
@@ -2897,10 +3138,22 @@ class LivePointView(LoginRequiredMixin, View):
             if not match.live_state or not match.live_state.get("started"):
                 return JsonResponse({"error": "Match has not started — pick an initial server"}, status=409)
 
+            # Captured before apply_point: current_server() on the new state
+            # names who serves *next*, not who served this point.
+            state_before = match.live_state
+
             try:
                 new_state, completed = live_scoring.apply_point(match.live_state, side)
             except ValueError as exc:
                 return JsonResponse({"error": str(exc)}, status=409)
+
+            _record_point_event(
+                match,
+                state_before=state_before,
+                side=side,
+                completed=completed,
+                new_state=new_state,
+            )
 
             redirect_url = None
 
@@ -2938,6 +3191,27 @@ class LivePointView(LoginRequiredMixin, View):
                     team1_score=completed["team1_score"],
                     team2_score=completed["team2_score"],
                 )
+
+                if match_complete:
+                    # Roll the point log up now, inside the same transaction,
+                    # so the summary and the games it describes commit
+                    # together. This is the ONLY moment a match's log stops
+                    # changing on its own, so it is the natural write point --
+                    # and doing it here rather than in a post_save receiver
+                    # keeps it out of the completion pipeline the epic
+                    # measured down to 39 queries. Non-fatal for the same
+                    # reason the point write is: a missing rollup is
+                    # rebuildable from the raw log by
+                    # `manage.py rebuild_point_rollups`, a lost match is not.
+                    try:
+                        with transaction.atomic():
+                            point_rollups.rebuild_match_summaries(match)
+                    except Exception:
+                        logger.exception(
+                            "Failed to roll up point stats for match %s; "
+                            "rebuild with manage.py rebuild_point_rollups",
+                            match.pk,
+                        )
 
         return JsonResponse(_scoreboard_payload(match, redirect_url=redirect_url))
 
@@ -3006,7 +3280,33 @@ class LiveUndoView(LoginRequiredMixin, View):
             if not match.is_live or not match.live_state:
                 return JsonResponse({"error": "Match is not live"}, status=409)
 
+            # Whether there was anything to undo at all. undo_last_point() is a
+            # no-op on an empty log and returns the state unchanged, and the
+            # persisted row must not be dropped in that case -- live_state's
+            # event list is capped at MAX_EVENTS, so on a long match it can run
+            # out while the persisted log still holds every earlier point.
+            had_events = bool((match.live_state or {}).get("events"))
+
             new_state, undone_game = live_scoring.undo_last_point(match.live_state)
+
+            if had_events:
+                # Delete the row; never append a compensating "undone" event.
+                # A tombstone would mean every aggregation query has to filter
+                # it out, and the first one that forgets double-counts -- with
+                # no error and nothing to notice by inspection. Deleting the
+                # trailing row also keeps `sequence` gapless, which is what
+                # makes "no gaps" usable as an integrity check.
+                #
+                # Unlike the write path, this is NOT best-effort. A failed undo
+                # rolls back and the scorekeeper taps again; a log that keeps a
+                # point the umpire retracted is silently wrong forever.
+                trailing = (
+                    PointEvent.objects.filter(match=match)
+                    .order_by("-sequence")
+                    .first()
+                )
+                if trailing is not None:
+                    trailing.delete()
 
             if undone_game is not None:
                 # Drop the trailing Game row. Use all_objects to bypass the
@@ -3018,6 +3318,14 @@ class LiveUndoView(LoginRequiredMixin, View):
 
             Match.all_objects.filter(pk=match.pk).update(live_state=new_state)
             match.live_state = new_state
+
+            if had_events:
+                # A match cannot normally be undone after it completes (the
+                # guard above returns 409), so there is usually no rollup yet.
+                # The check is one indexed existence query and it is what makes
+                # a rebuilt-then-corrected match self-heal rather than keeping
+                # a summary of a log that no longer says that.
+                point_rollups.invalidate_for_match(match)
 
         return JsonResponse(_scoreboard_payload(match))
 

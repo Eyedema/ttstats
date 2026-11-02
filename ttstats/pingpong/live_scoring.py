@@ -181,7 +181,9 @@ def apply_point(state: dict, side: Side, *, now: str | None = None) -> tuple[dic
     complete, (b) persisting the completed Game row if returned, (c) saving
     the new state.
     """
-    if not state.get("started"):
+    # Both, not just "started": a point with no initial_server has no server
+    # to attribute, and current_server() would hand the point log a null.
+    if not state.get("started") or state.get("initial_server") is None:
         raise ValueError("Match has not started — initial_server not set")
     if is_match_complete(state):
         raise ValueError("Match is already complete")

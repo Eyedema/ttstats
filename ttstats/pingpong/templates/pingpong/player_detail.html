@@ -255,6 +255,112 @@
     </div>
     {% endif %}
 
+    {% comment %}
+    Point-level record (KAN-32 / S2.6).
+
+    Absent entirely for a player who has never been scored live -- a panel of
+    zeroes invites the reader to conclude something about a player it knows
+    nothing about.
+
+    **Every rate carries the counts it was computed from**, so the number can
+    be checked rather than trusted; that is also what makes "71% serving" a
+    thing worth arguing about rather than a thing to squint at. A rate drawn
+    from too small a sample is MARKED, not withheld: withholding gives no
+    feedback and reads as a bug, and the counts would be on screen regardless.
+
+    The caveat is a word plus a glyph, never colour alone.
+    {% endcomment %}
+    {% if has_point_stats %}
+    <div class="rounded-lg border bg-card">
+        <div class="p-4 md:p-6 border-b">
+            <h3 class="text-lg md:text-xl font-semibold flex items-center gap-2">
+                {% icon "target" css="w-5 h-5" %}
+                Serving &amp; receiving
+            </h3>
+            <p class="mt-1 text-xs text-muted-foreground">
+                From matches scored point by point on the live scoreboard.
+            </p>
+        </div>
+        <div class="p-4 md:p-6">
+            <div class="grid grid-cols-2 gap-4 md:gap-6">
+                <div>
+                    <span class="label-cap">Serving</span>
+                    <p class="text-display mt-1">
+                        <span class="n">{{ point_stats.serve.percent|floatformat:0 }}</span>%
+                    </p>
+                    <p class="mt-1 text-xs font-semibold text-muted-foreground">
+                        <span class="n">{{ point_stats.serve.won }}</span> of
+                        <span class="n">{{ point_stats.serve.total }}</span> points served
+                    </p>
+                    {% if not point_serve_confident %}
+                    <p class="mt-1 flex items-center gap-1 text-xs font-semibold text-muted-foreground">
+                        {% icon "info" size="sm" %}
+                        Small sample &mdash; under {{ point_min_sample }} points
+                    </p>
+                    {% endif %}
+                </div>
+                <div>
+                    <span class="label-cap">Receiving</span>
+                    <p class="text-display mt-1">
+                        <span class="n">{{ point_stats.receive.percent|floatformat:0 }}</span>%
+                    </p>
+                    <p class="mt-1 text-xs font-semibold text-muted-foreground">
+                        <span class="n">{{ point_stats.receive.won }}</span> of
+                        <span class="n">{{ point_stats.receive.total }}</span> points received
+                    </p>
+                    {% if not point_receive_confident %}
+                    <p class="mt-1 flex items-center gap-1 text-xs font-semibold text-muted-foreground">
+                        {% icon "info" size="sm" %}
+                        Small sample &mdash; under {{ point_min_sample }} points
+                    </p>
+                    {% endif %}
+                </div>
+            </div>
+
+            <div class="mt-6 grid grid-cols-2 gap-4 md:gap-6 border-t pt-4">
+                <div>
+                    <span class="label-cap">Deuce games</span>
+                    <p class="mt-1 text-lg font-semibold">
+                        <span class="n">{{ point_stats.deuce.won }}</span>
+                        <span class="text-muted-foreground">of</span>
+                        <span class="n">{{ point_stats.deuce.total }}</span>
+                        <span class="text-muted-foreground">won</span>
+                    </p>
+                    {% if point_stats.deuce.total and not point_deuce_confident %}
+                    <p class="mt-1 flex items-center gap-1 text-xs font-semibold text-muted-foreground">
+                        {% icon "info" size="sm" %}
+                        Small sample &mdash; under {{ point_min_sample_games }} games
+                    </p>
+                    {% endif %}
+                </div>
+                <div>
+                    <span class="label-cap">Comebacks</span>
+                    <p class="mt-1 text-lg font-semibold">
+                        <span class="n">{{ point_stats.comebacks }}</span>
+                        <span class="text-muted-foreground">
+                            game{{ point_stats.comebacks|pluralize }} won from
+                            {{ point_comeback_deficit }}+ down
+                        </span>
+                    </p>
+                    {% if point_stats.largest_deficit_overcome %}
+                    <p class="mt-1 flex items-center gap-1 text-xs font-semibold text-muted-foreground">
+                        {% icon "trending-up" size="sm" %}
+                        Best: back from <span class="n">{{ point_stats.largest_deficit_overcome }}</span> down
+                    </p>
+                    {% endif %}
+                </div>
+            </div>
+
+            <p class="mt-4 flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
+                {% icon "flame" size="sm" %}
+                Longest run: <span class="n">{{ point_stats.longest_run }}</span>
+                point{{ point_stats.longest_run|pluralize }} in a row
+                &middot; <span class="n">{{ point_stats.points.total }}</span> points recorded
+            </p>
+        </div>
+    </div>
+    {% endif %}
+
     <!-- Achievements -->
     {% if achievement_progress %}
     <div class="rounded-lg border bg-card">

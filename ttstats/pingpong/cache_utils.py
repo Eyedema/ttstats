@@ -57,6 +57,22 @@ def leaderboard_generation_key(club=None):
     return f"{prefix}leaderboard_generation" if prefix else "leaderboard_generation"
 
 
+def player_point_stats_key(player):
+    """A player's folded point-level record (KAN-30).
+
+    Namespaced by the player's OWN club, not the viewer's -- these numbers
+    summarise that player, so keying on the viewer would mean one entry per
+    viewer and a hit rate near zero. Same rule as `player_stats_*` above.
+    """
+    return f'{club_prefix(player.club)}player_point_stats_{player.pk}'
+
+
+def h2h_point_stats_key(player1, player2):
+    """The point-level head-to-head fold for a pair, order-independent."""
+    low, high = sorted([player1.pk, player2.pk])
+    return f'{club_prefix(player1.club)}h2h_point_stats_{low}_{high}'
+
+
 def invalidate_match_caches(match):
     """
     Invalidate all caches related to a match.
@@ -73,6 +89,7 @@ def invalidate_match_caches(match):
         keys_to_delete.append(f'{prefix}player_stats_{player.pk}')
         keys_to_delete.append(f'{prefix}pending_matches_{player.pk}')
         keys_to_delete.append(f'{prefix}player_rank_{player.pk}')
+        keys_to_delete.append(player_point_stats_key(player))
 
     # Invalidate head-to-head cache (singles only)
     if len(side1) == 1 and len(side2) == 1:
@@ -81,6 +98,7 @@ def invalidate_match_caches(match):
         keys_to_delete.append(
             f'{prefix}h2h_{min(p1.pk, p2.pk)}_{max(p1.pk, p2.pk)}'
         )
+        keys_to_delete.append(h2h_point_stats_key(p1, p2))
 
     # Invalidate the club-wide dashboard caches.
     for club in _clubs_touched_by(match, side1 + side2):
@@ -124,6 +142,7 @@ def invalidate_player_caches(player):
         f'{prefix}pending_matches_{player.pk}',
         f'{prefix}player_rank_{player.pk}',
         f'{prefix}dashboard_total_players',
+        player_point_stats_key(player),
     ]
 
     invalidate_leaderboard(club=player.club)

@@ -1008,6 +1008,120 @@ class TestHeadToHeadStatsView:
 
 
 # ===========================================================================
+# HeadToHeadStatsView -- point-level comparison (KAN-33 / S2.7)
+# ===========================================================================
+
+@pytest.mark.django_db
+class TestHeadToHeadPointComparison:
+    """Extends the required head-to-head integration flow rather than
+    starting a separate file, per the ticket."""
+
+    def _shared_live_match(self, auth_client):
+        from .test_point_rollups import play_a_full_match
+
+        match, p1, p2 = play_a_full_match(auth_client)
+        confirm_match(match)
+        match.refresh_from_db()
+        return match, p1, p2
+
+    def test_two_players_with_shared_live_matches_get_the_comparison(self, auth_client):
+        match, p1, p2 = self._shared_live_match(auth_client)
+
+        resp = _login_client(p1.user).get(
+            reverse("pingpong:head_to_head"), {"player1": p1.pk, "player2": p2.pk}
+        )
+
+        assert resp.status_code == 200
+        assert resp.context["has_point_comparison"] is True
+        assert resp.context["point_h2h_player1"].serve.total > 0
+        assert resp.context["point_h2h_player2"].serve.total > 0
+        body = resp.content.decode()
+        assert "Serving &amp; receiving, head to head" in body
+
+    def test_players_with_no_shared_live_matches_see_nothing_new(self, auth_client):
+        u, p1 = _verified_user_with_player()
+        p2 = PlayerFactory(with_user=True)
+        m = MatchFactory(player1=p1, player2=p2)
+        for n, (a, b) in enumerate([(11, 5), (11, 9), (11, 7)], start=1):
+            GameFactory(match=m, game_number=n, team1_score=a, team2_score=b)
+        m.refresh_from_db()
+        confirm_match(m)
+
+        resp = _login_client(u).get(
+            reverse("pingpong:head_to_head"), {"player1": p1.pk, "player2": p2.pk}
+        )
+
+        # The existing head-to-head content is unchanged...
+        assert resp.context["has_data"] is True
+        assert resp.context["total_matches"] == 1
+        # ...and the point section is simply absent.
+        assert resp.context["has_point_comparison"] is False
+        assert "Serving &amp; receiving, head to head" not in resp.content.decode()
+
+    def test_a_global_rate_never_leaks_into_the_comparison(self, auth_client):
+        """The one number this screen exists to deny."""
+        from pingpong import point_rollups, services
+        from pingpong.models import MatchPointSummary
+        from .test_scoreboard import _point, _started_live_match
+
+        shared, p1, p2 = self._shared_live_match(auth_client)
+
+        # p1 also plays a third player, a lot.
+        other, client, _, _ = _started_live_match(auth_client, best_of=3)
+        Match.all_objects.filter(pk=other.pk).update(club=p1.club)
+        services.set_match_sides(other, [p1], list(other.side2_players))
+        for _ in range(22):
+            _point(client, other, "team1")
+
+        career = point_rollups.player_point_stats(p1)
+        resp = _login_client(p1.user).get(
+            reverse("pingpong:head_to_head"), {"player1": p1.pk, "player2": p2.pk}
+        )
+
+        shared_only = resp.context["point_h2h_player1"]
+        assert career.points.total > shared_only.points.total
+        assert shared_only.points.total == (
+            MatchPointSummary.objects.get(match=shared, player=p1).points_total
+        )
+
+    def test_the_comparison_is_absent_when_a_player_is_compared_with_themselves(
+        self, auth_client
+    ):
+        match, p1, _ = self._shared_live_match(auth_client)
+
+        resp = _login_client(p1.user).get(
+            reverse("pingpong:head_to_head"), {"player1": p1.pk, "player2": p1.pk}
+        )
+
+        assert resp.status_code == 200
+        assert resp.context.get("has_point_comparison") is False
+
+    def test_the_query_count_does_not_regress(self, auth_client):
+        from django.core.cache import cache
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        match, p1, p2 = self._shared_live_match(auth_client)
+        client = _login_client(p1.user)
+        url = reverse("pingpong:head_to_head")
+        params = {"player1": p1.pk, "player2": p2.pk}
+
+        client.get(url, params)  # warm both caches
+        with CaptureQueriesContext(connection) as ctx:
+            client.get(url, params)
+        warm = len(ctx.captured_queries)
+
+        from pingpong import cache_utils
+        cache.delete(cache_utils.h2h_point_stats_key(p1, p2))
+        with CaptureQueriesContext(connection) as ctx:
+            client.get(url, params)
+        cold_fold = len(ctx.captured_queries)
+
+        # One query per player on a miss, none once warm.
+        assert cold_fold - warm == 2
+
+
+# ===========================================================================
 # PlayerRegistrationView
 # ===========================================================================
 
