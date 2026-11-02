@@ -20,7 +20,6 @@
     "models/": "django-models",
     "templates/": "django-templates",
     "tests/": "pytest-django-patterns",
-    "tasks/": "celery-patterns",
     "forms/": "django-forms"
   },
   "skills": {
@@ -82,20 +81,6 @@
           "(?:template).*(?:tag|filter)"
         ],
         "contentPatterns": ["{% extends", "{% block", "{% include", "{% for"]
-      }
-    },
-    "celery-patterns": {
-      "description": "Celery task patterns and async processing",
-      "priority": 7,
-      "triggers": {
-        "keywords": ["celery", "task", "async", "background", "queue", "worker"],
-        "keywordPatterns": ["\\bcelery\\b", "\\btask\\b", "\\basync\\b", "\\.delay\\("],
-        "pathPatterns": ["**/tasks.py", "**/tasks/*.py", "**/celery.py"],
-        "intentPatterns": [
-          "(?:create|add).*(?:task|background)",
-          "(?:async|background).*(?:job|process)"
-        ],
-        "contentPatterns": ["@shared_task", "@celery", ".delay(", ".apply_async"]
       }
     },
     "django-models": {

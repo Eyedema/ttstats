@@ -12,52 +12,41 @@ paths:
 
 # The match-completion write path
 
-### The match-completion write path is memoized, and memos must be invalidated
+Saving the winning Game fans out through three `post_save` receivers, the Elo
+pipeline and eleven achievement checkers. Its query count must stay **flat in
+the players' match history**: `tests/test_match_save_performance.py` pins both
+a ceiling and the slope, and the slope is the one that matters.
 
-Saving the winning Game of a match fans out through three `post_save`
-receivers, the Elo pipeline and eleven achievement checkers. It measured
-**114 queries** for a two-player match and grew **+2 for every match already in
-the players' history** -- a cost that rose forever with how much they had
-played. It is now **39, and flat** (36 at 100 matches of history).
-`tests/test_match_save_performance.py` pins both the ceiling and the *slope*;
-the slope is the one that matters, because a ceiling that holds at 60 matches
-and not at 600 is not a ceiling.
+## Memos, and their invalidation contract
 
-Four things carry that, and three of them are caches with an invalidation
-contract:
-
-- **`Match.sides()`** returns both sides as lists from one query, memoized, and
-  reads the prefetch cache when `participants` is already loaded. `players_on()`
-  is still a queryset for callers that need one -- but it is another round trip
-  per call, and the pipeline asked seven times per save. **`all_players` is now a
-  list**, off the same read; every caller iterates it and none used a queryset
-  method.
+- **`Match.sides()`** returns both sides as lists from one memoized query (or
+  the `participants` prefetch). `players_on()` is still a queryset and costs a
+  round trip per call. **`all_players` is a list.**
 - **`Match._confirmation_state()`** answers verified-side-1, verified-side-2 and
-  confirmed-ids in a **single** annotated query over the participant rows, where
-  there used to be three. `match_confirmed` alone cost three queries and is read
-  about eight times per save. The `player__user__profile__email_verified` LEFT
-  JOIN yields NULL for a player with no account -- which must keep reading as
-  "not verified", or two unverified players could never confirm a match.
-- **Anything that rewrites participant or confirmation rows must invalidate.**
-  `services.set_match_sides` calls `invalidate_participant_cache()`; the
-  `MatchConfirmation` signal calls `invalidate_confirmation_state()`;
-  `refresh_from_db()` drops both. A memo that outlives the rows it describes is
-  worse than the queries it saved -- the pipeline would decide against a stale
-  picture of who still owes an answer.
+  confirmed-ids in one annotated query. The
+  `player__user__profile__email_verified` LEFT JOIN yields NULL for a player with
+  no account, which must keep reading as "not verified".
+- **Anything that rewrites participant or confirmation rows must invalidate**:
+  `services.set_match_sides` calls `invalidate_participant_cache()`, the
+  `MatchConfirmation` signal calls `invalidate_confirmation_state()`, and
+  `refresh_from_db()` drops both. A stale memo is worse than the queries saved.
 - **`Match.from_db` records the persisted `winner_side`**, so
-  `track_match_winner_change` no longer re-reads the row on every save. That was
-  also a latent bug, not just a query: the re-read went through the **scoped**
-  manager, so a match invisible to the current viewer raised `DoesNotExist` and
-  silently skipped the whole completion pipeline. `save()` updates the recorded
-  value afterwards, so a second `save()` of the same instance still reports the
-  winner as already set.
+  `track_match_winner_change` does not re-read the row (a re-read through the
+  scoped manager raises `DoesNotExist` for a match the viewer can't see and
+  skips the pipeline). `save()` updates the recorded value afterwards.
 
-**`achievements.PlayerContext` is built once per player** and handed to every
-checker. Each checker previously resolved its own inputs -- the player's whole
-history was loaded five separate times, and `check_rivalry` resolved each
-historical opponent with its own query, which was the entire linear term.
-Checkers still take `(player, match, ctx=None)` and build their own context when
-called directly, which is how the per-checker tests stayed unchanged. Two
-things there are easy to undo by accident: `match.games.count()` and
-`.order_by()` both bypass the prefetch cache and re-query -- use
-`len(match.games.all())`, and rely on `Game.Meta.ordering`.
+## Achievements
+
+- **`achievements.PlayerContext` is built once per player** and passed to every
+  checker. Checkers take `(player, match, ctx=None)` and build their own when
+  called directly.
+- `match.games.count()` and `.order_by()` bypass the prefetch cache. Use
+  `len(match.games.all())` and rely on `Game.Meta.ordering`.
+
+## Result notification
+
+- `match_state.py` holds the pure decisions: `winner_side()`,
+  `side_confirmed()`, `confirmation_complete()`, `should_auto_confirm()`.
+- **`Match.result_notified_at` makes the result push exactly-once**:
+  `notify_match_confirmed` claims the match with a conditional `.update()`.
+  Never set the field by hand.

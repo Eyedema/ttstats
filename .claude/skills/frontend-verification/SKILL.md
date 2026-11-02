@@ -41,16 +41,20 @@ Concretely, in this repo:
 ## Production sends a CSP; dev does not
 
 The single biggest blind spot, and the one that actually caused the outage.
-`prod.py` sets `script-src 'self' 'unsafe-inline'` with **no `'unsafe-eval'`**.
-Alpine 3 compiles every expression with `new Function()`, so on the live site
-all of it throws while `x-cloak` still gets stripped.
+Alpine 3 compiles every expression with `new Function()`; without
+`'unsafe-eval'` all of it throws while `x-cloak` still gets stripped.
+
+`prod.py` now sends `script-src 'self' 'unsafe-inline' 'unsafe-eval'`, so
+Alpine (including `scoreboard.html`) works in production. The e2e `PROD_CSP`
+in `helpers.js` is deliberately **stricter** -- no `'unsafe-eval'` -- so the
+plain-JS mobile drawer can never quietly regress onto an Alpine expression.
+Do not add `'unsafe-eval'` to `PROD_CSP`.
 
 Apply `applyProdCSP(page)` from `helpers.js` in any spec covering interactive
 behaviour, and keep `csp.spec.js`'s "no script is blocked by the policy" check
 green. A local pass proves nothing about production unless the header is there.
-
-`scoreboard.html` is still Alpine and does not work in production. That is a
-known, unresolved gap -- do not report it as working.
+Keep `PROD_CSP` in sync with `prod.py` when adding a directive (it carries
+`worker-src` and `manifest-src` too).
 
 ## What pytest can and cannot see
 
@@ -91,6 +95,10 @@ Supabase clone of prod, and seeds a fixture with `manage.py seed_e2e`.
 - **`iphone-reduced`** — Reduce Motion, which a great many iPhone users have
   switched on. Not an edge case.
 - **`desktop-chrome`** — the wide layout, so the sidebar path stays covered.
+- **`iphone-dark`** — dark is the palette's *base*, so the light rendering a
+  developer sees is the variant. `palette.dark.spec.js` asserts the media
+  query actually reached the page before asserting anything else.
+- **`iphone-pwa`** — the only project with service workers allowed (see below).
 
 ## Traps this suite has already hit
 
@@ -108,6 +116,20 @@ Supabase clone of prod, and seeds a fixture with `manage.py seed_e2e`.
   to `main` or to the specific component.
 - **The live match carries state between specs.** Read the current score and
   assert a delta; never assume 0-0.
+- **A live service worker disables `page.route`.** Requests from a
+  worker-controlled page skip the route table, so `abort`/`delay` rules are
+  silently ignored. `iphone-safari` sets `serviceWorkers: 'block'`; any spec
+  using `page.route` belongs in a project with workers blocked.
+- **Playwright queues evaluations behind a pending navigation.** A *delayed*
+  route makes the assertion run against the next document. To test an armed
+  in-flight state (e.g. `#nav-progress`), abort the navigation instead, as
+  `tap-feedback.spec.js` does. A synthetic-click variant must register its
+  `preventDefault` listener *after* the page's own.
+- **List rows don't put the name inside the anchor** on match and player lists,
+  so `getByRole('link', {name})` finds a hidden node and `.tap()` times out.
+  Use `openMomentumMatch` / `openPlayerByName` from `helpers.js`.
+- **Chart.js logs one `new Function()` refusal under `PROD_CSP` and draws
+  anyway.** That is expected.
 
 ## Adding a spec
 

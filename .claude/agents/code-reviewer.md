@@ -159,4 +159,3 @@ if form.is_valid():                   # Good
 - **django-models**: QuerySet optimization
 - **django-forms**: Form validation patterns
 - **pytest-django-patterns**: Factory functions, fixtures
-- **celery-patterns**: Task patterns

@@ -26,31 +26,21 @@ npm run test:e2e:ui                                # Interactive debugging
 
 # Development
 docker compose -f compose.dev.yml up --build       # Start dev environment (includes the assets watcher)
-docker compose -f compose.dev.yml exec web python manage.py migrate  # Run migrations
+docker compose -f compose.dev.yml exec web python manage.py migrate
 docker compose -f compose.dev.yml exec web python manage.py createsuperuser
 
 # Testing (always use pytest, never Django's manage.py test)
-# Can also run tests inside Docker: docker compose -f compose.dev.yml exec web python -m pytest
 cd ttstats && python -m pytest --tb=short -q          # Run all tests
-cd ttstats && python -m pytest --co -q                # List all tests
 cd ttstats && python -m pytest ttstats/pingpong/tests/test_models.py  # Single file
 cd ttstats && python -m pytest -k "TestMatch"         # Run by name pattern
-cd ttstats && python -m pytest --tb=long -x           # Stop on first failure, full traceback
-
-# Coverage (or use the helper: cd ttstats && ../scripts/run_tests.sh)
-cd ttstats && coverage run -m pytest && coverage report
-cd ttstats && coverage html
+cd ttstats && coverage run -m pytest && coverage report   # or ../scripts/run_tests.sh
 
 # Management Commands
-cd ttstats && python manage.py recalculate_elo                  # Recalculate all Elo ratings
-cd ttstats && python manage.py recalculate_elo --dry-run        # Preview Elo changes
+cd ttstats && python manage.py recalculate_elo [--dry-run]       # Recalculate all Elo ratings
 cd ttstats && python manage.py generate_vapid_keys              # Web push keypair (run once, then set in .env.prod)
-cd ttstats && python manage.py rebuild_point_rollups            # Rebuild point rollups from the raw log
-cd ttstats && python manage.py rebuild_point_rollups --check    # Compare rollups against the raw log; reports, never repairs
+cd ttstats && python manage.py rebuild_point_rollups [--check]  # Rebuild (or only verify) point rollups from the raw log
 cd ttstats && python manage.py point_storage --by-club          # Point-log row counts, growth rate, retention threshold
-cd ttstats && python manage.py cache_control --stats            # View Redis cache statistics
-cd ttstats && python manage.py cache_control --clear            # Clear all caches
-cd ttstats && python manage.py cache_control --test             # Test cache connectivity
+cd ttstats && python manage.py cache_control --stats|--clear|--test
 cd ttstats && python manage.py warm_cache                       # Pre-populate common caches
 
 # Production
@@ -63,43 +53,14 @@ docker compose -f compose.prod.yml up --build -d
 
 **This section is mandatory. Follow these rules for ALL test-related work.**
 
-### Stack & Configuration
-
-- **Framework:** pytest (configured in `pytest.ini` at project root)
-- **Factories:** factory-boy (`conftest.py` has `UserFactory`, `PlayerFactory`, `LocationFactory`, `MatchFactory`, `GameFactory`, `ScheduledMatchFactory`, `ChampionshipFactory`)
-- **Settings:** `DJANGO_SETTINGS_MODULE = ttstats.settings.test`, `pythonpath = ttstats`
-- **NEVER** use Django's `TestCase` or `manage.py test`. Always use pytest classes and functions.
-
-When adding new source code, **always create or update the corresponding test file** (convention: `test_<module>.py`).
-
-### Test Style & Conventions
-
-```python
-import pytest
-from .conftest import UserFactory, PlayerFactory, MatchFactory  # Import factories
-
-@pytest.mark.django_db
-class TestSomething:
-    def test_descriptive_name(self):
-        # ARRANGE: use factories, not raw ORM calls
-        user = UserFactory()
-        player = PlayerFactory(with_user=True)
-
-        # ACT
-        result = player.user_can_edit(user)
-
-        # ASSERT: use plain assert, not self.assertEqual
-        assert result is False
-```
-
-**Rules:**
-- Always use `@pytest.mark.django_db` on test classes (or individual functions).
-- Use factories from `conftest.py` to create test data. Never use raw `Model.objects.create()` except when testing the ORM itself.
-- Use plain `assert` statements, not `self.assertEqual` / `self.assertTrue`.
-- Group tests in classes named `Test<Subject>` (e.g., `TestMatch`, `TestGameForm`).
-- Name tests `test_<what_it_verifies>` with descriptive names.
-- Use helper functions (e.g., `_verified_user_with_player()`) for repeated setup, not `setUp` methods.
-- For view tests that render templates, every logged-in user **must** have a linked Player profile because `base.html` unconditionally renders `{% url 'pingpong:player_detail' user.player.pk %}`. Use `_staff_with_player()` for staff test users.
+- **Framework:** pytest (`pytest.ini` at project root), `DJANGO_SETTINGS_MODULE = ttstats.settings.test`, `pythonpath = ttstats`.
+- **NEVER** use Django's `TestCase` or `manage.py test`.
+- When adding source code, **always create or update the corresponding test file** (`test_<module>.py`).
+- Write the failing test first, then the code. Run the full suite before calling work done.
+- `@pytest.mark.django_db` on test classes (or functions). Group tests in `Test<Subject>` classes, plain `assert`, helper functions instead of `setUp`.
+- Create data with the `conftest.py` factories, never raw `Model.objects.create()` (except when testing the ORM itself).
+- Test each layer directly: forms with `data={}`, views with the test `Client`, managers by setting the thread-local user, middleware and context processors with `RequestFactory`, emails via `mail.outbox`.
+- Pure decision modules (`match_state.py`, `live_scoring.py`, `point_stats.py`, `championship_scheduling.py`, `player_hues.py`) have no Django imports. Test them without a DB.
 
 ### Factory Reference (`conftest.py`)
 
@@ -115,91 +76,76 @@ ScheduledMatchFactory(player1=p1, player2=p2, scheduled_date=date, scheduled_tim
 ChampionshipFactory(name="...", with_entries=[[p1], [p2]], created_by=player)  # Round-robin championship
 ```
 
-The `team1_players`/`team2_players` kwarg names are historical; they set side 1
-and side 2 participants. `ChampionshipFactory(with_participants=...)` is an alias
-for `with_entries` kept so older call sites keep reading naturally -- both take
-lists of player lists.
+`team1_players`/`team2_players` are historical names for side 1 / side 2.
+`ChampionshipFactory(with_participants=...)` is an alias for `with_entries`.
 
-Key fixtures:
-- `complete_match` - Finished singles match (3-0 side 1 wins, best of 5)
-- Helper functions: `confirm_match(match)`, `confirm_match_silent(match)`,
-  `create_match(side1_players, side2_players, **kwargs)` (for raw-ORM style tests)
+Fixtures and helpers: `complete_match` (finished singles, 3-0 side 1, best of 5),
+`confirm_match(match)`, `confirm_match_silent(match)`,
+`create_match(side1_players, side2_players, **kwargs)`.
 
 ### Known Gotchas
 
 1. **Participant-based architecture.** A match's players are `MatchParticipant(match, player, side)` rows; `side` is `Side.ONE`/`Side.TWO`. There is no Team model. Read them via `match.side1_players` / `match.side2_players` / `match.players_on(side)` / `match.all_players`, and write them via `services.set_match_sides(match, side1_players, side2_players)` -- never by touching participant rows directly. `Match.winner_side` and `Game.winner_side` are ints, not FKs; compare with `Side.ONE`. `ScheduledMatch` mirrors all of this via `ScheduledMatchParticipant`.
-2. **MatchManager filters by current user.** In view tests, `Match.objects.get(pk=...)` only returns matches the logged-in user can see. A regular user can't see matches they're not in — `get_object_or_404(Match, pk=pk)` returns 404, not 403.
-3. **Signals fire on User creation.** Every `UserFactory()` call creates a `UserProfile` with a verification token via signal. You don't need to create profiles manually.
-4. **Game.save() triggers Match.save().** Creating enough games automatically sets the match winner. Tests that check "no winner yet" must not create too many games.
-5. **Match confirmations use a junction table.** Singles require 2 confirmations (both players), doubles require 4 (all players) -- but only *verified* players count. Use `confirmed=True` in MatchFactory or the `confirm_match()` helper.
-6. **Elo updates on confirmation.** Elo ratings only change when match is fully confirmed. Use `confirm_match()` or `confirm_match_silent()` in tests to trigger Elo calculation.
-7. **Manager tests need thread-local manipulation.** Import `_thread_locals` from `ttstats.middleware` and set/clear `_thread_locals.user` directly. Use an `autouse` fixture to clean up.
-8. **base.html requires user.player.pk.** Any view test where the user has no Player profile will crash during template rendering with `NoReverseMatch`. Always create a player for the test user.
-9. **Email backend in tests.** Dev settings use `console.EmailBackend`. pytest-django's `mailoutbox` fixture or `django.core.mail.outbox` works for asserting sent emails.
-10. **LocMemCache persists between tests.** Django's LocMemCache persists across pytest tests in the same process. An autouse `_clear_cache` fixture in `conftest.py` calls `cache.clear()` before and after each test.
+2. **MatchManager filters by current user.** In view tests, `Match.objects.get(pk=...)` only returns matches the logged-in user can see. A regular user can't see matches they're not in — `get_object_or_404` returns 404, not 403.
+3. **Signals fire on User creation.** Every `UserFactory()` creates a `UserProfile` with a verification token. Don't create profiles manually.
+4. **Game.save() triggers Match.save().** Creating enough games sets the match winner. Tests that check "no winner yet" must not create too many games.
+5. **Match confirmations use a junction table.** Singles need 2 confirmations, doubles 4 -- but only *verified* players count. Use `confirmed=True` in MatchFactory or `confirm_match()`.
+6. **Elo updates on confirmation only.** Use `confirm_match()` or `confirm_match_silent()` to trigger it.
+7. **Manager tests need thread-local manipulation.** Import `_thread_locals` from `ttstats.middleware`, set/clear `_thread_locals.user`, and clean up in an `autouse` fixture.
+8. **`base.html` requires `user.player.pk`.** Every logged-in user in a view test needs a linked Player or rendering raises `NoReverseMatch`. Use `_staff_with_player()` for staff.
+9. **Emails in tests:** use `mailoutbox` or `django.core.mail.outbox`.
+10. **LocMemCache persists between tests.** The autouse `_clear_cache` fixture in `conftest.py` clears it before and after each test.
+11. **The `clubs` flag.** Forcing it on for the whole suite fails ~200 tests by design (pre-backfill fixtures with no club see nothing). Tenancy suites opt in per class.
 
-### TDD Workflow for New Features
+### Required integration flows
 
-1. **Write failing tests first.** Run `python -m pytest path/to/test_file.py` and confirm they fail.
-2. **Implement the minimum code to pass.** Run the tests again and iterate until green.
-3. **Refactor if needed.** Clean up while tests stay green.
-4. **Add edge-case tests.** Cover error paths, boundary conditions, permission checks.
-5. **Run the full suite.** `python -m pytest --tb=short -q` before considering the work done.
+When adding a feature, also add an integration test for its happy path. These must exist (check, don't infer from a `-k` count):
 
-### Unit Tests: Test Each Piece Individually
-
-- **Models:** Test methods, properties, and constraints in isolation. Don't test via views.
-- **Forms:** Instantiate the form with `data={}` directly. Don't go through HTTP requests.
-- **Views:** Use the Django test `Client`. Assert on status codes, context data, redirects, and messages.
-- **Managers:** Manipulate thread-local user directly. Don't use the test client.
-- **Signals:** Create/save model instances and assert side effects (emails sent, profiles created).
-- **Emails:** Call the email function directly, check `mail.outbox`.
-- **Middleware:** Use `RequestFactory` to create mock requests. Don't use the full test client.
-- **Context processors:** Use `RequestFactory` with an explicit user. Don't render templates.
-
-### Integration Tests: Protect Core Happy Paths
-
-Maintain integration tests that exercise complete user flows end-to-end through multiple view calls in sequence. **When adding a new feature**, also add an integration test covering its primary happy path.
-
-**Required integration test flows.** Flows 1-3 live in `test_integration.py`; flow 4 is
-`test_scheduled_match_conversion.py::TestConversionIntegration` and flow 5 is `test_views.py`'s
-`TestHeadToHead*`. Don't assume coverage from a `-k` match count -- check the flow exists.
-
-1. **Registration -> Verification -> Login:** POST signup -> GET verify-email with token -> POST login -> assert dashboard loads.
-2. **Match lifecycle (singles with Elo):** Create match -> add games (triggers winner) -> assert emails sent -> confirm as both players -> assert Elo updated -> verify leaderboard.
-3. **Doubles match lifecycle:** Create match (4 players) -> add games -> confirm as all 4 players -> assert Elo updated for all.
-4. **Scheduled match conversion:** Schedule match -> assert emails -> convert to match -> add games -> confirm -> verify calendar status.
-5. **Head-to-head with data:** Create two players, play multiple confirmed matches -> GET head-to-head -> assert stats correct.
-6. **Club invite -> anonymous signup -> membership** (`test_club_invites.py::TestAnonymousSignupThroughAnInvite`): admin generates an invite -> anonymous visitor opens the link -> signs up -> assert they are a member with a Player, the invite is consumed exactly once, and registration's own behaviour (verification email) is unchanged.
+1. Registration -> verification -> login (`test_integration.py`)
+2. Singles match lifecycle with Elo (`test_integration.py`)
+3. Doubles match lifecycle (`test_integration.py`)
+4. Scheduled match conversion (`test_scheduled_match_conversion.py::TestConversionIntegration`)
+5. Head-to-head with data (`test_views.py::TestHeadToHead*`)
+6. Club invite -> anonymous signup -> membership (`test_club_invites.py::TestAnonymousSignupThroughAnInvite`)
 
 ---
 
-## Business Logic Gotchas
+## Core rules
 
-These are non-obvious behaviors that aren't clear from reading individual source files.
+### Row-level security: two boundaries
 
-### Match Confirmation & Elo
-- When winner is set for the first time: if any player is unverified, auto-confirm all; if all verified, send confirmation emails
-- `match_confirmed` property: True when all verified players confirmed. Empty verified set = True (unverified players don't need confirmation)
-- Elo ratings only update when match is fully confirmed
-- **`Match.recompute()` is the single source of truth** for `winner_side`, the score caches and `is_confirmed`. It writes via a queryset `.update()` so it cannot re-enter the signal pipeline. Never set those fields by hand; call `recompute()`.
-- The pure decision functions live in `match_state.py` (no Django imports): `winner_side()`, `side_confirmed()`, `confirmation_complete()`, `should_auto_confirm()`. Test them without a DB.
-- Views should use `Match.objects.filter(is_confirmed=True)` (DB-level), not Python-level filtering
+1. **The club** (tenancy) -- whose data is this? Flag-gated on `clubs`.
+2. **The user** (participation) -- which of my club's rows am I party to?
 
+- All six managers share `ScopedManagerMixin`: no user in context = unfiltered, anonymous = empty, staff = everything in their club, regular = own rows.
+- **Staff bypass the user filter. NOTHING bypasses the club filter.**
+- `Model.all_objects` / `_base_manager` skip row-level filtering; wrap them in `managers.scope_to_active_club(qs)` unless already scoped transitively (see `docs/decisions/kan-24-all-objects-audit.md`).
+- An authenticated user with no club sees **nothing**; no user in context (commands, migrations) sees everything.
+- Details: `.claude/rules/tenancy.md`.
 
-### Django comments: `{# #}` is single-line ONLY
+### Match state
 
-Django's tag regex has no `DOTALL`, so a multi-line `{# ... #}` is **not a
-comment**. Its text renders into the page, and if it happens to contain a `{%`
-the template fails to compile with a confusing "Invalid block tag" pointing at
-a line inside what looks like a comment. Use `{% comment %}` for anything over
-one line. Eight of these were shipping their text into the HTML.
+- **`Match.recompute()` is the single source of truth** for `winner_side`, the score caches and `is_confirmed`. It writes via queryset `.update()` so it cannot re-enter the signal pipeline. Never set those fields by hand.
+- When a winner is first set: if any player is unverified, auto-confirm all; otherwise send confirmation emails. `match_confirmed` is True when all *verified* players confirmed (empty verified set = True).
+- Views filter with `Match.objects.filter(is_confirmed=True)`, not in Python.
+- Championship matches can have a winner with `is_confirmed=False`: filter championship data by `winner_side__isnull=False`.
+- `elo.projected_elo_changes()` is the only source of an Elo preview *and* of what gets written. Never compute a preview separately.
+- Scoring rules (`WIN_POINTS`, `MIN_LEAD`, valid final scores) live only in `live_scoring.py`. Never re-type scorelines.
 
+### Templates and forms
+
+- **`{# #}` is single-line only.** A multi-line one renders into the page, and a `{%` inside it breaks compilation. Use `{% comment %}`.
+- **Never `{% url 'pingpong:player_detail' p.pk %}`**; use `{% player_link player %}`, which survives a deleted player.
+- **Never hand-write `<option>` loops**; render the widget or include `pingpong/_field.html`.
+- Pass data to JS with `json_script`, never `escapejs`.
+- Colour goes through CSS tokens; never literal palette classes like `bg-white`. Red = an action, **amber = live right now and nowhere else**, green = confirmed.
+- **Dev sends no CSP; prod does.** Interactive behaviour is only verified under `applyProdCSP` in the e2e suite.
+- **UI whose hidden state is managed by JavaScript must fail closed.** pytest cannot see it; use the `frontend-verification` skill.
 
 ## Topic rules (loaded on demand)
 
-Subsystem details live in `.claude/rules/*.md`. Each file declares `paths:` and
-loads only when Claude works on matching files: `tenancy`, `clubs`, `caching`,
+Subsystem details live in `.claude/rules/*.md`. Each declares `paths:` and loads
+only when Claude touches matching files: `tenancy`, `clubs`, `caching`,
 `match-pipeline`, `live-scoring`, `championships`, `frontend`, `push`,
 `passkeys`, `observability`, `flags`, `build-and-deploy`. Decision records are
-in `docs/decisions/`.
+in `docs/decisions/`; the tenancy runbook is `docs/tenancy-rollout.md`.
