@@ -319,6 +319,16 @@ class ClubDataManager(ScopedManagerMixin, models.Manager):
     filters_by_user = False
 
 
+class SeasonStandingManager(ClubDataManager):
+    """Frozen final tables (KAN-51). Club data reached through the season.
+
+    No club column of its own: a standing always belongs to a season, and a
+    second copy of the club is a second thing that can disagree.
+    """
+
+    club_lookup = "season__club"
+
+
 # ---------------------------------------------------------------------------
 # Explicit club scoping for the audited `all_objects` / `_base_manager` sites
 # ---------------------------------------------------------------------------

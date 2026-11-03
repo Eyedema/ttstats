@@ -26,7 +26,7 @@ from django.core.cache import cache
 from django.test import Client
 from django.urls import URLPattern, URLResolver, get_resolver, reverse
 
-from pingpong.models import Club, Match, Player, Side
+from pingpong.models import Club, Match, Player, SeasonStanding, Side
 from pingpong.services import set_match_sides
 from ttstats.middleware import REQUEST_LOCAL_ATTRS, _thread_locals
 
@@ -38,6 +38,7 @@ from .conftest import (
     MatchFactory,
     PlayerFactory,
     ScheduledMatchFactory,
+    SeasonFactory,
     UserFactory,
     confirm_match_silent,
 )
@@ -51,7 +52,8 @@ CLUBS_OFF = pytest.mark.usefixtures("clubs_off")
 
 @pytest.fixture
 def clubs_on(settings):
-    settings.FEATURE_FLAGS = {"clubs": True}
+    # `seasons` too, so the flag-gated season screens are swept, not 404ed.
+    settings.FEATURE_FLAGS = {"clubs": True, "seasons": True}
 
 
 @pytest.fixture
@@ -156,6 +158,7 @@ URL_EXPECTATIONS = {
     "player_list": ("list", None),
     "match_list": ("list", None),
     "championship_list": ("list", None),
+    "season_archive": ("list", None),
 
     # --- htmx fragments. Separate entry points, easy to miss in a view audit -
     "match_validate": ("list", None),
@@ -176,6 +179,7 @@ URL_EXPECTATIONS = {
     "championship_register": ("detail", "championship"),
     "championship_unregister": ("detail", "championship"),
     "championship_start": ("detail", "championship"),
+    "season_archive_detail": ("detail", "season"),
 
     # --- The live scoreboard -------------------------------------------------
     # LiveMatchManager deliberately bypasses the user filter so a scorekeeper
@@ -296,6 +300,18 @@ class Tenant:
         )
         self.live_match.refresh_from_db()
 
+        # An archived season with a frozen final table (KAN-51).
+        from django.utils import timezone
+
+        self.season = SeasonFactory(
+            club=self.club, name=f"{marker}Season", archived_at=timezone.now()
+        )
+        SeasonStanding.all_objects.create(
+            season=self.season, format="singles", player=self.player,
+            player_name=self.player.name, rank=1, rating=1516,
+            matches=1, wins=1, losses=0,
+        )
+
     def pk_for(self, kind):
         return {
             "player": self.other_player.pk,
@@ -303,6 +319,7 @@ class Tenant:
             "scheduled": self.scheduled.pk,
             "championship": self.championship.pk,
             "live_match": self.live_match.pk,
+            "season": self.season.pk,
         }[kind]
 
     def client(self):

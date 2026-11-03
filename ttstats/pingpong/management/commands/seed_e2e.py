@@ -4,7 +4,10 @@ The e2e suite drives the real app in a real browser engine, so it needs a
 known user and a known live match to point at. Refuses to run unless DEBUG is
 on, because it creates an account with a published password.
 """
+from datetime import date
+
 from django.conf import settings
+from django.utils import timezone
 from django.contrib.auth.models import User
 from django.core.management.base import BaseCommand, CommandError
 
@@ -15,7 +18,7 @@ from django.utils import timezone
 
 from pingpong.models import (
     Club, ClubInvite, ClubMembership, ClubRole, FeatureFlagOverride, Game, Match,
-    MatchConfirmation, Player, Season,
+    MatchConfirmation, Player, Season, SeasonStanding,
 )
 
 E2E_USERNAME = "e2e"
@@ -106,6 +109,8 @@ class Command(BaseCommand):
         dead_invite = ClubInvite.issue(club, user, note="e2e revoked")
         dead_invite.revoke()
 
+        archived_season = self._seed_archived_season(club, user, player, opponent)
+
         # The suite reads these off stdout rather than hard-coding a pk.
         self.stdout.write(f"E2E_USERNAME={E2E_USERNAME}")
         self.stdout.write(f"E2E_PASSWORD={E2E_PASSWORD}")
@@ -117,6 +122,7 @@ class Command(BaseCommand):
         self.stdout.write(f"E2E_CLUB_TWO={second.name}")
         self.stdout.write(f"E2E_SEASONS_USERNAME={E2E_SEASONS_USERNAME}")
         self.stdout.write(f"E2E_SEASON={season.name}")
+        self.stdout.write(f"E2E_ARCHIVED_SEASON_PK={archived_season.pk}")
 
     def _seed_season(self, club, player, opponent):
         """A current season with confirmed singles results, for the season table.
@@ -170,6 +176,44 @@ class Command(BaseCommand):
                 )
             for p in (winner, loser):
                 MatchConfirmation.objects.get_or_create(match=match, player=p)
+        return season
+
+    def _seed_archived_season(self, club, user, player, opponent):
+        """An archived season with a frozen table, for the archive specs (KAN-51).
+
+        The archive screens are behind the `seasons` flag, so the specs run
+        as the `e2e-seasons` user, who has the override. The rows are
+        written directly rather than through a rollover: the specs are about
+        what the archive *renders*, and real matches here would move every
+        other spec's leaderboard. Rollover itself is covered in pytest.
+
+        The table carries a shared first place and a deleted player (no
+        Player, only the frozen name), the two rows most likely to break.
+        """
+        # The flag is on for the `e2e-seasons` user only (see _seed_season);
+        # turning it on for `e2e` would move every flag-off spec onto the
+        # season leaderboard.
+        SeasonStanding.all_objects.filter(season__club=club).delete()
+        Season.all_objects.filter(club=club, name="E2E Spring 2025").delete()
+        season = Season.all_objects.create(
+            club=club, name="E2E Spring 2025",
+            starts_on=date(2025, 1, 1), ends_on=date(2025, 3, 31),
+            archived_at=timezone.now(),
+        )
+        rows = [
+            ("singles", player, player.name, 1, 1532, 4, 3, 1),
+            ("singles", opponent, opponent.name, 1, 1532, 4, 2, 2),
+            ("singles", None, "E2E Departed", 3, 1468, 4, 1, 3),
+            ("doubles", player, player.name, 1, 1516, 1, 1, 0),
+        ]
+        SeasonStanding.all_objects.bulk_create(
+            SeasonStanding(
+                season=season, format=fmt, player=who, player_name=name,
+                rank=rank, rating=rating, matches=matches, wins=wins, losses=losses,
+                notified_at=timezone.now(),
+            )
+            for fmt, who, name, rank, rating, matches, wins, losses in rows
+        )
         return season
 
     def _seed_completed_live_match(self, player):

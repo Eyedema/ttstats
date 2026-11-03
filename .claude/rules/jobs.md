@@ -40,4 +40,5 @@ is committed in `deploy/cron/ttstats.cron`. Install steps are in its README.
   club explicitly.
 - A job's pushes go through `notifications.py` and so get the daily limits
   (`push.md`). Make a job's sends exactly-once through its own idempotent
-  state, never through the limiter.
+  state, never through the limiter (`season_rollover` claims
+  `SeasonStanding.notified_at`), and send only after the data commits.

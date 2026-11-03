@@ -65,8 +65,7 @@ includes, so the two cannot drift.
       {% include 'pingpong/_field.html' with field=scope_form.top_x %}
     </div>
     <div class="flex items-center justify-between gap-3">
-      {# TODO(KAN-51 merge): {% url 'pingpong:season_archive' %} #}
-      <a href="/pingpong/seasons/" class="btn-quiet text-[13px]" data-season-archive-link>Past seasons</a>
+      <a href="{% url 'pingpong:season_archive' %}" class="btn-quiet text-[13px]" data-season-archive-link>Past seasons</a>
       <noscript>
         <button type="submit" class="btn-paddle w-full md:w-auto">Apply</button>
       </noscript>

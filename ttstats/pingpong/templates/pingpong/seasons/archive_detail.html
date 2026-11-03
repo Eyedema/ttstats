@@ -1,0 +1,68 @@
+{% extends "pingpong/base.html" %}
+{% load player_tags %}
+
+{% block title %}{{ season.name }} final table - TTStats{% endblock %}
+{% block nav_title %}{{ season.name }}{% endblock %}
+
+{% comment %}
+One archived season's frozen final table (KAN-51). Every number comes from a
+SeasonStanding row written at rollover; nothing here is recomputed, so a late
+confirmation or a recalculate_elo run never moves it.
+
+Names are the ones frozen with the table (`player_name`): a renamed player
+reads as they finished, and a deleted one renders as plain text through
+`player_link`. Shared ranks (1, 1, 3) are shown as stored. The format switch
+is two plain links, no JS.
+{% endcomment %}
+
+{% block content %}
+<div class="mx-auto max-w-3xl" data-testid="season-archive-detail">
+
+  <header class="mb-4">
+    <a href="{% url 'pingpong:season_archive' %}" class="text-[12px] font-semibold text-muted-foreground">&larr; Past seasons</a>
+    <h1 class="text-display mt-1">{{ season.name }}</h1>
+    <p class="mt-1 text-[13px] font-semibold text-muted-foreground">
+      Final table &middot; {{ season.starts_on|date:"j M Y" }} &ndash; {{ season.ends_on|date:"j M Y" }}
+    </p>
+  </header>
+
+  {% if formats|length > 1 %}
+  <nav class="mb-3 flex gap-2" aria-label="Format">
+    {% for value, label in formats %}
+    <a href="?format={{ value }}"
+       class="border-b-2 px-3 py-2 text-sm font-extrabold {% if value == current_format %}border-primary text-foreground{% else %}border-transparent text-muted-foreground{% endif %}"
+       {% if value == current_format %}aria-current="page"{% endif %}>{{ label }}</a>
+    {% endfor %}
+  </nav>
+  {% endif %}
+
+  {% if standings %}
+  <ol class="border-y-2 border-court-line" aria-label="{{ current_format_label }} final table">
+    {% for row in standings %}
+    <li class="flex items-stretch border-b border-court-line last:border-b-0 {% if row.rank <= 3 %}bg-court-raised{% endif %}"
+        data-testid="standing-row">
+      <span class="{{ row.player|hue }} hue-bar w-1.5"></span>
+      <span class="flex w-12 flex-none items-center justify-center">
+        <span class="n {% if row.rank <= 3 %}text-[26px]{% else %}text-[22px] text-muted-foreground{% endif %}" data-testid="standing-rank">{{ row.rank }}</span>
+      </span>
+      <span class="min-w-0 flex-1 py-3">
+        {% player_link row.player css="block truncate text-[17px] font-extrabold leading-tight" label=row.player_name %}
+        <span class="block text-[12px] font-semibold text-muted-foreground">
+          {{ row.matches }} played &middot; {{ row.wins }}&ndash;{{ row.losses }}
+        </span>
+      </span>
+      <span class="flex-none px-4 py-3 text-right">
+        <span class="n block text-[22px]" data-testid="standing-rating">{{ row.rating }}</span>
+      </span>
+    </li>
+    {% endfor %}
+  </ol>
+  {% else %}
+  <div class="surface p-6">
+    <p class="text-heading">Nobody played this season</p>
+    <p class="mt-1 text-[13px] font-semibold text-muted-foreground">The season ended with an empty table.</p>
+  </div>
+  {% endif %}
+
+</div>
+{% endblock %}

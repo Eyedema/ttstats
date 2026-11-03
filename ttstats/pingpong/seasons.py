@@ -19,6 +19,9 @@ from datetime import date, datetime, timedelta
 RATING_MEAN = 1500
 SEASON_CARRY_FACTOR = 0.5
 DEFAULT_FIRST_SEASON_MONTHS = 3
+# Days after `ends_on` before rollover freezes a season, so a match played on
+# the last day has time to be confirmed into the frozen table (KAN-51).
+ROLLOVER_GRACE_DAYS = 3
 
 
 def _as_date(day):
@@ -95,3 +98,49 @@ def carry_over_seed(all_time_rating):
         return RATING_MEAN
     raw = RATING_MEAN + SEASON_CARRY_FACTOR * (all_time_rating - RATING_MEAN)
     return math.floor(raw + 0.5)
+
+
+def is_due_for_rollover(ends_on, today):
+    """True once the grace days after `ends_on` have fully passed."""
+    return ends_on + timedelta(days=ROLLOVER_GRACE_DAYS) < today
+
+
+def ranked(items, key):
+    """Yield `(rank, item)` for `items` ordered best first by `key`.
+
+    Standard competition ranking, ties sharing a rank: 1, 1, 3. Rank is
+    decided by the key (the rating) alone; wins and name only order tied rows
+    for display, they never split a tie. A generator, so the rollover can
+    stream a large table through it without holding it in memory.
+    """
+    previous = rank = None
+    for index, item in enumerate(items, start=1):
+        value = key(item)
+        if previous is not None and value > previous:
+            raise ValueError("items must be ordered best first")
+        if value != previous:
+            rank = index
+        previous = value
+        yield rank, item
+
+
+def competition_ranks(ratings):
+    """Ranks for `ratings` (best first): `[1700, 1700, 1600]` -> `[1, 1, 3]`."""
+    return [rank for rank, _ in ranked(ratings, key=lambda rating: rating)]
+
+
+def season_name_for(starts_on, ends_on):
+    """A default name for a season rollover creates; staff can rename it.
+
+    Whole calendar months read as months ("Apr\u2013Jun 2026"); anything else
+    names the days.
+    """
+    if _whole_months(starts_on, ends_on):
+        if (starts_on.year, starts_on.month) == (ends_on.year, ends_on.month):
+            return f"{starts_on:%b %Y}"
+        if starts_on.year == ends_on.year:
+            return f"{starts_on:%b}\u2013{ends_on:%b %Y}"
+        return f"{starts_on:%b %Y}\u2013{ends_on:%b %Y}"
+    if starts_on.year == ends_on.year:
+        return f"{starts_on.day} {starts_on:%b}\u2013{ends_on.day} {ends_on:%b %Y}"
+    return f"{starts_on.day} {starts_on:%b %Y}\u2013{ends_on.day} {ends_on:%b %Y}"
