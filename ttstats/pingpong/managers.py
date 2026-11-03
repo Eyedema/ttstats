@@ -308,6 +308,17 @@ class ScheduledMatchManager(ScopedManagerMixin, models.Manager):
         return qs.filter(mine | Exists(championship_qs))
 
 
+class ClubDataManager(ScopedManagerMixin, models.Manager):
+    """Club-owned rows with no participation dimension: `Season`, `PlayerRating`.
+
+    Everyone in the club sees them (a season or a leaderboard row is not
+    something you are "party to"), so there is no user filter -- and, as
+    everywhere, that never means no *club* filter. Anonymous sees nothing.
+    """
+
+    filters_by_user = False
+
+
 # ---------------------------------------------------------------------------
 # Explicit club scoping for the audited `all_objects` / `_base_manager` sites
 # ---------------------------------------------------------------------------

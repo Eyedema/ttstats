@@ -13,5 +13,6 @@
 | `MatchManager` / `ScheduledMatchManager` `_scope_to_user` | `Championship.all_objects` inside an `Exists()` subquery | **Left club-wide** — correlated to `OuterRef('championship_id')` on an already-scoped row |
 | `models.Match.recompute`, `services` | Writes to a known pk | **Left club-wide** — no reads |
 | `achievements.py`, `notifications.py` | Background/system paths with no viewer | **Left club-wide** — `get_current_user()` is None, the unfiltered contract |
+| `Season.for_day` (KAN-46) | Resolves the season of a match the caller already holds | **Left club-wide** — filtered by the match's `club_id`; a write must use the match's club, not the viewer's |
 | `seed_demo`, `seed_e2e`, `award_achievements`, `backfill_clubs` | Management commands | **Left club-wide** — same |
 

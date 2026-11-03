@@ -45,15 +45,23 @@ def _tables():
         return set(connection.introspection.table_names(cursor))
 
 
+def _leaf():
+    """The app's real latest migration, not the tenancy HEAD constant."""
+    executor = MigrationExecutor(connection)
+    (leaf,) = [name for app, name in executor.loader.graph.leaf_nodes() if app == APP]
+    return leaf
+
+
 @pytest.fixture
 def at_head():
-    """Leave the database at migration head however the test ends.
+    """Leave the database at the latest migration however the test ends.
 
     Without this a failure mid-reverse would hand every later test in the
-    session a schema with no club columns.
+    session a schema with no club columns -- or, since KAN-9, no seasons, and
+    the Elo write path needs those on every confirmation.
     """
     yield
-    _migrate_to(HEAD)
+    _migrate_to(_leaf())
 
 
 @pytest.mark.django_db(transaction=True)
@@ -258,3 +266,41 @@ class TestTheChainSurvivesADatabaseWithUsersInIt:
 
         _migrate_to(HEAD)
         assert Player.objects.filter(club__isnull=True).count() == 0
+
+
+def _sqlite_triggers():
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT name FROM sqlite_master WHERE type = 'trigger'")
+        return {row[0] for row in cursor.fetchall()}
+
+
+BEFORE_SEASONS = "0037_point_summaries"
+SEASONS = "0038_season"
+
+
+@pytest.mark.django_db(transaction=True)
+class TestSeasonMigrationIsTwoWay:
+    """KAN-46: the season table and its non-overlap guard reverse cleanly."""
+
+    def test_the_overlap_triggers_exist_at_head(self):
+        """SQLite table rebuilds drop triggers silently; this catches a later
+        migration that alters pingpong_season without recreating them."""
+        assert {"season_no_overlap_insert", "season_no_overlap_update"} <= _sqlite_triggers()
+
+    def test_reverses_and_reapplies_with_a_season_present(self, at_head):
+        from datetime import date
+
+        from pingpong.models import Club, Season
+
+        _migrate_to(SEASONS)
+        club = Club.objects.create(name="Reverse Rehearsal")
+        Season.all_objects.create(club=club, name="Q1",
+                                  starts_on=date(2026, 1, 1), ends_on=date(2026, 3, 31))
+
+        _migrate_to(BEFORE_SEASONS)
+        assert "pingpong_season" not in _tables()
+        assert not {"season_no_overlap_insert", "season_no_overlap_update"} & _sqlite_triggers()
+
+        _migrate_to(_leaf())
+        assert "pingpong_season" in _tables()
+        assert {"season_no_overlap_insert", "season_no_overlap_update"} <= _sqlite_triggers()

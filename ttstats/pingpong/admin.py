@@ -27,6 +27,7 @@ from .models import (
     PlayerAchievement,
     PushSubscription,
     ScheduledMatch,
+    Season,
     UserProfile,
 )
 
@@ -1028,3 +1029,25 @@ class ClubMembershipAdmin(admin.ModelAdmin):
     search_fields = ('user__username', 'club__name')
     autocomplete_fields = ('user', 'club')
     readonly_fields = ('joined_at',)
+
+
+@admin.register(Season)
+class SeasonAdmin(admin.ModelAdmin):
+    """Seasons are created by staff with explicit dates (KAN-9 decision 1).
+
+    Once archived, the club and dates are read-only: matches have been ranked
+    against those boundaries. `Season.clean()` enforces the same rule for any
+    other form; the database enforces non-overlap.
+    """
+
+    list_display = ('name', 'club', 'starts_on', 'ends_on', 'archived_at')
+    list_filter = ('club',)
+    search_fields = ('name', 'club__name')
+    readonly_fields = ('created_at',)
+    FROZEN_WHEN_ARCHIVED = ('club', 'starts_on', 'ends_on')
+
+    def get_readonly_fields(self, request, obj=None):
+        fields = list(super().get_readonly_fields(request, obj))
+        if obj is not None and obj.archived_at is not None:
+            fields += [f for f in self.FROZEN_WHEN_ARCHIVED if f not in fields]
+        return fields

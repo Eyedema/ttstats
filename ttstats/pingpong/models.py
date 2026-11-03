@@ -4,11 +4,12 @@ from datetime import timedelta
 
 from django.contrib.auth.models import User
 from django.db import models
-from django.db.models import Count, Exists, OuterRef, Q
+from django.core.exceptions import ValidationError
+from django.db.models import Count, Exists, F, OuterRef, Q
 from django.utils import timezone
 
-from . import match_state, player_hues
-from .managers import ChampionshipManager, GameManager, LiveMatchManager, MatchManager, PlayerManager, ScheduledMatchManager
+from . import match_state, player_hues, seasons
+from .managers import ChampionshipManager, ClubDataManager, GameManager, LiveMatchManager, MatchManager, PlayerManager, ScheduledMatchManager
 
 # Email verification token expires after 24 hours
 VERIFICATION_TOKEN_EXPIRY = timedelta(hours=24)
@@ -1998,3 +1999,80 @@ class ClubInvite(models.Model):
 
     def __str__(self):
         return f"Invite to {self.club.name} ({'valid' if self.is_valid else 'invalid'})"
+
+
+class Season(models.Model):
+    """A club's rating period (KAN-9; docs/decisions/kan-9-seasons.md).
+
+    Both dates are inclusive and are UTC dates: a match belongs to the season
+    containing `date_played.date()`. Seasons in one club never overlap, and
+    the **database** enforces it (an exclusion constraint on PostgreSQL,
+    triggers on SQLite -- migration 0038), because "a match belongs to exactly
+    one season" must not depend on every write path remembering to check.
+
+    Once archived, the dates are frozen: matches have been ranked against
+    them, and moving a boundary would silently move matches between seasons.
+    """
+
+    club = models.ForeignKey(
+        "Club", on_delete=models.PROTECT, related_name="seasons"
+    )
+    name = models.CharField(max_length=100)
+    starts_on = models.DateField()
+    ends_on = models.DateField()
+    archived_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    all_objects = models.Manager()
+    objects = ClubDataManager()
+
+    class Meta:
+        default_manager_name = "objects"
+        ordering = ["-starts_on"]
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(ends_on__gte=F("starts_on")),
+                name="season_ends_on_or_after_starts_on",
+            ),
+        ]
+        indexes = [models.Index(fields=["club", "starts_on"])]
+
+    def __str__(self):
+        return f"{self.name} ({self.starts_on} to {self.ends_on})"
+
+    @classmethod
+    def for_day(cls, club_id, day):
+        """The club's season containing `day` (a date or a UTC datetime), or None.
+
+        Reads `all_objects`: callers pass the club of a row they already hold
+        (a match), so this is transitively club-scoped, and a write path must
+        resolve the *match's* season whatever club the viewer has active.
+        """
+        if club_id is None:
+            return None
+        return seasons.resolve_season(day, cls.all_objects.filter(club_id=club_id))
+
+    def clean(self):
+        super().clean()
+        if self.starts_on and self.ends_on and self.ends_on < self.starts_on:
+            raise ValidationError({"ends_on": "A season cannot end before it starts."})
+
+        if self.pk:
+            stored = Season.all_objects.filter(pk=self.pk).values(
+                "club_id", "starts_on", "ends_on", "archived_at"
+            ).first()
+            if stored and stored["archived_at"] is not None and (
+                stored["club_id"], stored["starts_on"], stored["ends_on"]
+            ) != (self.club_id, self.starts_on, self.ends_on):
+                raise ValidationError(
+                    "An archived season's club and dates cannot be changed."
+                )
+
+        if self.club_id and self.starts_on and self.ends_on:
+            clash = Season.all_objects.filter(
+                club_id=self.club_id,
+                starts_on__lte=self.ends_on,
+                ends_on__gte=self.starts_on,
+            ).exclude(pk=self.pk).first()
+            if clash:
+                raise ValidationError(f"Overlaps {clash}.")

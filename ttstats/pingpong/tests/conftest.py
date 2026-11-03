@@ -6,7 +6,7 @@ from django.core.cache import cache as django_cache
 from django.test import Client
 from factory.django import DjangoModelFactory
 
-from pingpong.models import Championship, ChampionshipEntry, ChampionshipEntryMember, Club, ClubMembership, ClubRole, Game, Location, Match, MatchConfirmation, Player, ScheduledMatch, Side
+from pingpong.models import Championship, ChampionshipEntry, ChampionshipEntryMember, Club, ClubMembership, ClubRole, Game, Location, Match, MatchConfirmation, Player, ScheduledMatch, Season, Side
 from pingpong.services import set_match_sides, set_scheduled_match_sides
 
 
@@ -50,6 +50,22 @@ class ClubMembershipFactory(DjangoModelFactory):
     # The model default. Pass role=ClubRole.OWNER/ADMIN where the test is
     # about permissions -- least privilege is the right default here.
     role = ClubRole.MEMBER
+
+
+class SeasonFactory(DjangoModelFactory):
+    """A club season. Nothing else defaults to one, so existing tests are
+    unaffected: each call makes its own club unless given one, and the dates
+    step 100 days per instance from 1990 so seasons sharing a club never
+    overlap (and never contain a match a test dated "now")."""
+
+    class Meta:
+        model = Season
+
+    club = factory.SubFactory(ClubFactory)
+    name = factory.Sequence(lambda n: f"Season {n}")
+    starts_on = factory.Sequence(lambda n: date(1990, 1, 1) + timedelta(days=100 * n))
+    ends_on = factory.LazyAttribute(lambda o: o.starts_on + timedelta(days=89))
+    archived_at = None
 
 
 class LocationFactory(DjangoModelFactory):
