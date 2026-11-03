@@ -325,44 +325,77 @@ class RatingWriter:
         return len(self.states), self.changes_written
 
 
-def rebuild_player_ratings(*, models=None, keep=None, chunk_size=DEFAULT_CHUNK_SIZE):
-    """Delete and rebuild PlayerRating/RatingChange (all, or the rows `keep` selects).
+def default_models():
+    from .models import Match, MatchParticipant, Player, PlayerRating, RatingChange, Season
 
-    Replays the full history either way: a season row's seed depends on the
-    all-time rating before it, so even a scoped rebuild must compute
-    everything and only *write* its scope. Returns (rows, changes) written.
+    return dict(match=Match, participant=MatchParticipant, season=Season,
+                player=Player, rating=PlayerRating, change=RatingChange)
 
-    `models` is a dict of model classes (match, participant, season, player,
-    rating, change) for a data migration; defaults to the current models.
-    Callers own the transaction.
+
+class RebuildResult(NamedTuple):
+    replay: Replay
+    rows_written: int
+    changes_written: int
+
+
+def replay_history(*, models=None, keep=None, write_ratings=False,
+                   chunk_size=DEFAULT_CHUNK_SIZE, on_match=None):
+    """Run the full history through a `Replay`; optionally write PlayerRating rows.
+
+    `on_match(index, record, legacy_changes)` is called after each match, which
+    is how `recalculate_elo` writes EloHistory and progress from this one
+    traversal instead of a second one. Returns a `RebuildResult`.
     """
-    if models is None:
-        from .models import Match, MatchParticipant, Player, PlayerRating, RatingChange, Season
-
-        models = dict(match=Match, participant=MatchParticipant, season=Season,
-                      player=Player, rating=PlayerRating, change=RatingChange)
-    keep = keep or (lambda row: True)
-
-    rows = models["rating"]._base_manager.all()
-    doomed = [pk for pk, *fields in rows.values_list("pk", "season_id", "format")
-              if keep(_RowView(*fields))]
-    for start in range(0, len(doomed), chunk_size):
-        batch = doomed[start:start + chunk_size]
-        models["change"]._base_manager.filter(rating_id__in=batch).delete()
-        models["rating"]._base_manager.filter(pk__in=batch).delete()
-
+    models = models or default_models()
     seasons_by_club, player_clubs = load_context(
         season_model=models["season"], player_model=models["player"]
     )
     replay = Replay(seasons_by_club, player_clubs)
-    writer = RatingWriter(models["rating"], models["change"], keep=keep, batch_size=chunk_size)
-    for record in iter_replay_matches(
+    writer = (
+        RatingWriter(models["rating"], models["change"], keep=keep, batch_size=chunk_size)
+        if write_ratings else None
+    )
+    for index, record in enumerate(iter_replay_matches(
         chunk_size=chunk_size, match_model=models["match"],
         participant_model=models["participant"],
-    ):
-        _, format_changes = replay.play(record)
-        writer.add(record.pk, format_changes)
-    return writer.finish()
+    ), 1):
+        legacy_changes, format_changes = replay.play(record)
+        if writer is not None:
+            writer.add(record.pk, format_changes)
+        if on_match is not None:
+            on_match(index, record, legacy_changes)
+    rows, changes = writer.finish() if writer is not None else (0, 0)
+    return RebuildResult(replay, rows, changes)
+
+
+def delete_player_ratings(*, models=None, keep=None, chunk_size=DEFAULT_CHUNK_SIZE):
+    """Delete the PlayerRating rows `keep` selects (all by default) and their changes."""
+    models = models or default_models()
+    keep = keep or (lambda row: True)
+    rows = models["rating"]._base_manager.values_list("pk", "season_id", "format")
+    doomed = [pk for pk, season_id, fmt in rows if keep(_RowView(season_id, fmt))]
+    for start in range(0, len(doomed), chunk_size):
+        batch = doomed[start:start + chunk_size]
+        models["change"]._base_manager.filter(rating_id__in=batch).delete()
+        models["rating"]._base_manager.filter(pk__in=batch).delete()
+    return len(doomed)
+
+
+def rebuild_player_ratings(*, models=None, keep=None, chunk_size=DEFAULT_CHUNK_SIZE,
+                           on_match=None):
+    """Delete and rebuild PlayerRating/RatingChange (all, or the rows `keep` selects).
+
+    Replays the full history either way: a season row's seed depends on the
+    all-time rating before it, so even a scoped rebuild must compute
+    everything and only *write* its scope. Callers own the transaction.
+
+    `models` is a dict of model classes (see `default_models`) so a data
+    migration can pass its historical ones.
+    """
+    models = models or default_models()
+    delete_player_ratings(models=models, keep=keep, chunk_size=chunk_size)
+    return replay_history(models=models, keep=keep, write_ratings=True,
+                          chunk_size=chunk_size, on_match=on_match)
 
 
 @dataclass(frozen=True)

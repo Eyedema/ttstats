@@ -53,3 +53,8 @@ The contract is `docs/decisions/kan-9-seasons.md`; these are the rules it implie
 - `apply_format_scopes` is shared by the live write (`LiveBook`) and the replay
   (`MemoryBook`); never fork it. Writing a scope costs 3 bulk queries; keep
   `test_match_save_performance.py` flat.
+- **`recalculate_elo` rebuilds through `elo_replay`** in one transaction,
+  holding `select_for_update` on every Player row: not safe during live
+  confirmations. `--season`/`--format` rewrite only those PlayerRating rows;
+  legacy fields and `EloHistory` are rewritten only by a full run. `--dry-run`
+  diffs stored vs replayed per player and scope and writes nothing.
