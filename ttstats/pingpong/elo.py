@@ -446,6 +446,13 @@ def update_player_elo(match):
     rating)` then roll the loser's whole block back, and the loser treats that
     as "already applied". A conflict that is *not* this match being applied
     (two matches creating the same new rating row) is retried once.
+
+    **Every attempt starts from locked, freshly read Player rows**
+    (`_lock_sides`), never from the `match.sides()` memo. The memo can be stale
+    (another match for the same player committed since it was loaded), and a
+    failed attempt has already added its deltas to those objects in memory;
+    the legacy fields are written back as absolute values, so either would be
+    a silently wrong rating.
     """
     # Guard: Must have winner
     if not match.winner_side:
@@ -470,6 +477,10 @@ def update_player_elo(match):
             _apply_match(match)
             return
         except IntegrityError:
+            # The rollback undid the database, not the Player objects the
+            # attempt mutated in memory. Drop them so nothing downstream (or
+            # the retry) reads a rating that was never committed.
+            match.invalidate_participant_cache()
             if _already_applied(match):
                 logger.info(
                     f"Elo for match {match.pk} was applied by a concurrent confirmer"
@@ -480,13 +491,43 @@ def update_player_elo(match):
             logger.warning(f"Rating write conflict on match {match.pk}; retrying once")
 
 
+def _lock_sides(match):
+    """Reload the match's players with `SELECT ... FOR UPDATE`; reset the memo.
+
+    Must run inside the transaction. Rows are locked in player-pk order so two
+    confirmations that share players cannot deadlock; the sides are then
+    rebuilt in participant order, which is the order `sides()` and the replay
+    use, so the arithmetic is unchanged. The new lists become the
+    `match.sides()` memo, so `projected_elo_changes` -- the same call the
+    preview makes -- reads exactly these rows for every scope.
+
+    Same select_related as `Match.sides()`, so the rest of the completion
+    path pays no extra queries; `of=("player",)` locks only the Player rows
+    (PostgreSQL refuses FOR UPDATE on the nullable side of the user joins).
+    """
+    from .models import MatchParticipant, Side
+
+    participants = list(
+        MatchParticipant.objects.filter(match_id=match.pk)
+        .select_related("player", "player__club", "player__user", "player__user__profile")
+        .select_for_update(of=("player",))
+        .order_by("player_id")
+    )
+    participants.sort(key=lambda mp: mp.pk)
+    side1 = [mp.player for mp in participants if mp.side == Side.ONE]
+    side2 = [mp.player for mp in participants if mp.side != Side.ONE]
+    match.invalidate_participant_cache()
+    match._sides_memo = (side1, side2)
+    return side1, side2
+
+
 def _apply_match(match):
     """Every scope for one match, atomically. Raises IntegrityError on a race."""
     from .models import EloHistory, Season
 
     with transaction.atomic():
-        # 1. IDENTIFY SIDES AND PLAYERS
-        team1_players, team2_players = match.sides()
+        # 1. IDENTIFY SIDES AND PLAYERS -- re-read and locked, see _lock_sides.
+        team1_players, team2_players = _lock_sides(match)
 
         is_double = match.is_double
 
