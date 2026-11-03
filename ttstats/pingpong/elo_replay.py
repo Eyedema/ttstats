@@ -23,6 +23,8 @@ copy of it.
 from dataclasses import dataclass, field
 from typing import NamedTuple
 
+from . import elo, seasons
+
 REPLAY_ORDER = ("date_played", "created_at", "pk")
 DEFAULT_CHUNK_SIZE = 500
 
@@ -147,8 +149,6 @@ class LegacyReplay:
 
     def play(self, record):
         """Apply one match; return its list of `Change`s (empty if skipped)."""
-        from . import elo
-
         record.bind(self.player)
         side1, side2 = record.sides()
         if not record.winner_side or not side1 or not side2:
@@ -163,3 +163,209 @@ class LegacyReplay:
                 p.matches_for_elo += 1
                 changes.append(Change(p.pk, old, p.elo_rating, delta, k))
         return changes
+
+
+# ---------------------------------------------------------------------------
+# KAN-47: format scopes (PlayerRating) on the same traversal
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SeasonRecord:
+    pk: int
+    club_id: int
+    starts_on: object
+    ends_on: object
+
+
+def load_context(*, season_model=None, player_model=None):
+    """(seasons by club, player club ids): everything a replay needs besides matches."""
+    if season_model is None or player_model is None:
+        from .models import Player, Season
+
+        season_model = season_model or Season
+        player_model = player_model or Player
+    seasons_by_club = {}
+    for pk, club_id, starts_on, ends_on in season_model._base_manager.values_list(
+        "pk", "club_id", "starts_on", "ends_on"
+    ):
+        seasons_by_club.setdefault(club_id, []).append(
+            SeasonRecord(pk, club_id, starts_on, ends_on)
+        )
+    player_clubs = dict(player_model._base_manager.values_list("pk", "club_id"))
+    return seasons_by_club, player_clubs
+
+
+class MemoryBook(elo.RatingBook):
+    """`elo.RatingState` rows, entirely in memory."""
+
+    def __init__(self, player_clubs):
+        super().__init__()
+        self.player_clubs = player_clubs
+
+    def new_row(self, player, scope, initial_rating):
+        club_id = (
+            scope.season.club_id if scope.season is not None
+            else self.player_clubs.get(player.pk)
+        )
+        row = elo.RatingState(player.pk, club_id, scope.season_id, scope.format, initial_rating)
+        self.rows[row.key] = row
+        return row
+
+
+class Replay:
+    """Every scope `update_player_elo` writes, replayed in memory.
+
+    `legacy` is the `LegacyReplay` (Player fields); `book` holds the format
+    rows. `play()` mirrors `elo._apply_match`: same guards, same season
+    resolution, the same `apply_format_scopes` step.
+    """
+
+    def __init__(self, seasons_by_club=None, player_clubs=None):
+        self.legacy = LegacyReplay()
+        self.seasons_by_club = seasons_by_club or {}
+        self.book = MemoryBook(player_clubs or {})
+
+    def play(self, record):
+        """Apply one match: (legacy `Change`s, `elo.FormatChange`s)."""
+        legacy_changes = self.legacy.play(record)  # also binds the stand-ins
+        if not legacy_changes:
+            return [], []
+        season = seasons.resolve_season(
+            record.date_played, self.seasons_by_club.get(record.club_id, ())
+        )
+        return legacy_changes, elo.apply_format_scopes(record, self.book, season)
+
+
+def scope_filter(*, season_id=None, fmt=None):
+    """A predicate on a rating row (state or model) for a scoped rebuild."""
+
+    def keep(row):
+        if season_id is not None and row.season_id != season_id:
+            return False
+        if fmt is not None and row.format != fmt:
+            return False
+        return True
+
+    return keep
+
+
+class RatingWriter:
+    """Streams replayed format changes into PlayerRating/RatingChange in batches.
+
+    Rows are created the first time a batch needs them (one bulk INSERT per
+    batch), audit rows follow in the same batch, and the final values are
+    written once at `finish()`. Model classes are parameters so a data
+    migration can pass its historical ones.
+    """
+
+    def __init__(self, rating_model, change_model, *, keep=None,
+                 batch_size=DEFAULT_CHUNK_SIZE):
+        self.rating_model, self.change_model = rating_model, change_model
+        self.keep = keep or (lambda row: True)
+        self.batch_size = batch_size
+        self.pks = {}  # state key -> PlayerRating pk
+        self.states = {}
+        self.buffer = []
+        self.changes_written = 0
+
+    def add(self, match_id, format_changes):
+        for change in format_changes:
+            if self.keep(change.row):
+                self.buffer.append((match_id, change))
+        if len(self.buffer) >= self.batch_size:
+            self.flush()
+
+    def flush(self):
+        if not self.buffer:
+            return
+        new = {}
+        for _, change in self.buffer:
+            state = change.row
+            if state.key not in self.pks and state.key not in new:
+                new[state.key] = state
+        if new:
+            created = self.rating_model._base_manager.bulk_create([
+                self.rating_model(
+                    player_id=s.player_id, club_id=s.club_id, season_id=s.season_id,
+                    format=s.format, rating=s.rating, peak=s.peak, matches=s.matches,
+                )
+                for s in new.values()
+            ])
+            for key, obj in zip(new, created):
+                self.pks[key] = obj.pk
+                self.states[key] = new[key]
+        self.change_model._base_manager.bulk_create([
+            self.change_model(
+                match_id=match_id, player_id=c.player_id, rating_id=self.pks[c.row.key],
+                old_rating=c.old, new_rating=c.new, rating_change=c.change, k_factor=c.k,
+            )
+            for match_id, c in self.buffer
+        ])
+        self.changes_written += len(self.buffer)
+        self.buffer = []
+
+    def finish(self):
+        """Flush and write every touched row's final rating, peak and count."""
+        from django.utils import timezone
+
+        self.flush()
+        now = timezone.now()
+        self.rating_model._base_manager.bulk_update(
+            [
+                self.rating_model(
+                    pk=self.pks[key], rating=s.rating, peak=s.peak,
+                    matches=s.matches, updated_at=now,
+                )
+                for key, s in self.states.items()
+            ],
+            ["rating", "peak", "matches", "updated_at"],
+            batch_size=self.batch_size,
+        )
+        return len(self.states), self.changes_written
+
+
+def rebuild_player_ratings(*, models=None, keep=None, chunk_size=DEFAULT_CHUNK_SIZE):
+    """Delete and rebuild PlayerRating/RatingChange (all, or the rows `keep` selects).
+
+    Replays the full history either way: a season row's seed depends on the
+    all-time rating before it, so even a scoped rebuild must compute
+    everything and only *write* its scope. Returns (rows, changes) written.
+
+    `models` is a dict of model classes (match, participant, season, player,
+    rating, change) for a data migration; defaults to the current models.
+    Callers own the transaction.
+    """
+    if models is None:
+        from .models import Match, MatchParticipant, Player, PlayerRating, RatingChange, Season
+
+        models = dict(match=Match, participant=MatchParticipant, season=Season,
+                      player=Player, rating=PlayerRating, change=RatingChange)
+    keep = keep or (lambda row: True)
+
+    rows = models["rating"]._base_manager.all()
+    doomed = [pk for pk, *fields in rows.values_list("pk", "season_id", "format")
+              if keep(_RowView(*fields))]
+    for start in range(0, len(doomed), chunk_size):
+        batch = doomed[start:start + chunk_size]
+        models["change"]._base_manager.filter(rating_id__in=batch).delete()
+        models["rating"]._base_manager.filter(pk__in=batch).delete()
+
+    seasons_by_club, player_clubs = load_context(
+        season_model=models["season"], player_model=models["player"]
+    )
+    replay = Replay(seasons_by_club, player_clubs)
+    writer = RatingWriter(models["rating"], models["change"], keep=keep, batch_size=chunk_size)
+    for record in iter_replay_matches(
+        chunk_size=chunk_size, match_model=models["match"],
+        participant_model=models["participant"],
+    ):
+        _, format_changes = replay.play(record)
+        writer.add(record.pk, format_changes)
+    return writer.finish()
+
+
+@dataclass(frozen=True)
+class _RowView:
+    season_id: object
+    format: str

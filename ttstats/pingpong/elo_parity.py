@@ -14,6 +14,14 @@ traversal in `elo_replay`) through two pipelines at once:
 
 It asserts identical final rating, peak and match count per player, and an
 identical `rating_change` and `k_factor` for every player in every match.
+
+Since KAN-47 the pipeline also writes the `PlayerRating` format scopes. For
+players who have only ever played singles **in a component of the match graph
+with no doubles match at all**, the all-time singles rating must equal the
+legacy one. The component condition is necessary, not caution: a
+singles-only player whose opponent also plays doubles meets that opponent's
+*combined* legacy rating but their *singles* rating, so the two numbers
+legitimately differ (docs/decisions/kan-9-seasons.md records this).
 Optionally (`compare_stored_history`) it also compares the reference against
 the stored `EloHistory` rows. Those can legitimately differ on real data
 because live Elo is applied in *confirmation* order and replay uses *play*
@@ -30,7 +38,7 @@ from dataclasses import dataclass, field
 from unittest import mock
 
 from . import elo
-from .elo_replay import DEFAULT_CHUNK_SIZE, Change, LegacyReplay, iter_replay_matches
+from .elo_replay import DEFAULT_CHUNK_SIZE, Change, Replay, iter_replay_matches, load_context
 
 # ---------------------------------------------------------------------------
 # (a) The frozen reference. Do not "tidy" this into a call to elo.py.
@@ -122,6 +130,7 @@ class ParityReport:
     match_diffs: list = field(default_factory=list)
     stored_history_diffs: list = field(default_factory=list)
     compared_stored_history: bool = False
+    singles_only_checked: int = 0
     injected_k: object = None
     names: dict = field(default_factory=dict)
 
@@ -175,7 +184,8 @@ class ParityReport:
             f"{self.matches_replayed} matches replayed, "
             f"{self.players_compared} players compared, "
             f"{len(self.player_diffs)} player diffs, "
-            f"{len(self.match_diffs)} per-match diffs{stored}"
+            f"{len(self.match_diffs)} per-match diffs, "
+            f"{self.singles_only_checked} singles-only players checked{stored}"
         )
         return "\n".join(lines)
 
@@ -237,7 +247,9 @@ def run_parity(*, inject_k_factor=None, compare_stored_history=False,
     report = ParityReport(
         injected_k=inject_k_factor, compared_stored_history=compare_stored_history
     )
-    reference, pipeline = _ReferenceReplay(), LegacyReplay()
+    reference = _ReferenceReplay()
+    pipeline = Replay(*load_context())
+    components = _Components()
     stored = _stored_history() if compare_stored_history else {}
 
     patch = (
@@ -247,7 +259,8 @@ def run_parity(*, inject_k_factor=None, compare_stored_history=False,
     with patch:
         for record in iter_replay_matches(chunk_size=chunk_size):
             ref_changes = reference.play(record)
-            new_changes = pipeline.play(record)
+            new_changes, _ = pipeline.play(record)
+            components.add(record)
             report.matches_replayed += 1
             _compare_changes(record.pk, ref_changes, new_changes, report.match_diffs)
             if compare_stored_history:
@@ -263,10 +276,54 @@ def run_parity(*, inject_k_factor=None, compare_stored_history=False,
     report.players_compared = len(report.names)
     for pk, name in sorted(report.names.items(), key=lambda kv: (kv[1], kv[0])):
         ref = reference.state.get(pk, [1500, 1500, 0])
-        p = pipeline.players.get(pk)
+        p = pipeline.legacy.players.get(pk)
         new = [p.elo_rating, p.elo_peak, p.matches_for_elo] if p else [1500, 1500, 0]
         for label, a, b in zip(("rating", "peak", "matches"), ref, new):
             if a != b:
                 report.player_diffs.append(PlayerDiff(pk, name, "legacy", label, a, b))
+
+        # The singles-only invariant (KAN-47): all-time singles == legacy.
+        if p is None or not components.singles_only(pk):
+            continue
+        report.singles_only_checked += 1
+        row = pipeline.book.row(pk, None, elo.SINGLES)
+        singles = [row.rating, row.peak, row.matches] if row else [1500, 1500, 0]
+        for label, a, b in zip(("rating", "peak", "matches"), new, singles):
+            if a != b:
+                report.player_diffs.append(
+                    PlayerDiff(pk, name, "singles all-time", label, a, b)
+                )
     return report
+
+
+class _Components:
+    """Union-find over players who met in a match, remembering doubles."""
+
+    def __init__(self):
+        self.parent = {}
+        self.has_doubles = set()
+
+    def find(self, pk):
+        self.parent.setdefault(pk, pk)
+        while self.parent[pk] != pk:
+            self.parent[pk] = self.parent[self.parent[pk]]
+            pk = self.parent[pk]
+        return pk
+
+    def add(self, record):
+        ids = list(record.side1_ids) + list(record.side2_ids)
+        if not ids:
+            return
+        roots = {self.find(pk) for pk in ids}
+        root = roots.pop()
+        doubles = record.is_double or root in self.has_doubles
+        for other in roots:
+            self.parent[other] = root
+            doubles = doubles or other in self.has_doubles
+            self.has_doubles.discard(other)
+        if doubles:
+            self.has_doubles.add(root)
+
+    def singles_only(self, pk):
+        return pk in self.parent and self.find(pk) not in self.has_doubles
 

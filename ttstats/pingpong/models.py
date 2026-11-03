@@ -2076,3 +2076,106 @@ class Season(models.Model):
             ).exclude(pk=self.pk).first()
             if clash:
                 raise ValidationError(f"Overlaps {clash}.")
+
+
+class RatingFormat(models.TextChoices):
+    SINGLES = "singles", "Singles"
+    DOUBLES = "doubles", "Doubles"
+
+
+class PlayerRating(models.Model):
+    """A player's rating in one format, all-time or in one season (KAN-47).
+
+    `season=NULL` is the **all-time** rating for the format. Written by
+    `elo.update_player_elo` alongside the legacy `Player.elo_*` fields, which
+    stay lifetime and combined (decision 3). **A mirror for now: nothing
+    outside elo.py, elo_replay.py, elo_parity.py and recalculate_elo reads it.**
+
+    `peak` is per row: per format all-time, and per format per season.
+    A player with no row in a format is *unrated* in it, which is not the same
+    as 1500-with-history.
+    """
+
+    player = models.ForeignKey(
+        Player, on_delete=models.CASCADE, related_name="ratings"
+    )
+    club = models.ForeignKey(
+        "Club", on_delete=models.PROTECT, null=True, blank=True,
+        related_name="player_ratings",
+    )
+    season = models.ForeignKey(
+        Season, on_delete=models.PROTECT, null=True, blank=True,
+        related_name="player_ratings",
+    )
+    format = models.CharField(max_length=10, choices=RatingFormat.choices)
+    rating = models.IntegerField(default=1500)
+    peak = models.IntegerField(default=1500)
+    matches = models.IntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    all_objects = models.Manager()
+    objects = ClubDataManager()
+
+    class Meta:
+        default_manager_name = "objects"
+        constraints = [
+            # Two conditional constraints rather than nulls_distinct=False,
+            # which SQLite (the test database) does not support.
+            models.UniqueConstraint(
+                fields=["player", "season", "format"],
+                condition=Q(season__isnull=False),
+                name="playerrating_one_per_season_format",
+            ),
+            models.UniqueConstraint(
+                fields=["player", "format"],
+                condition=Q(season__isnull=True),
+                name="playerrating_one_all_time_per_format",
+            ),
+        ]
+        indexes = [
+            # The leaderboard read: one club, one season (or all-time), one
+            # format, best first.
+            models.Index(
+                fields=["club", "season", "format", "-rating"],
+                name="playerrating_leaderboard",
+            ),
+        ]
+
+    def __str__(self):
+        scope = self.season.name if self.season_id else "all-time"
+        return f"{self.player} {self.format} {scope}: {self.rating}"
+
+
+class RatingChange(models.Model):
+    """The audit trail for `PlayerRating`, one row per player per scope per match.
+
+    `EloHistory` stays the immutable legacy trail (lifetime, combined). The
+    unique `(match, rating)` is what makes a concurrent second confirmation
+    roll back instead of applying a match twice.
+    """
+
+    match = models.ForeignKey(
+        Match, on_delete=models.CASCADE, related_name="rating_changes"
+    )
+    player = models.ForeignKey(
+        Player, on_delete=models.CASCADE, related_name="rating_changes"
+    )
+    rating = models.ForeignKey(
+        PlayerRating, on_delete=models.CASCADE, related_name="changes"
+    )
+    old_rating = models.IntegerField()
+    new_rating = models.IntegerField()
+    rating_change = models.IntegerField()
+    k_factor = models.FloatField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["match", "rating"], name="ratingchange_once_per_match_rating"
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.player} {self.rating_change:+d} ({self.rating.format}, match {self.match_id})"

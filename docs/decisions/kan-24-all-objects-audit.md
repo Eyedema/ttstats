@@ -14,5 +14,7 @@
 | `models.Match.recompute`, `services` | Writes to a known pk | **Left club-wide** — no reads |
 | `achievements.py`, `notifications.py` | Background/system paths with no viewer | **Left club-wide** — `get_current_user()` is None, the unfiltered contract |
 | `Season.for_day` (KAN-46) | Resolves the season of a match the caller already holds | **Left club-wide** — filtered by the match's `club_id`; a write must use the match's club, not the viewer's |
+| `elo.LiveBook` (KAN-47) | `PlayerRating.all_objects` for the match's own players | **Left club-wide** — filtered by the participants of a match the caller holds; a write must not be hidden by the viewer's club |
+| `elo_replay`, `elo_parity`, `recalculate_elo`, migration 0040 | `_base_manager` replay of the whole history | **Left club-wide** — commands and migrations, no viewer |
 | `seed_demo`, `seed_e2e`, `award_achievements`, `backfill_clubs` | Management commands | **Left club-wide** — same |
 

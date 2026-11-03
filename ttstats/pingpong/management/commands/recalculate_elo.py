@@ -8,7 +8,7 @@ Usage: python manage.py recalculate_elo
 from django.core.management.base import BaseCommand
 from django.db import transaction
 
-from pingpong.models import Player, Match, EloHistory
+from pingpong.models import Player, Match, EloHistory, PlayerRating
 from pingpong.elo import update_player_elo
 
 
@@ -58,6 +58,10 @@ class Command(BaseCommand):
                 deleted_count = EloHistory.objects.all().count()
                 EloHistory.objects.all().delete()
                 self.stdout.write(f'Deleted {deleted_count} existing Elo history records')
+
+                # The PlayerRating mirror (and its RatingChange rows, by
+                # cascade) is rebuilt by the same replay.
+                PlayerRating.all_objects.all().delete()
 
                 # Replay matches in chronological order
                 self.stdout.write('Recalculating Elo ratings...')

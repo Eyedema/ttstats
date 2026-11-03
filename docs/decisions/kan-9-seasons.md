@@ -114,8 +114,13 @@ Jira: epic KAN-9; stories KAN-45 (Q4.8), 46 (S4.1), 47 (S4.2), 49 (S4.7),
   through (a) a frozen copy of today's legacy arithmetic and (b) the new
   pipeline. It asserts identical rating, peak and match counts per player, and
   identical per-match `rating_change`/`k_factor`. For singles-only players it
-  also asserts that all-time singles `PlayerRating` equals the legacy value. It
-  prints a per-player diff table.
+  also asserts that all-time singles `PlayerRating` equals the legacy value,
+  **restricted to players whose connected component of the match graph
+  contains no doubles match** (amended during KAN-47). Without that
+  restriction the invariant is false by construction: a singles-only player
+  whose opponent also plays doubles meets the opponent's *combined* legacy
+  rating in one pipeline and their *singles* rating in the other. It prints a
+  per-player diff table.
 - Stored production values may differ from any replay, because live Elo is
   applied in confirmation order and replay uses play order. `--dry-run`
   reports this. If production shows diffs, a one-time real

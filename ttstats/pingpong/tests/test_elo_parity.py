@@ -8,6 +8,7 @@ shown before confirming is the figure written and recorded.
 """
 from datetime import datetime, timedelta
 from io import StringIO
+from unittest import mock
 
 import pytest
 from django.core.management import call_command
@@ -218,3 +219,52 @@ class TestEloParityCommand:
 
         assert "FAIL" in out.getvalue()
         assert "Ada" in out.getvalue()
+
+
+@pytest.mark.django_db
+class TestSinglesOnlyInvariant:
+    """KAN-47: for singles-only players (in a doubles-free component of the
+    match graph) the all-time singles PlayerRating equals the legacy value."""
+
+    def _isolated_singles_pair(self):
+        eve, fay = PlayerFactory(name="Eve"), PlayerFactory(name="Fay")
+        for i in range(23):  # across the provisional boundary
+            _play([eve], [fay], day=i, winner=Side.ONE if i % 3 else Side.TWO,
+                  best_of=(3, 5, 7)[i % 3], match_type="tournament" if i % 5 == 0 else "casual")
+        return eve, fay
+
+    def test_singles_only_players_are_checked_and_agree(self):
+        _awkward_history()  # every player here is in a component with doubles
+        self._isolated_singles_pair()
+
+        report = run_parity()
+
+        assert report.ok, report.render()
+        assert report.singles_only_checked == 2
+
+    def test_a_singles_only_player_who_met_a_doubles_player_is_not_checked(self):
+        a, b, c, d = (PlayerFactory() for _ in range(4))
+        _play([a, b], [c, d], day=0)
+        solo = PlayerFactory()
+        _play([solo], [a], day=1)
+
+        report = run_parity()
+
+        assert report.ok
+        assert report.singles_only_checked == 0
+
+    def test_a_divergent_format_scope_fails_the_harness(self):
+        from .. import elo
+
+        self._isolated_singles_pair()
+        real = elo.scope_reading
+
+        def off_by_one(book, player_id, scope):
+            rating, experience = real(book, player_id, scope)
+            return rating + 1, experience
+
+        with mock.patch.object(elo, "scope_reading", side_effect=off_by_one):
+            report = run_parity()
+
+        assert not report.ok
+        assert {d.scope for d in report.player_diffs} == {"singles all-time"}

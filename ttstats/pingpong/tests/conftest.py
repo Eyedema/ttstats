@@ -6,7 +6,7 @@ from django.core.cache import cache as django_cache
 from django.test import Client
 from factory.django import DjangoModelFactory
 
-from pingpong.models import Championship, ChampionshipEntry, ChampionshipEntryMember, Club, ClubMembership, ClubRole, Game, Location, Match, MatchConfirmation, Player, ScheduledMatch, Season, Side
+from pingpong.models import Championship, ChampionshipEntry, ChampionshipEntryMember, Club, ClubMembership, ClubRole, Game, Location, Match, MatchConfirmation, Player, PlayerRating, ScheduledMatch, Season, Side
 from pingpong.services import set_match_sides, set_scheduled_match_sides
 
 
@@ -92,6 +92,22 @@ class PlayerFactory(DjangoModelFactory):
         with_user = factory.Trait(
             user=factory.SubFactory(UserFactory),
         )
+
+
+class PlayerRatingFactory(DjangoModelFactory):
+    """A PlayerRating row: all-time singles unless told otherwise. For tests
+    that need a player to arrive with format history already in place."""
+
+    class Meta:
+        model = PlayerRating
+
+    player = factory.SubFactory(PlayerFactory)
+    club = None
+    season = None
+    format = "singles"
+    rating = 1500
+    peak = factory.LazyAttribute(lambda o: max(o.rating, 1500))
+    matches = 0
 
 
 class MatchFactory(DjangoModelFactory):

@@ -61,6 +61,6 @@ a ceiling and the slope, and the slope is the one that matters.
   streamed in chunks. The harness and `recalculate_elo` both use it; a second
   ordering is how two honest rebuilds disagree.
 - **`elo_parity.py` keeps a frozen copy of the legacy arithmetic on purpose.**
-  Never make it import `elo`. `manage.py elo_parity` must pass after every
+  The reference must never call into `elo`. `manage.py elo_parity` must pass after every
   change to `elo.py`; an intentional change edits the reference in the same
   commit and says so.
