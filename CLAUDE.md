@@ -42,6 +42,7 @@ cd ttstats && python manage.py rebuild_point_rollups [--check]  # Rebuild (or on
 cd ttstats && python manage.py point_storage --by-club          # Point-log row counts, growth rate, retention threshold
 cd ttstats && python manage.py cache_control --stats|--clear|--test
 cd ttstats && python manage.py warm_cache                       # Pre-populate common caches
+cd ttstats && python manage.py run_scheduled_jobs [--job X] [--dry-run|--list]  # What host cron runs daily
 
 # Production
 docker compose -f compose.prod.yml up --build -d
@@ -162,5 +163,5 @@ When adding a feature, also add an integration test for its happy path. These mu
 Subsystem details live in `.claude/rules/*.md`. Each declares `paths:` and loads
 only when Claude touches matching files: `tenancy`, `clubs`, `caching`,
 `match-pipeline`, `live-scoring`, `championships`, `frontend`, `push`,
-`passkeys`, `observability`, `flags`, `build-and-deploy`, `seasons`. Decision records are
+`passkeys`, `observability`, `flags`, `build-and-deploy`, `seasons`, `jobs`. Decision records are
 in `docs/decisions/`; the tenancy runbook is `docs/tenancy-rollout.md`.

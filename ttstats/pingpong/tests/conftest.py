@@ -6,7 +6,7 @@ from django.core.cache import cache as django_cache
 from django.test import Client
 from factory.django import DjangoModelFactory
 
-from pingpong.models import Championship, ChampionshipEntry, ChampionshipEntryMember, Club, ClubMembership, ClubRole, Game, Location, Match, MatchConfirmation, Player, PlayerRating, ScheduledMatch, Season, Side
+from pingpong.models import Championship, ChampionshipEntry, ChampionshipEntryMember, Club, ClubMembership, ClubRole, Game, JobRun, Location, Match, MatchConfirmation, Player, PlayerRating, ScheduledMatch, Season, Side
 from pingpong.services import set_match_sides, set_scheduled_match_sides
 
 
@@ -66,6 +66,16 @@ class SeasonFactory(DjangoModelFactory):
     starts_on = factory.Sequence(lambda n: date(1990, 1, 1) + timedelta(days=100 * n))
     ends_on = factory.LazyAttribute(lambda o: o.starts_on + timedelta(days=89))
     archived_at = None
+
+
+class JobRunFactory(DjangoModelFactory):
+    """A scheduled-job log row; pass ``started_at`` to age it."""
+
+    class Meta:
+        model = JobRun
+
+    name = factory.Sequence(lambda n: f"job_{n}")
+    status = JobRun.Status.SUCCESS
 
 
 class LocationFactory(DjangoModelFactory):

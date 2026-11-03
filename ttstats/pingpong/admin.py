@@ -19,6 +19,7 @@ from .models import (
     EloHistory,
     FeatureFlagOverride,
     Game,
+    JobRun,
     Location,
     Match,
     MatchConfirmation,
@@ -951,12 +952,29 @@ class PushSubscriptionAdmin(admin.ModelAdmin):
         return False
 
 
+@admin.register(JobRun)
+class JobRunAdmin(admin.ModelAdmin):
+    """The scheduled-job run log (KAN-37): read-only, written by jobs.run_job."""
+
+    list_display = ('name', 'status', 'started_at', 'finished_at', 'summary')
+    list_filter = ('status', 'name')
+    readonly_fields = ('name', 'status', 'started_at', 'finished_at', 'summary', 'error')
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+
 @admin.register(NotificationPreference)
 class NotificationPreferenceAdmin(admin.ModelAdmin):
     list_display = ('user', 'push_match_confirmation', 'push_match_result',
-                    'push_scheduled_match', 'push_leaderboard_overtake')
+                    'push_scheduled_match', 'push_leaderboard_overtake',
+                    'push_season_ended')
     list_filter = ('push_match_confirmation', 'push_match_result',
-                   'push_scheduled_match', 'push_leaderboard_overtake')
+                   'push_scheduled_match', 'push_leaderboard_overtake',
+                   'push_season_ended')
     search_fields = ('user__username',)
 
 
