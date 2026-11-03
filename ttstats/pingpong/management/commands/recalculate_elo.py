@@ -27,9 +27,11 @@ Deterministic: the replay order is `date_played, created_at, pk`, through
 interruption leaves ratings fully old.
 
 **Not safe to run while matches are being confirmed.** A real run takes
-`select_for_update` on every Player row for its duration, so a confirmation
-arriving mid-rebuild waits for it rather than interleaving (on PostgreSQL;
-SQLite locks the whole database anyway). At this scale that is seconds; run it
+`select_for_update` on every Player row for its duration. A confirmation
+arriving mid-rebuild waits for it rather than interleaving, because
+`update_player_elo` locks its match's Player rows before reading any rating
+(on PostgreSQL; SQLite locks the whole database anyway). It then applies on
+top of the rebuilt values. At this scale that is seconds; run it
 when nobody is playing.
 """
 

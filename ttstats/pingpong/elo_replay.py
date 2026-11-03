@@ -85,6 +85,14 @@ def iter_replay_matches(
 
     `match_model`/`participant_model` default to the current models; a data
     migration passes its historical ones.
+
+    GUARD: migration 0040 runs this live code against *historical* models, so
+    every field read here and in `load_context` must exist at 0039 forever:
+    Match pk, date_played, created_at, match_type, best_of, is_double,
+    winner_side, club_id, is_confirmed, is_live; MatchParticipant match_id,
+    player_id, side, pk; Player pk, club_id; Season pk, club_id, starts_on,
+    ends_on; PlayerRating/RatingChange as created by 0039. Renaming or
+    removing any of them needs 0040 to be frozen to its own copy first.
     """
     if match_model is None or participant_model is None:
         from .models import Match, MatchParticipant

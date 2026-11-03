@@ -678,3 +678,83 @@ class TestRatingWritesAreRaceSafe:
 
         assert RatingChange.objects.filter(match=match).count() == 2
         assert _all_time(p1, "singles").matches == 1
+
+
+def _pending_confirmed(rating1=1500, rating2=1500):
+    """A won, confirmed match whose Elo has NOT been applied yet."""
+    p1, p2 = _verified_pair()
+    Player.objects.filter(pk=p1.pk).update(elo_rating=rating1)
+    Player.objects.filter(pk=p2.pk).update(elo_rating=rating2)
+    match = _finish([p1], [p2])  # verified players: unconfirmed, no Elo
+    confirm_match_silent(match)  # confirmed without firing the pipeline
+    match.invalidate_confirmation_state()
+    return match, p1, p2
+
+
+def _fresh_preview(match):
+    return projected_elo_changes(Match.all_objects.get(pk=match.pk))
+
+
+@pytest.mark.django_db
+class TestRetriedEloWriteAppliesOnce:
+    """A retry after a rolled-back attempt must start from the database, not
+    from Player objects the failed attempt already mutated in memory."""
+
+    def test_a_flush_conflict_on_the_first_attempt_applies_the_match_once(self):
+        match, p1, p2 = _pending_confirmed(rating1=1560, rating2=1480)
+        preview = _fresh_preview(match)
+        match.sides()  # the memo a real signal path would already hold
+        real_flush = elo.LiveBook.flush
+        attempts = []
+
+        def conflict_once(self, m, changes):
+            attempts.append(m.pk)
+            if len(attempts) == 1:
+                raise IntegrityError("another match created the same new rating row")
+            return real_flush(self, m, changes)
+
+        with mock.patch.object(elo.LiveBook, "flush", conflict_once):
+            update_player_elo(match)
+
+        assert len(attempts) == 2
+        p1.refresh_from_db()
+        p2.refresh_from_db()
+        assert p1.elo_rating == 1560 + preview.side1_change
+        assert p2.elo_rating == 1480 + preview.side2_change
+        assert (p1.matches_for_elo, p2.matches_for_elo) == (1, 1)
+        h1 = EloHistory.objects.get(match=match, player=p1)
+        assert (h1.old_rating, h1.rating_change, h1.k_factor) == (1560, preview.side1_change, preview.side1_k)
+        assert EloHistory.objects.filter(match=match).count() == 2
+        assert RatingChange.objects.filter(match=match).count() == 2
+        assert _all_time(p1, "singles").matches == 1
+
+    def test_a_lost_race_leaves_the_match_memo_matching_the_database(self):
+        match, p1, _ = _pending_confirmed()
+        update_player_elo(match)
+        stored = Player.objects.get(pk=p1.pk).elo_rating
+
+        with mock.patch.object(elo, "_already_applied", side_effect=[False, True]):
+            update_player_elo(match)
+
+        assert match.sides()[0][0].elo_rating == stored
+
+
+@pytest.mark.django_db
+class TestEloReadsLockedFreshPlayers:
+    def test_a_stale_sides_memo_is_not_what_gets_written(self):
+        """Another match for P committed after this match's memo was loaded:
+        the write must build on P's current row, not overwrite it."""
+        match, p1, p2 = _pending_confirmed()
+        match.sides()  # memo loaded at 1500 / 0 matches
+        Player.objects.filter(pk=p1.pk).update(elo_rating=1700, elo_peak=1700, matches_for_elo=30)
+        preview = _fresh_preview(match)
+
+        update_player_elo(match)
+
+        p1.refresh_from_db()
+        h1 = EloHistory.objects.get(match=match, player=p1)
+        assert h1.old_rating == 1700
+        assert h1.rating_change == preview.side1_change
+        assert h1.k_factor == preview.side1_k == 32  # 30 matches: not provisional
+        assert p1.elo_rating == 1700 + preview.side1_change
+        assert p1.matches_for_elo == 31
