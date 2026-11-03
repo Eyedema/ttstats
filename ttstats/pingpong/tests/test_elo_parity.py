@@ -108,6 +108,34 @@ class TestParityHarnessDetectsDivergence:
         assert report.player_diffs
         assert {d.field for d in report.match_diffs} >= {"k_factor", "rating_change"}
 
+    def test_injection_is_a_parameter_not_a_patch_of_production_code(self):
+        """The harness ships in production code: it must not monkeypatch the
+        module-level constant (a concurrent confirmation would see it)."""
+        from .. import elo, elo_parity
+
+        assert not hasattr(elo_parity, "mock")
+        _awkward_history()
+        seen = []
+        real = elo.k_factor
+
+        def spy(match, matches_played, **kwargs):
+            seen.append(elo.BASE_K)
+            return real(match, matches_played, **kwargs)
+
+        with mock.patch.object(elo, "k_factor", spy):
+            assert not run_parity(inject_k_factor=40).ok
+
+        assert seen and set(seen) == {elo.BASE_K}
+
+    def test_k_factor_takes_an_explicit_base(self):
+        from types import SimpleNamespace
+
+        from .. import elo
+
+        match = SimpleNamespace(match_type="casual", best_of=5)
+        assert elo.k_factor(match, elo.PROVISIONAL_MATCHES, base_k=40) == 40
+        assert elo.k_factor(match, elo.PROVISIONAL_MATCHES) == elo.BASE_K
+
     def test_the_failure_names_players_in_a_diff_table(self):
         _awkward_history()
 

@@ -17,7 +17,7 @@ is committed in `deploy/cron/ttstats.cron`. Install steps are in its README.
 - **Never run jobs from the deploy step.** The ssh-action timeout has already
   failed deploys.
 - **Add a job with one decorator in `scheduled_jobs.py`**:
-  `@jobs.register("name")` on `def name(*, dry_run) -> str`. Jobs run in the
+  `@jobs.register("name")` on `def name(*, dry_run: bool) -> str`. Jobs run in the
   order they are defined. The returned string becomes `JobRun.summary`.
 - A job must be **idempotent**, honour `dry_run` (report, write nothing), and
   **batch** its work (`values_list('pk')[:N]` loops or `iterator(chunk_size=)`).
@@ -39,6 +39,6 @@ is committed in `deploy/cron/ttstats.cron`. Install steps are in its README.
 - Jobs have no viewer, so managers are unfiltered. A per-club job must filter by
   club explicitly.
 - A job's pushes go through `notifications.py` and so get the daily limits
-  (`push.md`). Make a job's sends exactly-once through its own idempotent
+  (`push.md`). Make a job's sends at most once through its own idempotent
   state, never through the limiter (`season_rollover` claims
   `SeasonStanding.notified_at`), and send only after the data commits.

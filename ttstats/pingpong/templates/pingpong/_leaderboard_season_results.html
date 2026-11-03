@@ -69,7 +69,7 @@ directly under the table whenever either state is on screen.
   <p class="flex items-center justify-between px-4 py-3.5">
     <span class="text-[13px] font-semibold text-muted-foreground">Biggest mover this week</span>
     <span class="{{ biggest_mover.player|hue }} hue-text text-[13px] font-extrabold">
-      {{ biggest_mover.player.name }}, {{ biggest_mover.movement|stringformat:"+d" }}
+      {% player_link biggest_mover.player %}, {{ biggest_mover.movement|stringformat:"+d" }}
     </span>
   </p>
   {% endif %}

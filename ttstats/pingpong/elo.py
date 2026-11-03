@@ -64,15 +64,19 @@ def match_format(match):
     return DOUBLES if match.is_double else SINGLES
 
 
-def k_factor(match, matches_played):
+def k_factor(match, matches_played, *, base_k=None):
     """
     K-factor from match importance and the player's experience.
     Returns higher K for:
     - Tournament matches (more important)
     - Longer matches (more reliable result)
     - New players (first PROVISIONAL_MATCHES matches)
+
+    `base_k` overrides `BASE_K` for one call; only the parity harness passes
+    it, to prove it detects a divergence.
     """
-    base_k = BASE_K
+    if base_k is None:
+        base_k = BASE_K
 
     # Match type multiplier
     if match.match_type == 'tournament':
@@ -98,9 +102,9 @@ def k_factor(match, matches_played):
     return k
 
 
-def calculate_k_factor(match, player):
+def calculate_k_factor(match, player, *, base_k=None):
     """The legacy K: experience is `player.matches_for_elo`, both formats combined."""
-    return k_factor(match, player.matches_for_elo)
+    return k_factor(match, player.matches_for_elo, base_k=base_k)
 
 
 def calculate_expected_score(rating_a, rating_b):
@@ -167,7 +171,7 @@ class EloProjection(NamedTuple):
     side2_k: float
 
 
-def projected_elo_changes(match, scope=LEGACY, *, book=None):
+def projected_elo_changes(match, scope=LEGACY, *, book=None, base_k=None):
     """An EloProjection for a match, calculated but not applied.
 
     The dashboard tells you what a pending confirmation costs -- "-16 Elo if
@@ -178,7 +182,8 @@ def projected_elo_changes(match, scope=LEGACY, *, book=None):
     scope, and for the replay in `elo_replay`.
 
     `scope` is `LEGACY` (Player fields) or a `RatingScope`, read from `book`:
-    a `RatingBook` (default: the database, via `LiveBook`).
+    a `RatingBook` (default: the database, via `LiveBook`). `base_k`
+    overrides the base K (the parity harness's injected divergence only).
 
     Zero changes when the match has no winner or a side is empty; a match
     nobody has won yet moves nobody's rating.
@@ -199,8 +204,8 @@ def projected_elo_changes(match, scope=LEGACY, *, book=None):
     if scope is LEGACY:
         r1 = sum(p.elo_rating for p in team1_players) / len(team1_players)
         r2 = sum(p.elo_rating for p in team2_players) / len(team2_players)
-        k1_list = [calculate_k_factor(match, p) for p in team1_players]
-        k2_list = [calculate_k_factor(match, p) for p in team2_players]
+        k1_list = [calculate_k_factor(match, p, base_k=base_k) for p in team1_players]
+        k2_list = [calculate_k_factor(match, p, base_k=base_k) for p in team2_players]
     else:
         if book is None:
             book = LiveBook(match, scope.season)
@@ -208,8 +213,8 @@ def projected_elo_changes(match, scope=LEGACY, *, book=None):
         read2 = [scope_reading(book, p.pk, scope) for p in team2_players]
         r1 = sum(r for r, _ in read1) / len(read1)
         r2 = sum(r for r, _ in read2) / len(read2)
-        k1_list = [k_factor(match, n) for _, n in read1]
-        k2_list = [k_factor(match, n) for _, n in read2]
+        k1_list = [k_factor(match, n, base_k=base_k) for _, n in read1]
+        k2_list = [k_factor(match, n, base_k=base_k) for _, n in read2]
 
     s1 = 1 if match.winner_side == Side.ONE else 0
     s2 = 1 - s1
@@ -300,7 +305,7 @@ def format_scopes(match, season):
     return scopes
 
 
-def apply_format_scopes(match, book, season):
+def apply_format_scopes(match, book, season, *, base_k=None):
     """Project and apply every format scope of `match` to `book`, in memory.
 
     The shared step of the live write and the replay. All projections and all
@@ -310,7 +315,7 @@ def apply_format_scopes(match, book, season):
     team1_players, team2_players = match.sides()
     plan = []
     for scope in format_scopes(match, season):
-        change1, change2, k1, k2 = projected_elo_changes(match, scope, book=book)
+        change1, change2, k1, k2 = projected_elo_changes(match, scope, book=book, base_k=base_k)
         for players, delta, k in ((team1_players, change1, k1), (team2_players, change2, k2)):
             for p in players:
                 old, _ = scope_reading(book, p.pk, scope)

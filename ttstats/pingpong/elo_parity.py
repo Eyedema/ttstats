@@ -33,9 +33,7 @@ the ticket asks for.
 
 Runs as `manage.py elo_parity [--inject-k-factor X]` and from pytest.
 """
-from contextlib import nullcontext
 from dataclasses import dataclass, field
-from unittest import mock
 
 from . import elo
 from .elo_replay import DEFAULT_CHUNK_SIZE, Change, Replay, iter_replay_matches, load_context
@@ -239,8 +237,9 @@ def run_parity(*, inject_k_factor=None, compare_stored_history=False,
                chunk_size=DEFAULT_CHUNK_SIZE):
     """Replay history through both pipelines and return a `ParityReport`.
 
-    Reads only. `inject_k_factor` swaps the *pipeline's* base K for the run,
-    which must make the harness fail; that is how it proves it can.
+    Reads only. `inject_k_factor` is passed to the *pipeline's* replay as its
+    base K (an explicit parameter; nothing global is patched), which must make
+    the harness fail; that is how it proves it can.
     """
     from .models import Player
 
@@ -248,24 +247,19 @@ def run_parity(*, inject_k_factor=None, compare_stored_history=False,
         injected_k=inject_k_factor, compared_stored_history=compare_stored_history
     )
     reference = _ReferenceReplay()
-    pipeline = Replay(*load_context())
+    pipeline = Replay(*load_context(), base_k=inject_k_factor)
     components = _Components()
     stored = _stored_history() if compare_stored_history else {}
 
-    patch = (
-        mock.patch.object(elo, "BASE_K", inject_k_factor)
-        if inject_k_factor is not None else nullcontext()
-    )
-    with patch:
-        for record in iter_replay_matches(chunk_size=chunk_size):
-            ref_changes = reference.play(record)
-            new_changes, _ = pipeline.play(record)
-            components.add(record)
-            report.matches_replayed += 1
-            _compare_changes(record.pk, ref_changes, new_changes, report.match_diffs)
-            if compare_stored_history:
-                _compare_changes(record.pk, ref_changes, stored.pop(record.pk, []),
-                                 report.stored_history_diffs)
+    for record in iter_replay_matches(chunk_size=chunk_size):
+        ref_changes = reference.play(record)
+        new_changes, _ = pipeline.play(record)
+        components.add(record)
+        report.matches_replayed += 1
+        _compare_changes(record.pk, ref_changes, new_changes, report.match_diffs)
+        if compare_stored_history:
+            _compare_changes(record.pk, ref_changes, stored.pop(record.pk, []),
+                             report.stored_history_diffs)
 
     # EloHistory for a match outside the replay set (unconfirmed, no winner)
     # is itself a divergence: live Elo was applied to something replay skips.

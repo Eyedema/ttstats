@@ -178,5 +178,5 @@ def _release(key, token):
     try:
         if cache.get(key) == token:
             cache.delete(key)
-    except Exception:
+    except Exception:  # noqa: BLE001 -- any cache backend error; the lock's TTL frees it anyway
         logger.warning("Could not release job lock %s; it will expire", key)

@@ -16,6 +16,7 @@ paths:
   - "ttstats/pingpong/migrations/0043_season_standing.py"
   - "ttstats/pingpong/templates/pingpong/_leaderboard_season_results.html"
   - "ttstats/pingpong/tests/test_season*.py"
+  - "ttstats/pingpong/tests/test_ratings.py"
   - "ttstats/pingpong/tests/test_rating_backfill.py"
 ---
 
@@ -89,7 +90,7 @@ The contract is `docs/decisions/kan-9-seasons.md`; these are the rules it implie
   garbage id falls back to the default through `LeaderboardScopeForm`.
 - The seasons table aggregates in the DB (rating rows + one grouped
   `RatingChange` query for wins and weekly movement); its query count is
-  pinned flat in `test_season_views.py`.
+  pinned flat in `test_ratings.py`.
 
 ## Rollover and the archive (KAN-51)
 

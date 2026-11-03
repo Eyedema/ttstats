@@ -147,8 +147,9 @@ class LegacyReplay:
     side changes nothing), same arithmetic call, same peak and count updates.
     """
 
-    def __init__(self):
+    def __init__(self, *, base_k=None):
         self.players = {}
+        self.base_k = base_k
 
     def player(self, pk):
         if pk not in self.players:
@@ -161,7 +162,7 @@ class LegacyReplay:
         side1, side2 = record.sides()
         if not record.winner_side or not side1 or not side2:
             return []
-        change1, change2, k1, k2 = elo.projected_elo_changes(record)
+        change1, change2, k1, k2 = elo.projected_elo_changes(record, base_k=self.base_k)
         changes = []
         for players, delta, k in ((side1, change1, k1), (side2, change2, k2)):
             for p in players:
@@ -229,10 +230,11 @@ class Replay:
     resolution, the same `apply_format_scopes` step.
     """
 
-    def __init__(self, seasons_by_club=None, player_clubs=None):
-        self.legacy = LegacyReplay()
+    def __init__(self, seasons_by_club=None, player_clubs=None, *, base_k=None):
+        self.legacy = LegacyReplay(base_k=base_k)
         self.seasons_by_club = seasons_by_club or {}
         self.book = MemoryBook(player_clubs or {})
+        self.base_k = base_k
 
     def play(self, record):
         """Apply one match: (legacy `Change`s, `elo.FormatChange`s)."""
@@ -242,7 +244,7 @@ class Replay:
         season = seasons.resolve_season(
             record.date_played, self.seasons_by_club.get(record.club_id, ())
         )
-        return legacy_changes, elo.apply_format_scopes(record, self.book, season)
+        return legacy_changes, elo.apply_format_scopes(record, self.book, season, base_k=self.base_k)
 
 
 def scope_filter(*, season_id=None, fmt=None):
