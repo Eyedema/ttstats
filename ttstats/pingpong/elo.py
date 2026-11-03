@@ -11,6 +11,11 @@ from django.db import transaction
 
 logger = logging.getLogger(__name__)
 
+# Standard chess K-factor. A named constant so the parity harness can inject a
+# deliberate divergence (`elo_parity --inject-k-factor`) and prove it notices.
+BASE_K = 32
+
+
 def calculate_k_factor(match, player):
     """
     Calculate K-factor based on match importance and player experience.
@@ -19,7 +24,7 @@ def calculate_k_factor(match, player):
     - Longer matches (more reliable result)
     - New players (first 20 matches)
     """
-    base_k = 32  # Standard chess K-factor
+    base_k = BASE_K
 
     # Match type multiplier
     if match.match_type == 'tournament':
