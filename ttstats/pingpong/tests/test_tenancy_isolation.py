@@ -26,8 +26,7 @@ from django.core.cache import cache
 from django.test import Client
 from django.urls import URLPattern, URLResolver, get_resolver, reverse
 
-from pingpong.models import Club, Match, Player, SeasonStanding, Side
-from pingpong.services import set_match_sides
+from pingpong.models import Match, Player, PlayerRating
 from ttstats.middleware import REQUEST_LOCAL_ATTRS, _thread_locals
 
 from .conftest import (
@@ -39,6 +38,7 @@ from .conftest import (
     PlayerFactory,
     ScheduledMatchFactory,
     SeasonFactory,
+    SeasonStandingFactory,
     UserFactory,
     confirm_match_silent,
 )
@@ -52,8 +52,26 @@ CLUBS_OFF = pytest.mark.usefixtures("clubs_off")
 
 @pytest.fixture
 def clubs_on(settings):
-    # `seasons` too, so the flag-gated season screens are swept, not 404ed.
+    # Exactly the production configuration: `seasons` stays off.
+    settings.FEATURE_FLAGS = {"clubs": True}
+
+
+@pytest.fixture
+def clubs_and_seasons_on(settings):
+    # The seasons rollout: flag-gated season screens are swept, not 404ed.
     settings.FEATURE_FLAGS = {"clubs": True, "seasons": True}
+
+
+# The sweep runs once per configuration. A screen that changes shape with the
+# `seasons` flag (the leaderboard, its cache key, the profile) is proven
+# isolated in both shapes.
+FLAG_CONFIGS = ("clubs_on", "clubs_and_seasons_on")
+
+
+@pytest.fixture(params=FLAG_CONFIGS)
+def tenancy_flags(request):
+    request.getfixturevalue(request.param)
+    return request.param
 
 
 @pytest.fixture
@@ -306,11 +324,14 @@ class Tenant:
         self.season = SeasonFactory(
             club=self.club, name=f"{marker}Season", archived_at=timezone.now()
         )
-        SeasonStanding.all_objects.create(
-            season=self.season, format="singles", player=self.player,
-            player_name=self.player.name, rank=1, rating=1516,
-            matches=1, wins=1, losses=0,
+        SeasonStandingFactory(
+            season=self.season, player=self.player, rank=1, rating=1516,
         )
+        # The confirmation above ran before the match had a club; give the
+        # PlayerRating mirror the club the seasons leaderboard scopes by.
+        PlayerRating.all_objects.filter(
+            player__in=[self.player, self.other_player]
+        ).update(club=self.club)
 
     def pk_for(self, kind):
         return {
@@ -367,8 +388,25 @@ def _fetch(client, name, url):
     return client.get(url)
 
 
-DETAIL_URLS = sorted(n for n, (k, _) in URL_EXPECTATIONS.items() if k == "detail")
-LIST_URLS = sorted(n for n, (k, _) in URL_EXPECTATIONS.items() if k == "list")
+# Routes that exist only with the `seasons` flag on (404 otherwise), so they
+# are swept only in that configuration.
+SEASONS_ONLY = {"season_archive", "season_archive_detail"}
+
+
+def _sweep(kind):
+    """(config, url name) pairs for every route of `kind`, in every config."""
+    names = sorted(n for n, (k, _) in URL_EXPECTATIONS.items() if k == kind)
+    return [
+        pytest.param(config, name, id=f"{config}-{name}")
+        for config in FLAG_CONFIGS
+        for name in names
+        if config == "clubs_and_seasons_on" or name not in SEASONS_ONLY
+    ]
+
+
+DETAIL_URLS = _sweep("detail")
+LIST_URLS = _sweep("list")
+LIST_URL_NAMES = sorted(n for n, (k, _) in URL_EXPECTATIONS.items() if k == "list")
 
 
 # ---------------------------------------------------------------------------
@@ -410,29 +448,31 @@ class TestTheSweepCannotRot:
 
 
 @pytest.mark.django_db
-@CLUBS_ON
 class TestDirectPkAccessIsRefused:
-    @pytest.mark.parametrize("name", DETAIL_URLS)
-    def test_club_b_object_by_direct_pk_is_404(self, name, alpha, bravo):
+    @pytest.mark.parametrize("config,name", DETAIL_URLS)
+    def test_club_b_object_by_direct_pk_is_404(self, request, config, name, alpha, bravo):
         """404, never 403 and never 200.
 
         404 is the existing documented convention for an invisible match, and
         it is the right one: 403 confirms the object exists, which is itself a
         disclosure across a tenancy boundary.
         """
+        request.getfixturevalue(config)
         response = _fetch(alpha.client(), name, _url(name, bravo))
         assert response.status_code == 404, (
             f"{name} returned {response.status_code} for a cross-club pk"
         )
 
-    @pytest.mark.parametrize("name", DETAIL_URLS)
-    def test_the_same_url_works_for_its_own_club(self, name, alpha):
+    @pytest.mark.parametrize("config,name", DETAIL_URLS)
+    def test_the_same_url_works_for_its_own_club(self, request, config, name, alpha):
         """Guards against the suite passing because everything 404s."""
+        request.getfixturevalue(config)
         response = _fetch(alpha.client(), name, _url(name, alpha))
         assert response.status_code != 404, (
             f"{name} 404s for its OWN club — the scoping is too tight"
         )
 
+    @CLUBS_ON
     def test_a_cross_club_404_does_not_echo_the_object(self, alpha, bravo):
         """Error pages must not leak the name they refused to show."""
         response = alpha.client().get(_url("match_detail", bravo))
@@ -445,17 +485,18 @@ class TestDirectPkAccessIsRefused:
 
 
 @pytest.mark.django_db
-@CLUBS_ON
 class TestNoClubBDataInAnyRenderedPage:
-    @pytest.mark.parametrize("name", LIST_URLS)
-    def test_no_club_b_marker_appears(self, name, alpha, bravo):
+    @pytest.mark.parametrize("config,name", LIST_URLS)
+    def test_no_club_b_marker_appears(self, request, config, name, alpha, bravo):
         """The failure that matters is a 200 with the wrong club's names."""
+        request.getfixturevalue(config)
         response = _fetch(alpha.client(), name, _url(name, alpha))
         body = response.content.decode(errors="ignore")
         assert BRAVO not in body, (
             f"{name} leaked Club B data into a Club A user's page"
         )
 
+    @pytest.mark.usefixtures("tenancy_flags")
     def test_the_marker_check_would_actually_catch_a_leak(self, bravo):
         """A control: Club B's own user must see the marker.
 
@@ -465,6 +506,7 @@ class TestNoClubBDataInAnyRenderedPage:
         response = bravo.client().get(reverse("pingpong:player_list"))
         assert BRAVO in response.content.decode(errors="ignore")
 
+    @pytest.mark.usefixtures("tenancy_flags")
     def test_the_player_picker_does_not_offer_cross_club_players(self, alpha, bravo):
         """A picker that still offers them lets a user build a cross-club match
         through the UI, which is a leak with a write attached."""
@@ -479,16 +521,39 @@ class TestNoClubBDataInAnyRenderedPage:
 
 
 @pytest.mark.django_db
-@CLUBS_ON
+@pytest.mark.usefixtures("tenancy_flags")
 class TestLeaderboardCacheIsNotShared:
     """A correctly-scoped query served from a cache entry built for another
     club is still a leak -- and one every test running against a cold cache
-    passes."""
+    passes.
+
+    Runs in both configurations: the legacy key
+    (`leaderboard_{gen}_{match_type}_{date_filter}_...`) with `seasons` off,
+    the season key (`leaderboard_{gen}_season{id|all}_{format}_...`) with it
+    on. The all-time season key names no club, so only the prefix keeps it
+    apart."""
 
     URL = None
 
     def _leaderboard(self, tenant, **params):
         return tenant.client().get(reverse("pingpong:leaderboard"), params)
+
+    def test_the_configuration_exercises_its_own_key_shape(self, tenancy_flags, bravo):
+        """Without this, both runs could be testing the same key."""
+        self._leaderboard(bravo)
+        keys = [k for k in cache._cache if "leaderboard_" in k and "generation" not in k]
+        assert keys, "the leaderboard was not cached at all"
+        assert all(f"club{bravo.club.pk}:" in k for k in keys)
+        seasonal = [k for k in keys if "_season" in k]
+        if tenancy_flags == "clubs_and_seasons_on":
+            assert seasonal == keys
+        else:
+            assert not seasonal
+
+    def test_the_owner_sees_their_own_rows(self, bravo):
+        """The control: the leak checks below are vacuous if nothing renders."""
+        body = self._leaderboard(bravo).content.decode(errors="ignore")
+        assert BRAVO in body
 
     def test_club_b_first_then_club_a(self, alpha, bravo):
         self._leaderboard(bravo)  # warms the cache with Club B's payload
@@ -753,13 +818,13 @@ class TestABackfilledWorldBehavesIdenticallyWithTheFlagOn:
         settings.FEATURE_FLAGS = {"clubs": False}
         before = {
             name: alpha.client().get(_url(name, alpha)).status_code
-            for name in LIST_URLS
+            for name in LIST_URL_NAMES
         }
 
         settings.FEATURE_FLAGS = {"clubs": True}
         after = {
             name: alpha.client().get(_url(name, alpha)).status_code
-            for name in LIST_URLS
+            for name in LIST_URL_NAMES
         }
 
         assert after == before

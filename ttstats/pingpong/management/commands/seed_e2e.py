@@ -4,21 +4,17 @@ The e2e suite drives the real app in a real browser engine, so it needs a
 known user and a known live match to point at. Refuses to run unless DEBUG is
 on, because it creates an account with a published password.
 """
-from datetime import date
+from datetime import date, timedelta
 
 from django.conf import settings
-from django.utils import timezone
 from django.contrib.auth.models import User
 from django.core.management.base import BaseCommand, CommandError
-
-from pingpong import live_scoring as ls, point_rollups, services
-from datetime import timedelta
-
 from django.utils import timezone
 
+from pingpong import live_scoring as ls, point_rollups, services
 from pingpong.models import (
     Club, ClubInvite, ClubMembership, ClubRole, FeatureFlagOverride, Game, Match,
-    MatchConfirmation, Player, Season, SeasonStanding,
+    MatchConfirmation, Player, PlayerRating, Season, SeasonStanding,
 )
 
 E2E_USERNAME = "e2e"
@@ -29,6 +25,8 @@ E2E_MOMENTUM_OPPONENT = "e2e-momentum"
 # so the season leaderboard specs see the flag-on UI while every other spec
 # keeps exercising the flag-off one -- the staff-first rollout, in miniature.
 E2E_SEASONS_USERNAME = "e2e-seasons"
+# Every player the seed rates. A re-seed starts them from scratch.
+E2E_PLAYER_NAMES = ("E2E Player", "E2E Opponent", "E2E Momentum", "E2E Seasons Player")
 
 
 class Command(BaseCommand):
@@ -38,10 +36,11 @@ class Command(BaseCommand):
         if not settings.DEBUG:
             raise CommandError("seed_e2e refuses to run with DEBUG=False.")
 
-        # Idempotent: the suite re-seeds before every run, and a live match
-        # left over from a previous run would make the scoreboard specs
-        # start from a non-zero score.
-        Match.all_objects.filter(is_live=True, scorekeeper__name="E2E Player").delete()
+        # Idempotent: the suite re-seeds before every run. A live match left
+        # over from a previous run would make the scoreboard specs start from
+        # a non-zero score, and a finished one (or Elo applied on top of the
+        # last run's) would move every rating the season specs assert.
+        self._reset_seeded_players()
 
         user, _ = User.objects.get_or_create(
             username=E2E_USERNAME, defaults={"email": "e2e@example.test"}
@@ -124,6 +123,20 @@ class Command(BaseCommand):
         self.stdout.write(f"E2E_SEASON={season.name}")
         self.stdout.write(f"E2E_ARCHIVED_SEASON_PK={archived_season.pk}")
 
+    def _reset_seeded_players(self):
+        """Back to a fresh database for the seeded players: no matches, no ratings.
+
+        Every match involving them goes (live, finished, seeded or left behind
+        by a spec), which cascades EloHistory and RatingChange; their
+        PlayerRating rows go and the legacy fields return to the model
+        defaults. Everything is then rebuilt by the real pipeline below, so a
+        re-run writes exactly what the first run wrote.
+        """
+        players = Player.objects.filter(name__in=E2E_PLAYER_NAMES)
+        Match.all_objects.filter(participants__player__in=players).distinct().delete()
+        PlayerRating.all_objects.filter(player__in=players).delete()
+        players.update(elo_rating=1500, elo_peak=1500, matches_for_elo=0)
+
     def _seed_season(self, club, player, opponent):
         """A current season with confirmed singles results, for the season table.
 
@@ -135,7 +148,9 @@ class Command(BaseCommand):
         unrated this season. Doubles has nobody, so its empty state renders.
         """
         today = timezone.now().date()
-        season, _ = Season.all_objects.get_or_create(
+        # update_or_create: a season seeded on an earlier day is moved to
+        # cover today, so a current season always exists.
+        season, _ = Season.all_objects.update_or_create(
             club=club,
             name="E2E Season",
             defaults={
@@ -164,9 +179,6 @@ class Command(BaseCommand):
             defaults={"enabled": True, "note": "e2e: season leaderboard specs"},
         )
 
-        Match.all_objects.filter(
-            club=club, participants__player=me
-        ).distinct().delete()
         for winner, loser in ((me, opponent), (me, opponent), (player, opponent)):
             match = Match.all_objects.create(club=club, best_of=3)
             services.set_match_sides(match, [winner], [loser])
@@ -239,11 +251,6 @@ class Command(BaseCommand):
         opponent, _ = Player.objects.get_or_create(name="E2E Momentum")
         opponent.user = opponent_user
         opponent.save()
-
-        # Idempotent, like everything else here.
-        Match.all_objects.filter(
-            participants__player=opponent
-        ).distinct().delete()
 
         match = Match.all_objects.create(
             best_of=3,
