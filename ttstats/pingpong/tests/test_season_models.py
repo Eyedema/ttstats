@@ -5,13 +5,21 @@ import pytest
 from django.contrib.admin.sites import AdminSite
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
-from django.test import RequestFactory, override_settings
+from django.test import Client, RequestFactory, override_settings
+from django.urls import reverse
 from django.utils import timezone
 
 from .. import seasons
 from ..admin import SeasonAdmin
 from ..models import Season
-from .conftest import ClubFactory, SeasonFactory, UserFactory
+from .conftest import (
+    ClubFactory,
+    GameFactory,
+    MatchFactory,
+    PlayerFactory,
+    SeasonFactory,
+    UserFactory,
+)
 
 
 def _rejected(**kwargs):
@@ -41,15 +49,15 @@ class TestSeasonCreation:
                   starts_on=date(2026, 2, 1), ends_on=date(2026, 1, 31))
 
     def test_a_one_day_season_is_allowed(self):
-        Season.all_objects.create(club=ClubFactory(), name="Day",
-                                  starts_on=date(2026, 2, 1), ends_on=date(2026, 2, 1))
+        SeasonFactory(club=ClubFactory(), name="Day",
+                      starts_on=date(2026, 2, 1), ends_on=date(2026, 2, 1))
 
 
 @pytest.mark.django_db
 class TestNonOverlapIsEnforcedByTheDatabase:
     def _q1(self, club):
-        return Season.all_objects.create(club=club, name="Q1",
-                                         starts_on=date(2026, 1, 1), ends_on=date(2026, 3, 31))
+        return SeasonFactory(club=club, name="Q1",
+                             starts_on=date(2026, 1, 1), ends_on=date(2026, 3, 31))
 
     def test_an_overlapping_insert_in_the_same_club_is_rejected(self):
         club = ClubFactory()
@@ -67,8 +75,8 @@ class TestNonOverlapIsEnforcedByTheDatabase:
         club = ClubFactory()
         self._q1(club)
 
-        Season.all_objects.create(club=club, name="Q2",
-                                  starts_on=date(2026, 4, 1), ends_on=date(2026, 6, 30))
+        SeasonFactory(club=club, name="Q2",
+                      starts_on=date(2026, 4, 1), ends_on=date(2026, 6, 30))
 
     def test_the_same_dates_in_another_club_are_allowed(self):
         self._q1(ClubFactory())
@@ -79,8 +87,8 @@ class TestNonOverlapIsEnforcedByTheDatabase:
     def test_an_update_that_creates_an_overlap_is_rejected(self):
         club = ClubFactory()
         self._q1(club)
-        q2 = Season.all_objects.create(club=club, name="Q2",
-                                       starts_on=date(2026, 4, 1), ends_on=date(2026, 6, 30))
+        q2 = SeasonFactory(club=club, name="Q2",
+                           starts_on=date(2026, 4, 1), ends_on=date(2026, 6, 30))
 
         with pytest.raises(IntegrityError):
             with transaction.atomic():
@@ -168,6 +176,75 @@ class TestSeasonAdmin:
         fields = self._admin().get_readonly_fields(self._request(), season)
 
         assert {"starts_on", "ends_on", "club"} <= set(fields)
+
+
+def _confirmed_match_in(club, day):
+    p1, p2 = PlayerFactory(club=club), PlayerFactory(club=club)
+    match = MatchFactory(
+        player1=p1, player2=p2, club=club,
+        date_played=datetime(day.year, day.month, day.day, 12, tzinfo=dt_timezone.utc),
+    )
+    for n in (1, 2, 3):
+        GameFactory(match=match, game_number=n, team1_score=11, team2_score=5)
+    match.refresh_from_db()
+    assert match.is_confirmed  # unverified players auto-confirm
+    return match
+
+
+@pytest.mark.django_db
+class TestSeasonAdminBackdatedWarning:
+    """A season created over already-confirmed matches does not rate them:
+    staff are told the exact command that does."""
+
+    def _add(self, club, starts_on, ends_on):
+        client = Client()
+        client.force_login(UserFactory(is_staff=True, is_superuser=True))
+        response = client.post(reverse("admin:pingpong_season_add"), {
+            "club": club.pk, "name": "Backdated",
+            "starts_on": starts_on.isoformat(), "ends_on": ends_on.isoformat(),
+        }, follow=True)
+        season = Season.all_objects.get(club=club, name="Backdated")
+        return season, [str(m) for m in response.context["messages"]]
+
+    def test_warns_with_the_exact_command(self):
+        club = ClubFactory()
+        today = timezone.now().date()
+        _confirmed_match_in(club, today - timedelta(days=5))
+        _confirmed_match_in(club, today - timedelta(days=4))
+
+        season, messages = self._add(club, today - timedelta(days=10), today + timedelta(days=80))
+
+        warning = [m for m in messages if "recalculate_elo" in m]
+        assert len(warning) == 1
+        assert f"python manage.py recalculate_elo --season {season.pk}" in warning[0]
+        assert "2 confirmed matches" in warning[0]
+
+    def test_no_warning_without_confirmed_matches_in_range(self):
+        club = ClubFactory()
+        today = timezone.now().date()
+        _confirmed_match_in(club, today - timedelta(days=30))  # before the season
+
+        _, messages = self._add(club, today - timedelta(days=10), today + timedelta(days=80))
+
+        assert not [m for m in messages if "recalculate_elo" in m]
+
+    def test_no_warning_for_another_clubs_matches(self):
+        club = ClubFactory()
+        today = timezone.now().date()
+        _confirmed_match_in(ClubFactory(), today - timedelta(days=5))
+
+        _, messages = self._add(club, today - timedelta(days=10), today + timedelta(days=80))
+
+        assert not [m for m in messages if "recalculate_elo" in m]
+
+    def test_no_warning_for_a_future_season(self):
+        club = ClubFactory()
+        today = timezone.now().date()
+        _confirmed_match_in(club, today)
+
+        _, messages = self._add(club, today + timedelta(days=1), today + timedelta(days=90))
+
+        assert not [m for m in messages if "recalculate_elo" in m]
 
 
 @pytest.mark.django_db

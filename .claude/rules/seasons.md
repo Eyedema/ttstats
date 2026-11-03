@@ -5,14 +5,16 @@ paths:
   - "ttstats/pingpong/season_views.py"
   - "ttstats/pingpong/templates/pingpong/seasons/**"
   - "ttstats/pingpong/elo.py"
-  - "ttstats/pingpong/elo_replay.py"
-  - "ttstats/pingpong/elo_parity.py"
+  - "ttstats/pingpong/elo_*.py"
   - "ttstats/pingpong/ratings.py"
   - "ttstats/pingpong/management/commands/recalculate_elo.py"
-  - "ttstats/pingpong/migrations/004*_*.py"
   - "ttstats/pingpong/models.py"
   - "ttstats/pingpong/admin.py"
   - "ttstats/pingpong/migrations/0038_season.py"
+  - "ttstats/pingpong/migrations/0039_player_rating.py"
+  - "ttstats/pingpong/migrations/0040_backfill_player_ratings.py"
+  - "ttstats/pingpong/migrations/0043_season_standing.py"
+  - "ttstats/pingpong/templates/pingpong/_leaderboard_season_results.html"
   - "ttstats/pingpong/tests/test_season*.py"
   - "ttstats/pingpong/tests/test_rating_backfill.py"
 ---
@@ -23,7 +25,7 @@ The contract is `docs/decisions/kan-9-seasons.md`; these are the rules it implie
 
 - **`seasons.py` is pure** (no Django): `resolve_season`, `next_season_bounds`,
   `first_season_bounds`, `carry_over_seed`, `ranked`/`competition_ranks`,
-  `is_due_for_rollover`, `season_name_for`. Models and the Elo pipeline call it;
+  `needs_successor`, `is_due_for_rollover`, `season_name_for`. Models and the Elo pipeline call it;
   never re-derive a boundary or the seed inline.
 - **Dates are inclusive UTC dates.** A match's season is the one containing
   `date_played.date()`. A day in no season resolves to `None` and the match
@@ -34,6 +36,10 @@ The contract is `docs/decisions/kan-9-seasons.md`; these are the rules it implie
   `pingpong_season` must recreate them.
 - **Archived seasons are frozen**: club and dates read-only in the admin and
   rejected by `clean()`.
+- **Season ratings are written at confirmation only, never back-filled.** A
+  season created (or widened) over already-confirmed matches leaves them
+  with all-time ratings only; `SeasonAdmin.save_model` warns with the exact
+  `recalculate_elo --season <id>` command that rates them.
 - `Season.objects` is club-scoped (`ClubDataManager`, no user filter).
   `Season.for_day(club_id, day)` reads `all_objects` because write paths must
   resolve the *match's* club, not the viewer's.
@@ -91,12 +97,23 @@ The contract is `docs/decisions/kan-9-seasons.md`; these are the rules it implie
   `notified_at`). Late confirmations move `PlayerRating`, not the table; a test
   asserts the table survives `recalculate_elo`. Never recompute an archived
   table from ratings or matches.
-- `season_rollover.run` (job `season_rollover`): per season, one transaction
-  (freeze, `archived_at`, next season if none starts later). Notifications
-  happen after the commit, claimed per (season, player) by a conditional
-  `.update()` of `notified_at`: exactly-once by state, never by the limiter.
+- `season_rollover.run` (job `season_rollover`) has two steps:
+  1. **The successor, ahead of time.** For each club whose latest season (by
+     `ends_on`) satisfies `seasons.needs_successor` (`today >= ends_on -
+     SUCCESSOR_LEAD_DAYS`, 14), create the next contiguous season unless one
+     already starts after it. One transaction per creation, under a lock on
+     the latest season; loops so a backlog catches up. Creating it at
+     archive time instead would leave the new season's first days in no
+     season, and those matches would never get season ratings.
+  2. **The archive**, after `ROLLOVER_GRACE_DAYS`: per season, one
+     transaction (freeze, `archived_at`).
+- Notifications happen after the commit, claimed per (season, player) by a
+  conditional `.update()` of `notified_at`: **at most once** by state (a
+  crash between claim and send loses that message), never by the limiter.
 - The archive views (`season_views.py`) read only `SeasonStanding`, are
   uncached and stay out of leaderboard invalidation. 404 with the flag off;
   scoped through `Season.objects` / `SeasonStanding.objects`.
+- Test data: `SeasonFactory`, `PlayerRatingFactory` and `SeasonStandingFactory`
+  in `conftest.py`; never a raw `.create()` outside constraint tests.
 - Render names from `player_name` via `{% player_link row.player label=row.player_name %}`:
   the player may be deleted (`SET_NULL`) or renamed.

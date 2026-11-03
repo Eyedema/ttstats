@@ -1,12 +1,12 @@
 import factory
 import pytest
 from datetime import date, time, timedelta
-from django.contrib.auth.models import User, AnonymousUser
+from django.contrib.auth.models import User
 from django.core.cache import cache as django_cache
 from django.test import Client
 from factory.django import DjangoModelFactory
 
-from pingpong.models import Championship, ChampionshipEntry, ChampionshipEntryMember, Club, ClubMembership, ClubRole, Game, JobRun, Location, Match, MatchConfirmation, Player, PlayerRating, ScheduledMatch, Season, Side
+from pingpong.models import Championship, ChampionshipEntry, ChampionshipEntryMember, Club, ClubMembership, ClubRole, Game, JobRun, Location, Match, MatchConfirmation, Player, PlayerRating, ScheduledMatch, Season, SeasonStanding
 from pingpong.services import set_match_sides, set_scheduled_match_sides
 
 
@@ -118,6 +118,26 @@ class PlayerRatingFactory(DjangoModelFactory):
     rating = 1500
     peak = factory.LazyAttribute(lambda o: max(o.rating, 1500))
     matches = 0
+
+
+class SeasonStandingFactory(DjangoModelFactory):
+    """A frozen final-table row (KAN-51). `player_name` defaults to the
+    player's name at creation, as rollover freezes it; `matches` is
+    `wins + losses`."""
+
+    class Meta:
+        model = SeasonStanding
+
+    season = factory.SubFactory(SeasonFactory)
+    format = "singles"
+    player = factory.SubFactory(PlayerFactory)
+    player_name = factory.LazyAttribute(lambda o: o.player.name if o.player else "Deleted player")
+    rank = 1
+    rating = 1500
+    wins = 1
+    losses = 0
+    matches = factory.LazyAttribute(lambda o: o.wins + o.losses)
+    notified_at = None
 
 
 class MatchFactory(DjangoModelFactory):

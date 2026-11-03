@@ -48,8 +48,13 @@ Jira: epic KAN-9; stories KAN-45 (Q4.8), 46 (S4.1), 47 (S4.2), 49 (S4.7),
   tested without the DB.
 - **A match outside every season** (before the first one, or in a gap) counts
   toward all-time ratings only. That is defined behaviour, not a silent drop.
-  Rollover creates contiguous seasons, so gaps only appear when staff create
-  them by hand.
+  Season ratings are written only at confirmation and are never back-filled,
+  so a season must exist **before** its first match is confirmed. Rollover
+  therefore creates each club's next contiguous season ahead of time
+  (see "Rollover (S4.6)", amended in review), and gaps appear only when staff
+  create seasons by hand. A season staff create over days that already have
+  confirmed matches does not rate them; the admin warns, naming
+  `recalculate_elo --season <id>`, which does.
 - `PlayerRating(player FK CASCADE, club FK, season FK null, format: 'singles'|'doubles', rating, peak, matches, updated_at)`.
   - `season=NULL` is the **all-time** rating for that format.
   - Unique constraints: `(player, season, format)` WHERE `season IS NOT NULL`,
@@ -162,12 +167,26 @@ Jira: epic KAN-9; stories KAN-45 (Q4.8), 46 (S4.1), 47 (S4.2), 49 (S4.7),
 
 ## Rollover (S4.6)
 
-- The job `season_rollover` processes seasons where
-  `ends_on + ROLLOVER_GRACE_DAYS (3) < today` and `archived_at` is null.
-  It freezes `SeasonStanding(season, format, player, rank, rating, matches, wins, losses)`
-  rows, sets `archived_at`, creates the next season if none exists, and
-  notifies each player of their final rank. It is idempotent: an archived
-  season is skipped, and the next season is created only once.
+- The job `season_rollover` runs two independent steps:
+  1. **Create the successor ahead of time.** For each club whose latest
+     season (by `ends_on`) satisfies `today >= ends_on - SUCCESSOR_LEAD_DAYS`
+     (14), create the next contiguous season, unless a season in that club
+     already starts after this one's `ends_on`. One transaction per
+     creation, under a lock on that season row; idempotent; `--dry-run`
+     writes nothing. It loops, so a backlog creates every missing season.
+  2. **Archive** seasons where `ends_on + ROLLOVER_GRACE_DAYS (3) < today`
+     and `archived_at` is null: freeze
+     `SeasonStanding(season, format, player, rank, rating, matches, wins, losses)`
+     rows, set `archived_at`, and notify each player of their final rank.
+     Idempotent: an archived season is skipped.
+
+  *Amended in review (KAN-51):* as first built, the next season was created
+  inside the archive transaction, i.e. `ends_on + 4` days after the new
+  season began. A match confirmed in those days resolved to no season, got
+  all-time ratings only, was never back-filled, showed as "pending" on match
+  detail once the season existed, and diverged from a `recalculate_elo`
+  replay. Creating the successor 14 days early, decoupled from archiving,
+  closes that window.
 - **Late confirmation rule:** a match whose `date_played` falls in an archived
   season still updates the all-time and season `PlayerRating` rows when
   confirmed. **The frozen `SeasonStanding` rows never change.** The archive is
@@ -199,11 +218,12 @@ Jira: epic KAN-9; stories KAN-45 (Q4.8), 46 (S4.1), 47 (S4.2), 49 (S4.7),
 - `rating` and `matches` come from the season's `PlayerRating` row; wins come
   from that row's `RatingChange`s where the player was on the winning side, and
   losses are the rest. Rank is by rating alone (`seasons.ranked`).
-- One transaction per season: lock the row, freeze, set `archived_at`, create
-  the next season. A season that fails rolls back, is logged and skipped, and
-  the run raises at the end so the `JobRun` shows the failure; other clubs
-  still roll over. A backlog catches up in one run (a next season that is
-  already due is archived in turn).
+- One transaction per season: lock the row, freeze, set `archived_at`. The
+  next season is created by step 1, not here. A season (or a club's
+  successor) that fails rolls back, is logged and skipped, and the run raises
+  at the end so the `JobRun` shows the failure; other clubs still roll over.
+  A backlog catches up in one run (step 1 creates every missing season up to
+  today's lead window, step 2 archives every one already past its grace).
 - The next season is created only when the club has **no season starting
   after** this one ends (so it can never hit the non-overlap constraint). Its
   default name comes from `seasons.season_name_for` ("Apr–Jun 2026"); staff
@@ -220,8 +240,8 @@ Jira: epic KAN-9; stories KAN-45 (Q4.8), 46 (S4.1), 47 (S4.2), 49 (S4.7),
   on later never announces an old season.
 - A live match belongs to the season of its `date_played` (its start). One
   that finishes after rollover is a late confirmation like any other.
-- `--dry-run` reports only the seasons due now; it does not simulate a
-  backlog's follow-on seasons.
+- `--dry-run` reports one successor per club in its lead window and the
+  seasons due now; it does not simulate a backlog's follow-on seasons.
 - The archive (`/pingpong/seasons/`, `/pingpong/seasons/<pk>/?format=`) reads
   only `SeasonStanding`, is not cached and is outside leaderboard
   invalidation. It is 404 with the flag off. It has no nav entry yet: a

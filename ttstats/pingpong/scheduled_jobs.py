@@ -21,7 +21,7 @@ PRUNE_BATCH_SIZE = 1000
 
 
 @jobs.register("prune_job_runs")
-def prune_job_runs(*, dry_run):
+def prune_job_runs(*, dry_run: bool) -> str:
     """Delete JobRun rows older than JOB_RUN_RETENTION_DAYS."""
     cutoff = timezone.now() - timedelta(days=JOB_RUN_RETENTION_DAYS)
     old = JobRun.objects.filter(started_at__lt=cutoff)
@@ -39,6 +39,7 @@ def prune_job_runs(*, dry_run):
 
 
 @jobs.register("season_rollover")
-def season_rollover(*, dry_run):
-    """Freeze and archive every season past its grace days; start the next (KAN-51)."""
+def season_rollover(*, dry_run: bool) -> str:
+    """Create each club's next season ahead of its start; freeze and archive
+    every season past its grace days (KAN-51)."""
     return rollover.run(dry_run=dry_run)

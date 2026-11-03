@@ -22,6 +22,10 @@ DEFAULT_FIRST_SEASON_MONTHS = 3
 # Days after `ends_on` before rollover freezes a season, so a match played on
 # the last day has time to be confirmed into the frozen table (KAN-51).
 ROLLOVER_GRACE_DAYS = 3
+# Days before a club's latest season ends that rollover creates the next one,
+# so a match played on the new season's first day already has a season to
+# land in (a match in no season is never back-filled into one).
+SUCCESSOR_LEAD_DAYS = 14
 
 
 def _as_date(day):
@@ -103,6 +107,11 @@ def carry_over_seed(all_time_rating):
 def is_due_for_rollover(ends_on, today):
     """True once the grace days after `ends_on` have fully passed."""
     return ends_on + timedelta(days=ROLLOVER_GRACE_DAYS) < today
+
+
+def needs_successor(ends_on, today):
+    """True from `SUCCESSOR_LEAD_DAYS` before the latest season ends, onwards."""
+    return today >= ends_on - timedelta(days=SUCCESSOR_LEAD_DAYS)
 
 
 def ranked(items, key):

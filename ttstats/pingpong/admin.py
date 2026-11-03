@@ -1,11 +1,13 @@
 from datetime import date, timedelta
-from django.contrib import admin
+from django.contrib import admin, messages
 from django.contrib.admin import SimpleListFilter
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import User
 from django.core.management import call_command
 from django.http import HttpResponseRedirect
 from django.urls import path
+from django.db.models import Exists, OuterRef
+from django.utils import timezone
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 from django_otp_webauthn.models import WebAuthnCredential
@@ -27,6 +29,7 @@ from .models import (
     Player,
     PlayerAchievement,
     PushSubscription,
+    RatingChange,
     ScheduledMatch,
     Season,
     UserProfile,
@@ -1069,3 +1072,40 @@ class SeasonAdmin(admin.ModelAdmin):
         if obj is not None and obj.archived_at is not None:
             fields += [f for f in self.FROZEN_WHEN_ARCHIVED if f not in fields]
         return fields
+
+    def save_model(self, request, obj, form, change):
+        """Save, then warn when the season covers confirmed matches it has not rated.
+
+        Season ratings are written at confirmation time only, so a season
+        created (or widened) over the past leaves those matches with all-time
+        ratings and no season rows until staff replay them.
+        """
+        super().save_model(request, obj, form, change)
+        unrated = self._unrated_confirmed_matches(obj)
+        if unrated:
+            noun = "match" if unrated == 1 else "matches"
+            messages.warning(
+                request,
+                f"{unrated} confirmed {noun} in this season's dates have no season "
+                f"ratings yet. Run `python manage.py recalculate_elo --season {obj.pk}` "
+                "to rate them.",
+            )
+
+    @staticmethod
+    def _unrated_confirmed_matches(season):
+        """Confirmed, decided matches of the season's club in its dates (up to
+        today) with no RatingChange in this season. `all_objects`: explicitly
+        filtered by the season's club; the admin has no club context."""
+        today = timezone.now().date()
+        if season.starts_on > today:
+            return 0
+        rated = RatingChange.objects.filter(match=OuterRef("pk"), rating__season=season)
+        return (
+            Match.all_objects.filter(
+                club_id=season.club_id, is_confirmed=True, winner_side__isnull=False,
+                date_played__date__gte=season.starts_on,
+                date_played__date__lte=min(season.ends_on, today),
+            )
+            .exclude(Exists(rated))
+            .count()
+        )

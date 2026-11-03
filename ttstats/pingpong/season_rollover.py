@@ -3,15 +3,19 @@
 Run nightly by the ``season_rollover`` job (``scheduled_jobs.py``). The
 contract is "Rollover (S4.6)" in ``docs/decisions/kan-9-seasons.md``.
 
-* A season is **due** once ``ends_on + ROLLOVER_GRACE_DAYS < today`` and it is
-  not archived. The grace lets a match played on the last day be confirmed
-  into the table.
-* **Per season, one transaction**: freeze the final table into
-  ``SeasonStanding`` rows (from the season's ``PlayerRating`` rows, wins and
-  losses from its ``RatingChange`` rows), set ``archived_at``, and create the
-  next season unless the club already has a later one. The season row is
-  locked and re-checked inside the transaction, so a concurrent run archives
-  it once.
+* **Step 1, the successor, ahead of time.** Once a club's latest season (by
+  ``ends_on``) is within ``SUCCESSOR_LEAD_DAYS`` of its end, the next
+  contiguous season is created, unless the club already has a season starting
+  after it ends. It must exist before its first day: a match confirmed on a
+  day in no season gets all-time ratings only and is never back-filled.
+  One transaction per creation, under a lock on the latest season row.
+* **Step 2, the archive.** A season is **due** once
+  ``ends_on + ROLLOVER_GRACE_DAYS < today`` and it is not archived. The grace
+  lets a match played on the last day be confirmed into the table. Per
+  season, one transaction: freeze the final table into ``SeasonStanding``
+  rows (from the season's ``PlayerRating`` rows, wins and losses from its
+  ``RatingChange`` rows) and set ``archived_at``. The season row is locked
+  and re-checked inside the transaction, so a concurrent run archives it once.
 * **Notifications come after the commit**, never inside it (a rolled-back
   freeze must not have told anyone anything). Each player is claimed with a
   conditional ``.update()`` of ``notified_at`` across their rows in the
@@ -29,7 +33,7 @@ import logging
 from datetime import timedelta
 
 from django.db import transaction
-from django.db.models import Count, Exists, OuterRef
+from django.db.models import Count, Exists, Max, OuterRef
 from django.urls import reverse
 from django.utils import timezone
 
@@ -61,19 +65,38 @@ def due_seasons(today):
     return Season.all_objects.filter(archived_at__isnull=True, ends_on__lt=cutoff)
 
 
-def run(*, today=None, dry_run=False):
-    """Roll over every due season in every club. Returns a one-line summary.
+def clubs_needing_successor(today):
+    """Club ids whose latest season (by ends_on) is within its lead window."""
+    cutoff = today + timedelta(days=seasons.SUCCESSOR_LEAD_DAYS)
+    return (
+        Season.all_objects.values("club_id").annotate(latest=Max("ends_on"))
+        .filter(latest__lte=cutoff).order_by("club_id").values_list("club_id", flat=True)
+    )
 
-    A season that fails is rolled back, logged and skipped so other clubs
-    still roll over; the run then raises so the JobRun records the failure.
-    A backlog (the job did not run for a whole season) catches up in one run,
-    because a next season created here is itself picked up if already due.
+
+def _latest_season_pk(club_id):
+    return (
+        Season.all_objects.filter(club_id=club_id)
+        .order_by("-ends_on", "-pk").values_list("pk", flat=True).first()
+    )
+
+
+def run(*, today=None, dry_run=False):
+    """Create due successors, then roll over every due season. Returns a summary.
+
+    A club or season that fails is rolled back, logged and skipped so the
+    others still go through; the run then raises so the JobRun records the
+    failure. A backlog (the job did not run for a while) catches up in one
+    run: step 1 loops until every club's latest season is outside its lead
+    window, and step 2 archives every season already past its grace days.
     """
     today = today or timezone.now().date()
     if dry_run:
         return _dry_run_summary(today)
 
-    archived = frozen = created = 0
+    created, failed_clubs = create_successors(today)
+
+    archived = frozen = 0
     failed = []
     while True:
         pk = (
@@ -83,33 +106,67 @@ def run(*, today=None, dry_run=False):
         if pk is None:
             break
         try:
-            outcome = archive_season(pk, today=today)
+            rows = archive_season(pk, today=today)
         except Exception:
             logger.exception("Season %s failed to roll over; rolled back", pk)
             failed.append(pk)
             continue
-        if outcome is None:
+        if rows is None:
             continue
-        rows, next_season = outcome
         archived += 1
         frozen += rows
-        created += next_season is not None
 
     told = notify_pending()
     summary = (
+        f"created {created} next season{'s' if created != 1 else ''}, "
         f"archived {archived} season{'s' if archived != 1 else ''} ({frozen} standings), "
-        f"created {created} next season{'s' if created != 1 else ''}, notified {told} players"
+        f"notified {told} players"
     )
-    if failed:
-        raise RuntimeError(f"{summary}; failed seasons: {failed}")
+    if failed or failed_clubs:
+        raise RuntimeError(f"{summary}; failed seasons: {failed}; failed clubs: {failed_clubs}")
     return summary
 
 
-def archive_season(season_pk, *, today):
-    """Freeze, archive and follow one season, atomically.
+def create_successors(today):
+    """Step 1: give every club whose latest season ends soon its next season.
 
-    Returns ``(standings_written, next_season_or_None)``, or None when the
-    season was already archived (or is not due) by the time the lock was held.
+    Returns ``(created, failed_club_ids)``. Loops, so a backlog creates every
+    missing season up to today's lead window; each pass creates a later
+    season, so it terminates.
+    """
+    created = 0
+    failed, settled = [], []
+    while True:
+        club_id = clubs_needing_successor(today).exclude(club_id__in=failed + settled).first()
+        if club_id is None:
+            return created, failed
+        try:
+            new = _create_successor(_latest_season_pk(club_id), today=today)
+        except Exception:
+            logger.exception("Club %s: next season failed to be created; rolled back", club_id)
+            failed.append(club_id)
+            continue
+        if new is None:
+            # Nothing to do after all (a concurrent run won); never loop on it.
+            settled.append(club_id)
+            continue
+        created += 1
+
+
+def _create_successor(season_pk, *, today):
+    """Create the season after `season_pk`, atomically. None if not (or no longer) needed."""
+    with transaction.atomic():
+        season = Season.all_objects.select_for_update().get(pk=season_pk)
+        if not seasons.needs_successor(season.ends_on, today):
+            return None
+        return _create_next_season(season)
+
+
+def archive_season(season_pk, *, today):
+    """Freeze and archive one season, atomically.
+
+    Returns the number of standings written, or None when the season was
+    already archived (or is not due) by the time the lock was held.
     """
     with transaction.atomic():
         season = Season.all_objects.select_for_update().get(pk=season_pk)
@@ -117,8 +174,7 @@ def archive_season(season_pk, *, today):
             return None
         rows = _freeze(season)
         Season.all_objects.filter(pk=season.pk).update(archived_at=timezone.now())
-        next_season = _create_next_season(season)
-    return rows, next_season
+    return rows
 
 
 def _wins_and_played(season, fmt):
@@ -259,21 +315,19 @@ def _tell(season, player_id):
 def _dry_run_summary(today):
     """What a real run would do now, writing nothing.
 
-    Counts only seasons due today; a backlog's follow-on seasons (created and
+    Counts one successor per club whose latest season is in its lead window,
+    and only seasons due today; a backlog's follow-on seasons (created and
     then archived in the same real run) are not simulated.
     """
-    due = list(due_seasons(today).values_list("pk", "club_id", "ends_on"))
-    standings = PlayerRating.all_objects.filter(season_id__in=[pk for pk, _, _ in due]).count()
-    to_create = sum(
-        not Season.all_objects.filter(club_id=club_id, starts_on__gt=ends_on).exists()
-        for _, club_id, ends_on in due
-    )
+    due = list(due_seasons(today).values_list("pk", flat=True))
+    standings = PlayerRating.all_objects.filter(season_id__in=due).count()
+    to_create = clubs_needing_successor(today).count()
     pending = (
         SeasonStanding.all_objects.filter(notified_at__isnull=True, player__isnull=False)
         .values("season_id", "player_id").distinct().count()
     )
     return (
-        f"would archive {len(due)} season{'s' if len(due) != 1 else ''} ({standings} standings), "
-        f"create {to_create} next season{'s' if to_create != 1 else ''}, "
+        f"would create {to_create} next season{'s' if to_create != 1 else ''}, "
+        f"archive {len(due)} season{'s' if len(due) != 1 else ''} ({standings} standings), "
         f"notify {pending} pending players (plus those ranked by this run)"
     )

@@ -7,10 +7,12 @@ import pytest
 from ..seasons import (
     SEASON_CARRY_FACTOR,
     ROLLOVER_GRACE_DAYS,
+    SUCCESSOR_LEAD_DAYS,
     carry_over_seed,
     competition_ranks,
     first_season_bounds,
     is_due_for_rollover,
+    needs_successor,
     next_season_bounds,
     resolve_season,
     season_name_for,
@@ -151,6 +153,20 @@ class TestIsDueForRollover:
     ])
     def test_due_only_after_the_grace_days(self, today, due):
         assert is_due_for_rollover(date(2026, 3, 31), today) is due
+
+
+class TestNeedsSuccessor:
+    def test_the_lead_is_fourteen_days(self):
+        assert SUCCESSOR_LEAD_DAYS == 14
+
+    @pytest.mark.parametrize("today,needed", [
+        (date(2026, 3, 16), False),  # 15 days before ends_on
+        (date(2026, 3, 17), True),   # exactly ends_on - 14
+        (date(2026, 3, 31), True),
+        (date(2026, 4, 2), True),    # already past: a backlog still needs one
+    ])
+    def test_needed_from_the_lead_day_on(self, today, needed):
+        assert needs_successor(date(2026, 3, 31), today) is needed
 
 
 class TestSeasonNameFor:

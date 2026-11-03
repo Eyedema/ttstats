@@ -4,20 +4,23 @@ The core guarantee is that a frozen table never changes: not on a late
 confirmation, not on a re-run, not after a full `recalculate_elo`.
 """
 from datetime import date, datetime, timedelta, timezone as dt_timezone
+from io import StringIO
 from unittest.mock import patch
 
 import pytest
 from django.core.management import call_command
 from django.db import IntegrityError, transaction
-from django.test import override_settings
+from django.test import Client, override_settings
+from django.urls import reverse
 from django.utils import timezone
 
-from pingpong import jobs, scheduled_jobs, season_rollover
+from pingpong import jobs, scheduled_jobs, season_rollover, seasons
 from pingpong.models import (
     ClubMembership,
     JobRun,
     Match,
     PlayerRating,
+    RatingChange,
     Season,
     SeasonStanding,
     Side,
@@ -30,6 +33,7 @@ from .conftest import (
     MatchFactory,
     PlayerFactory,
     SeasonFactory,
+    SeasonStandingFactory,
     UserFactory,
     confirm_match,
 )
@@ -105,15 +109,9 @@ class TestSeasonStandingModel:
     def test_one_row_per_season_format_player(self):
         season = SeasonFactory()
         player = PlayerFactory()
-        SeasonStanding.all_objects.create(
-            season=season, format="singles", player=player, player_name="x",
-            rank=1, rating=1500, matches=1, wins=1, losses=0,
-        )
+        SeasonStandingFactory(season=season, player=player)
         with pytest.raises(IntegrityError), transaction.atomic():
-            SeasonStanding.all_objects.create(
-                season=season, format="singles", player=player, player_name="x",
-                rank=1, rating=1500, matches=1, wins=1, losses=0,
-            )
+            SeasonStandingFactory(season=season, player=player, rank=2)
 
     def test_a_deleted_player_keeps_their_frozen_row_and_name(self):
         club = ClubFactory()
@@ -322,7 +320,13 @@ class TestFreeze:
         season = _q1(club)
         _play([PlayerFactory(club=club)], [PlayerFactory(club=club)], day=date(2026, 2, 1), club=club)
 
-        with patch.object(season_rollover, "_create_next_season", side_effect=RuntimeError("boom")):
+        real_freeze = season_rollover._freeze
+
+        def freeze_then_fail(s):
+            assert real_freeze(s) > 0
+            raise RuntimeError("boom")
+
+        with patch.object(season_rollover, "_freeze", side_effect=freeze_then_fail):
             with pytest.raises(RuntimeError):
                 _run()
 
@@ -376,13 +380,134 @@ class TestNextSeason:
 
         _run(today=date(2026, 10, 10))
 
-        seasons = list(Season.all_objects.filter(club=club).order_by("starts_on"))
-        assert [(s.starts_on, s.archived_at is not None) for s in seasons] == [
+        rows = list(Season.all_objects.filter(club=club).order_by("starts_on"))
+        assert [(s.starts_on, s.archived_at is not None) for s in rows] == [
             (date(2026, 1, 1), True),
             (date(2026, 4, 1), True),
             (date(2026, 7, 1), True),
             (date(2026, 10, 1), False),
         ]
+
+
+# ---------------------------------------------------------------------------
+# The successor is created ahead of time, not at archive time
+# ---------------------------------------------------------------------------
+
+LEAD_DAY = Q1_END - timedelta(days=seasons.SUCCESSOR_LEAD_DAYS)
+
+
+@pytest.mark.django_db
+class TestSuccessorAheadOfTime:
+    def test_created_on_the_lead_day_without_archiving(self):
+        club = ClubFactory()
+        season = _q1(club)
+
+        summary = _run(today=LEAD_DAY)
+
+        nxt = Season.all_objects.get(club=club, starts_on=date(2026, 4, 1))
+        assert nxt.ends_on == date(2026, 6, 30)
+        season.refresh_from_db()
+        assert season.archived_at is None
+        assert "created 1 next season" in summary
+
+    def test_not_created_before_the_lead_day(self):
+        club = ClubFactory()
+        _q1(club)
+
+        _run(today=LEAD_DAY - timedelta(days=1))
+
+        assert Season.all_objects.filter(club=club).count() == 1
+
+    def test_idempotent_across_runs(self):
+        club = ClubFactory()
+        _q1(club)
+
+        for today in (LEAD_DAY, LEAD_DAY, Q1_END, AFTER_GRACE, AFTER_GRACE):
+            _run(today=today)
+
+        assert list(
+            Season.all_objects.filter(club=club).order_by("starts_on").values_list("starts_on", "ends_on")
+        ) == [(Q1_START, Q1_END), (date(2026, 4, 1), date(2026, 6, 30))]
+
+    def test_never_overlaps_a_season_staff_already_created(self):
+        club = ClubFactory()
+        _q1(club)
+        SeasonFactory(club=club, starts_on=date(2026, 4, 10), ends_on=date(2026, 5, 31))
+
+        _run(today=LEAD_DAY)
+
+        # The staff season is the latest; it is not yet in its own lead window.
+        assert Season.all_objects.filter(club=club).count() == 2
+
+    def test_only_the_latest_season_gets_a_successor(self):
+        club = ClubFactory()
+        SeasonFactory(club=club, starts_on=date(2025, 10, 1), ends_on=date(2025, 12, 31))
+        _q1(club)
+
+        _run(today=LEAD_DAY)
+
+        assert sorted(Season.all_objects.filter(club=club).values_list("starts_on", flat=True)) == [
+            date(2025, 10, 1), Q1_START, date(2026, 4, 1),
+        ]
+
+    def test_a_backlog_creates_every_missing_season_up_to_today(self):
+        club = ClubFactory()
+        _q1(club)
+
+        _run(today=date(2026, 12, 20))  # inside Q4's lead window
+
+        starts = list(Season.all_objects.filter(club=club).order_by("starts_on").values_list("starts_on", flat=True))
+        assert starts == [Q1_START, date(2026, 4, 1), date(2026, 7, 1), date(2026, 10, 1), date(2027, 1, 1)]
+
+    def test_dry_run_creates_nothing(self):
+        club = ClubFactory()
+        _q1(club)
+
+        summary = _run(today=LEAD_DAY, dry_run=True)
+
+        assert Season.all_objects.filter(club=club).count() == 1
+        assert "create 1 next season" in summary
+
+    def test_a_failure_in_one_club_does_not_stop_the_others(self):
+        bad, good = ClubFactory(), ClubFactory()
+        _q1(bad), _q1(good)
+        real = season_rollover._create_successor
+
+        def flaky(season_pk, *, today):
+            if Season.all_objects.get(pk=season_pk).club_id == bad.pk:
+                raise RuntimeError("boom")
+            return real(season_pk, today=today)
+
+        with patch.object(season_rollover, "_create_successor", side_effect=flaky):
+            with pytest.raises(RuntimeError, match="failed"):
+                _run(today=LEAD_DAY)
+
+        assert Season.all_objects.filter(club=bad).count() == 1
+        assert Season.all_objects.filter(club=good).count() == 2
+
+    @override_settings(FEATURE_FLAGS={"seasons": True})
+    def test_a_match_on_the_first_day_gets_season_ratings_and_shows_applied(self):
+        """The KAN-9 review reproduction: a match confirmed on ends_on + 1."""
+        club = ClubFactory()
+        _q1(club)
+        a, b = _verified_player(club, "Ann"), _verified_player(club, "Bob")
+        _run(today=LEAD_DAY)
+
+        match = _play([a], [b], day=Q1_END + timedelta(days=1), club=club)
+        confirm_match(match)
+
+        nxt = Season.all_objects.get(club=club, starts_on=Q1_END + timedelta(days=1))
+        assert RatingChange.objects.filter(match=match, rating__season=nxt).count() == 2
+        assert PlayerRating.all_objects.filter(season=nxt).count() == 2
+
+        client = Client()
+        client.force_login(a.user)
+        ctx = client.get(reverse("pingpong:match_detail", args=[match.pk])).context
+        assert ctx["rating_scope"].season_id == nxt.pk
+        assert ctx["elo_is_pending"] is False
+        assert ctx["side1_elo_delta"] == RatingChange.objects.get(
+            match=match, player=a, rating__season=nxt
+        ).rating_change
 
 
 # ---------------------------------------------------------------------------
@@ -432,7 +557,7 @@ class TestDryRun:
         assert not SeasonStanding.all_objects.exists()
         assert Season.all_objects.filter(club=club).count() == 1
         assert push.call_count == 0
-        assert "would archive 1" in summary
+        assert "archive 1 season (" in summary
         assert "2 standings" in summary
 
 
@@ -589,7 +714,7 @@ class TestFrozenTablesNeverChange:
 
     def test_an_archived_table_survives_a_full_recalculate_elo(self):
         club = ClubFactory()
-        season = _q1(club)
+        _q1(club)
         a, b, c = (_verified_player(club) for _ in range(3))
         for day, (w, l) in enumerate([(a, b), (b, c), (c, a), (a, c)], start=1):
             confirm_match(_play([w], [l], day=date(2026, 3, day), club=club))
@@ -598,7 +723,7 @@ class TestFrozenTablesNeverChange:
         frozen = _snapshot()
         confirm_match(late)
 
-        call_command("recalculate_elo", stdout=open("/dev/null", "w"))
+        call_command("recalculate_elo", stdout=StringIO())
 
         assert _snapshot() == frozen
 
@@ -630,4 +755,4 @@ class TestJob:
 
         season.refresh_from_db()
         assert season.archived_at is None
-        assert "would archive 1" in summary
+        assert "archive 1 season (" in summary
