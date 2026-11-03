@@ -4,6 +4,7 @@ paths:
   - "ttstats/pingpong/elo.py"
   - "ttstats/pingpong/elo_replay.py"
   - "ttstats/pingpong/elo_parity.py"
+  - "ttstats/pingpong/ratings.py"
   - "ttstats/pingpong/management/commands/recalculate_elo.py"
   - "ttstats/pingpong/migrations/004*_*.py"
   - "ttstats/pingpong/models.py"
@@ -41,8 +42,9 @@ The contract is `docs/decisions/kan-9-seasons.md`; these are the rules it implie
   combined**, written by the unchanged legacy arithmetic. Formats and seasons
   live only in `PlayerRating` (`season=NULL` = all-time) with `RatingChange`
   as its audit trail. `EloHistory` is untouched.
-- **It is a mirror: nothing outside `elo.py`, `elo_replay.py`, `elo_parity.py`
-  and `recalculate_elo` reads `PlayerRating` until S4.3.**
+- **UI reads go through `ratings.py`** (S4.3): the leaderboard, profile and
+  previews, only when the `seasons` flag is on. Nothing else reads
+  `PlayerRating` for display.
 - **`projected_elo_changes(match, scope)` is the only arithmetic** for every
   scope (`LEGACY` or `RatingScope(season, format)`). Format experience is the
   all-time count in that format. A season row is seeded with
@@ -58,3 +60,21 @@ The contract is `docs/decisions/kan-9-seasons.md`; these are the rules it implie
   confirmations. `--season`/`--format` rewrite only those PlayerRating rows;
   legacy fields and `EloHistory` are rewritten only by a full run. `--dry-run`
   diffs stored vs replayed per player and scope and writes nothing.
+
+## The seasons UI (S4.3 / S4.4)
+
+- **Unrated is not 1500.** No row in a scope means no number; render the
+  `_rating_status.html` marker, never the seed.
+- **Provisional is decided in `ratings.rating_status()`**, from the all-time
+  format count against `elo.PROVISIONAL_MATCHES` read at call time. The
+  leaderboard caches `experience`, not the verdict, so a cache hit follows the
+  constant too. Never type the threshold in a template.
+- **The preview scope is `ratings.display_scope(match)`**: the match's own
+  season (else all-time) and format, which is exactly what confirmation
+  writes. Match detail resolves it in `_viewer_context`.
+- The leaderboard's season choices are the **active club's**, filtered
+  explicitly (`Season.objects` is unscoped with `clubs` off); a foreign or
+  garbage id falls back to the default through `LeaderboardScopeForm`.
+- The seasons table aggregates in the DB (rating rows + one grouped
+  `RatingChange` query for wins and weekly movement); its query count is
+  pinned flat in `test_season_views.py`.

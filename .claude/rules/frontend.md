@@ -73,7 +73,13 @@ Four tabs -- **Today, Play, Table, Cups** -- plus a tiered drawer.
 - **Rivalries are ordered by recency, not volume**, and count confirmed matches only.
 - **Leaderboard weekly movement is derived in both cache paths** via
   `_presentation_context()`, so hit, miss and htmx fragment agree.
-- **Match detail resolves the viewer's position once**, in `_viewer_context`.
+- **Match detail resolves the viewer's position once**, in `_viewer_context`
+  (and, with `seasons` on, the rating scope its Elo figures are in).
+- **With `seasons` on, the Table swaps partials**
+  (`_leaderboard_season_results.html`) and its season/format filters are a
+  rendered `LeaderboardScopeForm` with `hx-trigger="change, submit"` (no
+  `from:` selector to break). E2E runs it as `e2e-seasons`, the flag-on
+  user; every other spec stays flag-off.
 
 ## htmx
 

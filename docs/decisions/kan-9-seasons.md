@@ -91,6 +91,12 @@ Jira: epic KAN-9; stories KAN-45 (Q4.8), 46 (S4.1), 47 (S4.2), 49 (S4.7),
   the scope that the viewer's leaderboard displays: the current season and the
   match's format. It calls the same `projected_elo_changes`. Preview and write
   remain the same call.
+  *Amended in S4.3:* precisely, the scope is the **match's own** season
+  (`ratings.display_scope`), which is the current season for anything played
+  this season. For a match played in an earlier season, or outside every
+  season, the current season's scope is never written, so previewing it would
+  break "preview == write"; that match previews its own season, or the
+  all-time format scope.
 
 ## Rebuild (S4.7) and parity (Q4.8)
 
@@ -169,3 +175,16 @@ Jira: epic KAN-9; stories KAN-45 (Q4.8), 46 (S4.1), 47 (S4.2), 49 (S4.7),
   rare.
 - Ties share a rank (1, 1, 3), ordered by rating, then wins, then name for
   display.
+
+## The seasons UI (S4.3 / S4.4)
+
+- With the flag on, the leaderboard's Season (current by default; past
+  seasons; All-time) and Format (singles by default) replace the legacy
+  Format/Period filters. A rating is that format's `PlayerRating` row, so the
+  legacy "All matches" format and date periods have no meaning there.
+  W/L and "played" are the rated matches in that row (`RatingChange`).
+- Players with any rating in the club but no row in the selected scope are
+  listed under the table as Unrated, without a number.
+- The provisional marker and its explanation (a native `<details>`) appear on
+  the leaderboard and the profile. The nav rating and head-to-head still show
+  the legacy combined `Player.elo_rating`.

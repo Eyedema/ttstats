@@ -406,13 +406,11 @@ class LiveBook(RatingBook):
         ])
 
 
-def projected_elo_change_for(match, player):
-    """What this match is worth to one player, signed. 0 if they did not play."""
-    from .models import Side
-
+def projected_elo_change_for(match, player, scope=LEGACY):
+    """What this match is worth to one player in `scope`, signed. 0 if they did not play."""
     if player is None:
         return 0
-    projection = projected_elo_changes(match)
+    projection = projected_elo_changes(match, scope)
     side1, side2 = match.sides()
     if any(p.pk == player.pk for p in side1):
         return projection.side1_change

@@ -76,6 +76,11 @@ no winner yet) is stated in words instead.
       </div>
     </div>
 
+    {% if scope_label %}
+    {# Seasons flag on: which rating the Elo figures above move (KAN-48). #}
+    <p class="label-cap mb-3" data-rating-scope>Rating: {{ scope_label }}</p>
+    {% endif %}
+
     {% if match.is_double %}
     <p class="mb-3 text-[12px] font-semibold text-muted-foreground">
       {% for p in match.side1_players %}{{ p.name }}{% if not forloop.last %} &amp; {% endif %}{% endfor %}

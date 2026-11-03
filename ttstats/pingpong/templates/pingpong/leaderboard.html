@@ -28,6 +28,9 @@ includes, so the two cannot drift.
       <span class="text-[10px] font-extrabold uppercase tracking-[0.12em] text-muted-foreground">wk {{ leaderboard_week }}</span>
       {% endif %}
     </div>
+    {% if rating_scope %}
+    {# The seasons subtitle lives in the swapped partial, so htmx keeps it current. #}
+    {% else %}
     <p class="mt-1 text-[13px] font-semibold text-muted-foreground">
       {{ player_stats|length }} player{{ player_stats|length|pluralize }}
       {% if match_type == 'singles' %}· singles only{% elif match_type == 'doubles' %}· doubles only{% endif %}
@@ -35,8 +38,41 @@ includes, so the two cannot drift.
         {% if date_filter == 'custom' %}· {{ start_date }} to {{ end_date }}{% else %}· selected period{% endif %}
       {% endif %}
     </p>
+    {% endif %}
   </header>
 
+  {% if rating_scope %}
+  {% include 'pingpong/_leaderboard_season_results.html' %}
+
+  {% comment %}
+  The seasons filters (KAN-48). Season and format sit ABOVE the table, open,
+  because they change what the numbers mean -- a singles rating and a doubles
+  rating are different numbers, not a filter of one. Plain rendered widgets
+  (LeaderboardScopeForm through _field.html), no hand-written options. The
+  form bubbles `change` from any select, so htmx needs no `from:` selector;
+  with scripting off the Apply button submits it as a normal GET.
+  {% endcomment %}
+  <form method="get" id="season-filter-form" class="surface mt-6 space-y-4 p-3"
+        action="{% url 'pingpong:leaderboard' %}"
+        hx-get="{% url 'pingpong:leaderboard' %}"
+        hx-target="#leaderboard-results"
+        hx-swap="outerHTML"
+        hx-push-url="true"
+        hx-trigger="change, submit">
+    <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
+      {% include 'pingpong/_field.html' with field=scope_form.season %}
+      {% include 'pingpong/_field.html' with field=scope_form.format %}
+      {% include 'pingpong/_field.html' with field=scope_form.top_x %}
+    </div>
+    <div class="flex items-center justify-between gap-3">
+      {# TODO(KAN-51 merge): {% url 'pingpong:season_archive' %} #}
+      <a href="/pingpong/seasons/" class="btn-quiet text-[13px]" data-season-archive-link>Past seasons</a>
+      <noscript>
+        <button type="submit" class="btn-paddle w-full md:w-auto">Apply</button>
+      </noscript>
+    </div>
+  </form>
+  {% else %}
   {% include 'pingpong/_leaderboard_results.html' %}
 
   {# ------------------------------------------------------------------ #}
@@ -133,8 +169,10 @@ includes, so the two cannot drift.
       </div>
     </form>
   </details>
+  {% endif %}
 </div>
 
+{% if not rating_scope %}
 <script>
     // Plain listeners, no framework expressions: production's CSP has no
     // 'unsafe-eval'. Showing or hiding the custom range is local; htmx owns
@@ -158,4 +196,5 @@ includes, so the two cannot drift.
         toggleCustomDateRange();
     })();
 </script>
+{% endif %}
 {% endblock %}

@@ -9,15 +9,23 @@ from django.contrib.auth.models import User
 from django.core.management.base import BaseCommand, CommandError
 
 from pingpong import live_scoring as ls, point_rollups, services
+from datetime import timedelta
+
+from django.utils import timezone
+
 from pingpong.models import (
-    Club, ClubInvite, ClubMembership, ClubRole, Game, Match, MatchConfirmation,
-    Player,
+    Club, ClubInvite, ClubMembership, ClubRole, FeatureFlagOverride, Game, Match,
+    MatchConfirmation, Player, Season,
 )
 
 E2E_USERNAME = "e2e"
 E2E_PASSWORD = "e2e-local-only"
 E2E_OPPONENT = "e2e-opponent"
 E2E_MOMENTUM_OPPONENT = "e2e-momentum"
+# The seasons user (KAN-48/50): same password, `seasons` flag on by override,
+# so the season leaderboard specs see the flag-on UI while every other spec
+# keeps exercising the flag-off one -- the staff-first rollout, in miniature.
+E2E_SEASONS_USERNAME = "e2e-seasons"
 
 
 class Command(BaseCommand):
@@ -89,6 +97,8 @@ class Command(BaseCommand):
             club=second, user=user, defaults={"role": ClubRole.MEMBER}
         )
 
+        season = self._seed_season(club, player, opponent)
+
         # One live invite and one revoked one, so the suite can render both the
         # working and the dead page without mutating state mid-run.
         ClubInvite.objects.filter(club=club).delete()
@@ -105,6 +115,62 @@ class Command(BaseCommand):
         self.stdout.write(f"E2E_REVOKED_INVITE_TOKEN={dead_invite.token}")
         self.stdout.write(f"E2E_CLUB={club.name}")
         self.stdout.write(f"E2E_CLUB_TWO={second.name}")
+        self.stdout.write(f"E2E_SEASONS_USERNAME={E2E_SEASONS_USERNAME}")
+        self.stdout.write(f"E2E_SEASON={season.name}")
+
+    def _seed_season(self, club, player, opponent):
+        """A current season with confirmed singles results, for the season table.
+
+        Matches are confirmed through the real pipeline (MatchConfirmation ->
+        recompute -> update_player_elo), so the PlayerRating and RatingChange
+        rows the specs read are the ones the app writes. Everyone ends up
+        provisional (a handful of matches), and E2E Momentum -- rated
+        all-time from the momentum match, which predates the club -- is
+        unrated this season. Doubles has nobody, so its empty state renders.
+        """
+        today = timezone.now().date()
+        season, _ = Season.all_objects.get_or_create(
+            club=club,
+            name="E2E Season",
+            defaults={
+                "starts_on": today - timedelta(days=30),
+                "ends_on": today + timedelta(days=60),
+            },
+        )
+
+        user, _ = User.objects.get_or_create(
+            username=E2E_SEASONS_USERNAME,
+            defaults={"email": "e2e-seasons@example.test"},
+        )
+        user.set_password(E2E_PASSWORD)
+        user.save()
+        user.profile.email_verified = True
+        user.profile.save()
+        me, _ = Player.objects.get_or_create(name="E2E Seasons Player")
+        me.user = user
+        me.club = club
+        me.save()
+        ClubMembership.objects.get_or_create(
+            club=club, user=user, defaults={"role": ClubRole.MEMBER}
+        )
+        FeatureFlagOverride.objects.update_or_create(
+            name="seasons", user=user,
+            defaults={"enabled": True, "note": "e2e: season leaderboard specs"},
+        )
+
+        Match.all_objects.filter(
+            club=club, participants__player=me
+        ).distinct().delete()
+        for winner, loser in ((me, opponent), (me, opponent), (player, opponent)):
+            match = Match.all_objects.create(club=club, best_of=3)
+            services.set_match_sides(match, [winner], [loser])
+            for n in (1, 2):
+                Game.objects.create(
+                    match=match, game_number=n, team1_score=11, team2_score=6
+                )
+            for p in (winner, loser):
+                MatchConfirmation.objects.get_or_create(match=match, player=p)
+        return season
 
     def _seed_completed_live_match(self, player):
         """A FINISHED live-scored match, so the momentum specs have a chart.
