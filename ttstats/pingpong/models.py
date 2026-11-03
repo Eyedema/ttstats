@@ -1754,6 +1754,7 @@ class NotificationKind(models.TextChoices):
     MATCH_RESULT = 'match_result', 'A match you played was confirmed'
     SCHEDULED_MATCH = 'scheduled_match', 'A match was scheduled for you'
     LEADERBOARD_OVERTAKE = 'leaderboard_overtake', 'Someone passed you on the leaderboard'
+    SEASON_ENDED = 'season_ended', 'A season ended (your final rank)'
 
 
 class NotificationPreference(models.Model):
@@ -1773,6 +1774,9 @@ class NotificationPreference(models.Model):
     # Off by default: it is the one notification that fires without the user
     # having done anything, so opting in should be a deliberate act.
     push_leaderboard_overtake = models.BooleanField(default=False)
+    # On by default: at most once per season, rate limited to one a day, and
+    # muting it still leaves the email, so push is the quieter channel.
+    push_season_ended = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     @classmethod

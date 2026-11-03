@@ -196,11 +196,23 @@ class TestTheChainSurvivesADatabaseWithUsersInIt:
         from pingpong.models import Location, Match, Player
         from pingpong.services import set_match_sides
 
+        from django.db.models.signals import post_save
+
+        from pingpong.signals import create_user_profile
+
         location = Location.objects.create(name="Court 1")
         players = []
-        for i in range(3):
-            user = User.objects.create_user(f"chainuser{i}", password="x")
-            players.append(Player.objects.create(name=f"Chain {i}", user=user))
+        # The profile/preference signal writes through the current models, so
+        # any column added to them after BEFORE_BACKFILL (e.g. a new
+        # NotificationPreference toggle) would not exist yet. The backfill
+        # only needs Users, so the signal is muted while they are created.
+        post_save.disconnect(create_user_profile, sender=User)
+        try:
+            for i in range(3):
+                user = User.objects.create_user(f"chainuser{i}", password="x")
+                players.append(Player.objects.create(name=f"Chain {i}", user=user))
+        finally:
+            post_save.connect(create_user_profile, sender=User)
         players.append(Player.objects.create(name="Chain guest"))
 
         for i in range(0, 4, 2):

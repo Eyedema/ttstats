@@ -79,6 +79,13 @@ class TestNotificationPreference:
 
         assert prefs.wants(NotificationKind.LEADERBOARD_OVERTAKE) is False
 
+    def test_season_ended_is_on_by_default(self):
+        # Once per season per player, and muting it still leaves the email:
+        # push is the quieter channel, so on is the conservative default.
+        prefs = NotificationPreference.for_user(UserFactory())
+
+        assert prefs.wants(NotificationKind.SEASON_ENDED) is True
+
     def test_unknown_kind_defaults_to_wanted(self):
         # A new notification type shipped without its preference field should
         # be noisy and get noticed, not silently deliver to nobody.
@@ -279,6 +286,108 @@ class TestSendToUser:
             delivered = push.send_to_user(
                 user, kind=NotificationKind.MATCH_RESULT,
                 title='T', body='B', url='/u/',
+            )
+
+        assert delivered == 1
+
+
+def _send(user, kind, **kwargs):
+    return push.send_to_user(user, kind=kind, title='T', body='B', url='/u/', **kwargs)
+
+
+@pytest.mark.django_db
+class TestSendToUserRateLimit:
+    """The daily limits (KAN-38) are enforced here, in the one send path every
+    notify_* goes through. A suppressed push counts as not delivered, so the
+    caller's email fallback still applies."""
+
+    @with_vapid
+    def test_second_season_ended_push_in_a_day_is_suppressed(self, caplog):
+        caplog.set_level('INFO', logger='pingpong.notification_limits')
+        user = UserFactory()
+        make_subscription(user)
+
+        with patch('pywebpush.webpush') as mock_webpush:
+            first = _send(user, NotificationKind.SEASON_ENDED)
+            second = _send(user, NotificationKind.SEASON_ENDED)
+
+        assert (first, second) == (1, 0)
+        assert mock_webpush.call_count == 1
+        assert 'suppressed' in caplog.text
+
+    @with_vapid
+    def test_existing_kinds_are_not_limited_in_normal_use(self):
+        # A long club night: many confirmation and result pushes for one
+        # player. None may be suppressed.
+        user = UserFactory()
+        make_subscription(user)
+
+        with patch('pywebpush.webpush'):
+            delivered = [
+                _send(user, kind)
+                for _ in range(10)
+                for kind in (NotificationKind.MATCH_CONFIRMATION, NotificationKind.MATCH_RESULT)
+            ]
+
+        assert delivered == [1] * 20
+
+    @with_vapid
+    @override_settings(NOTIFICATION_DAILY_CEILING=2)
+    def test_overall_ceiling_applies(self):
+        user = UserFactory()
+        make_subscription(user)
+
+        with patch('pywebpush.webpush'):
+            delivered = [_send(user, NotificationKind.MATCH_RESULT) for _ in range(3)]
+
+        assert delivered == [1, 1, 0]
+
+    @with_vapid
+    def test_fails_closed_when_the_cache_is_down(self):
+        from pingpong import notification_limits
+
+        user = UserFactory()
+        make_subscription(user)
+
+        with patch.object(notification_limits.cache, 'add', side_effect=ConnectionError('down')), \
+                patch('pywebpush.webpush') as mock_webpush:
+            delivered = _send(user, NotificationKind.SEASON_ENDED)
+
+        assert delivered == 0
+        assert not mock_webpush.called
+
+    @with_vapid
+    def test_a_user_with_no_device_does_not_spend_the_budget(self):
+        user = UserFactory()
+        assert _send(user, NotificationKind.SEASON_ENDED) == 0
+        make_subscription(user)
+
+        with patch('pywebpush.webpush'):
+            assert _send(user, NotificationKind.SEASON_ENDED) == 1
+
+    @with_vapid
+    def test_a_muted_kind_does_not_spend_the_budget(self):
+        user = UserFactory()
+        make_subscription(user)
+        prefs = NotificationPreference.for_user(user)
+        prefs.push_season_ended = False
+        prefs.save()
+        assert _send(user, NotificationKind.SEASON_ENDED) == 0
+        prefs.push_season_ended = True
+        prefs.save()
+
+        with patch('pywebpush.webpush'):
+            assert _send(user, NotificationKind.SEASON_ENDED) == 1
+
+    @with_vapid
+    def test_the_user_requested_test_push_bypasses_the_limits(self):
+        user = UserFactory()
+        make_subscription(user)
+
+        with patch('pywebpush.webpush'):
+            _send(user, NotificationKind.SEASON_ENDED)
+            delivered = _send(
+                user, NotificationKind.SEASON_ENDED, respect_preferences=False
             )
 
         assert delivered == 1

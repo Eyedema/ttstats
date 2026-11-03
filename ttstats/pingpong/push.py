@@ -116,10 +116,17 @@ def send_to_user(user, *, kind, title, body, url, tag=None, respect_preferences=
     """Push to every device a user has registered. Returns the number delivered.
 
     Returns 0 -- not an error -- when the user has opted out, has no devices,
-    or push is not configured. Callers use that to decide whether to fall back
-    to email, so the distinction between "did not want it" and "could not get
-    it" is deliberately collapsed: in both cases the user did not get a push.
+    push is not configured, or a daily rate limit suppressed it. Callers use
+    that to decide whether to fall back to email, so the distinction between
+    "did not want it" and "could not get it" is deliberately collapsed: in
+    both cases the user did not get a push.
+
+    The daily limits (`notification_limits`) are enforced here, the one path
+    every `notify_*` goes through, and only after the preference and device
+    checks so a push that could never be sent does not spend the budget.
+    `respect_preferences=False` (the user-requested test push) skips them.
     """
+    from . import notification_limits
     from .models import NotificationPreference
 
     if not webpush_enabled() or user is None or not user.is_authenticated:
@@ -128,9 +135,16 @@ def send_to_user(user, *, kind, title, body, url, tag=None, respect_preferences=
     if respect_preferences and not NotificationPreference.for_user(user).wants(kind):
         return 0
 
+    subscriptions = list(user.push_subscriptions.all())
+    if not subscriptions:
+        return 0
+
+    if respect_preferences and not notification_limits.allow(user.pk, kind):
+        return 0
+
     payload = build_payload(title=title, body=body, url=url, kind=kind, tag=tag)
     delivered = 0
-    for subscription in user.push_subscriptions.all():
+    for subscription in subscriptions:
         if send_to_subscription(subscription, payload):
             delivered += 1
     return delivered

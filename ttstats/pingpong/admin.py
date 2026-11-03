@@ -969,9 +969,11 @@ class JobRunAdmin(admin.ModelAdmin):
 @admin.register(NotificationPreference)
 class NotificationPreferenceAdmin(admin.ModelAdmin):
     list_display = ('user', 'push_match_confirmation', 'push_match_result',
-                    'push_scheduled_match', 'push_leaderboard_overtake')
+                    'push_scheduled_match', 'push_leaderboard_overtake',
+                    'push_season_ended')
     list_filter = ('push_match_confirmation', 'push_match_result',
-                   'push_scheduled_match', 'push_leaderboard_overtake')
+                   'push_scheduled_match', 'push_leaderboard_overtake',
+                   'push_season_ended')
     search_fields = ('user__username',)
 
 

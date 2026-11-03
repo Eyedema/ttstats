@@ -38,3 +38,6 @@ is committed in `deploy/cron/ttstats.cron`. Install steps are in its README.
     never raises to the caller, and the remaining jobs still run.
 - Jobs have no viewer, so managers are unfiltered. A per-club job must filter by
   club explicitly.
+- A job's pushes go through `notifications.py` and so get the daily limits
+  (`push.md`). Make a job's sends exactly-once through its own idempotent
+  state, never through the limiter.

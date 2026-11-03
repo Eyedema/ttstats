@@ -138,6 +138,16 @@ Jira: epic KAN-9; stories KAN-45 (Q4.8), 46 (S4.1), 47 (S4.2), 49 (S4.7),
   field, default True). A cache-based per-kind and overall per-player daily
   counter fails closed. The `notify_*` functions still return the set of
   Player ids reached, and callers email the rest.
+  Defaults: `season_ended` is limited to 1 per player per UTC day, with an
+  overall ceiling of 50 per day across kinds (`NOTIFICATION_DAILY_LIMITS` and
+  `NOTIFICATION_DAILY_CEILING`). The limiter runs inside
+  `push.send_to_user`. A push that is rate limited is "not reached", so the
+  caller's email fallback applies.
+  `notify_season_ended(player, *, season_name, standings, url)`
+  takes `standings` as `[(format_label, rank), ...]` and sends **one** push
+  per player, covering every format, so the 1/day limit never drops a
+  player's second format. Rollover calls it once per player per archived
+  season.
 
 ## Rollover (S4.6)
 

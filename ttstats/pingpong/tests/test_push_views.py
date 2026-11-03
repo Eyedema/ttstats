@@ -316,6 +316,35 @@ class TestNotificationSettingsView:
         content = response.content.decode()
         for kind in NotificationKind:
             assert f'name="{kind.value}"' in content
+            assert str(kind.label) in content
+
+    def test_every_kind_has_a_preference_field(self):
+        # Without its `push_<kind>` field a toggle renders but its save is
+        # silently dropped (setattr on a non-field), so the kind is unmutable.
+        field_names = {f.name for f in NotificationPreference._meta.get_fields()}
+        from pingpong.models import NotificationKind
+
+        missing = [k.value for k in NotificationKind if f'push_{k.value}' not in field_names]
+        assert missing == []
+
+    def test_season_ended_toggle_saves(self, client):
+        player = logged_in(client)
+        assert NotificationPreference.for_user(player.user).push_season_ended is True
+
+        client.post(
+            reverse('pingpong:notification_settings'),
+            data={'match_confirmation': 'on'},
+        )
+
+        prefs = NotificationPreference.for_user(player.user)
+        assert prefs.push_season_ended is False
+
+        client.post(
+            reverse('pingpong:notification_settings'),
+            data={'season_ended': 'on'},
+        )
+        prefs.refresh_from_db()
+        assert prefs.push_season_ended is True
 
     def test_never_leaks_the_private_key(self, client):
         logged_in(client)
