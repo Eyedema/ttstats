@@ -1833,6 +1833,40 @@ class PushSubscription(models.Model):
         return f"Push subscription for {self.user.username} ({self.endpoint[:40]}...)"
 
 
+class JobRun(models.Model):
+    """One invocation of a scheduled job (KAN-37 / T3.6), written by `jobs.run_job`.
+
+    The run log answers "did the nightly job run, when, and what did it do?"
+    without shell access to the host. Operational, not club data: it has no
+    club and no row-level manager, and it is only shown in the admin.
+    Dry runs write no row.
+    """
+
+    class Status(models.TextChoices):
+        RUNNING = 'running', 'Running'
+        SUCCESS = 'success', 'Succeeded'
+        FAILED = 'failed', 'Failed'
+        # Lock held by another run, or the cache was unreachable (fail closed).
+        SKIPPED = 'skipped', 'Skipped'
+        # Found still RUNNING by the next holder of the lock: the process died.
+        INTERRUPTED = 'interrupted', 'Interrupted'
+
+    name = models.CharField(max_length=100)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.RUNNING)
+    # Not auto_now_add, so retention tests (and the admin) can set it.
+    started_at = models.DateTimeField(default=timezone.now)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    summary = models.TextField(blank=True)
+    error = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ['-started_at']
+        indexes = [models.Index(fields=['name', '-started_at'])]
+
+    def __str__(self):
+        return f"{self.name} {self.status} at {self.started_at:%Y-%m-%d %H:%M}"
+
+
 class FeatureFlagOverride(models.Model):
     """Per-user override of a flag declared in ``settings.FEATURE_FLAGS``.
 

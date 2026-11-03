@@ -67,6 +67,15 @@ def player_point_stats_key(player):
     return f'{club_prefix(player.club)}player_point_stats_{player.pk}'
 
 
+def job_lock_key(name):
+    """The overlap lock for one scheduled job (KAN-37).
+
+    Deliberately carries no club: a job runs once for the whole deployment,
+    and a lock per club would let two runs overlap.
+    """
+    return f'job_lock:{name}'
+
+
 def h2h_point_stats_key(player1, player2):
     """The point-level head-to-head fold for a pair, order-independent."""
     low, high = sorted([player1.pk, player2.pk])

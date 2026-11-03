@@ -194,3 +194,131 @@ class TestRecalculateElo:
         # Note: There might be 4 if the first match was auto-confirmed, but we manually confirmed it
         # so there should only be 2 from the recalculate command
         assert EloHistory.objects.count() == 2
+
+
+# ---------------------------------------------------------------------------
+# run_scheduled_jobs (KAN-37 / T3.6). Imports are local to this section so it
+# merges cleanly with concurrent work on the recalculate_elo tests above.
+
+
+@pytest.fixture
+def job_registry(monkeypatch):
+    """An empty job registry, so the command never runs a real job by accident."""
+    from pingpong import jobs
+
+    fresh = {}
+    monkeypatch.setattr(jobs, "_REGISTRY", fresh)
+    monkeypatch.setattr(jobs, "_loaded", True)
+    return fresh
+
+
+def _register_counter(name):
+    """Register a job that records each call's dry_run flag."""
+    from pingpong import jobs
+
+    calls = []
+
+    @jobs.register(name)
+    def _job(*, dry_run):
+        calls.append(dry_run)
+        return f"{name} {'would do' if dry_run else 'did'} 1 thing"
+
+    return calls
+
+
+@pytest.mark.django_db
+class TestRunScheduledJobs:
+    """The dispatcher host cron calls."""
+
+    def test_runs_every_registered_job(self, job_registry):
+        from pingpong.models import JobRun
+
+        a, b = _register_counter("alpha"), _register_counter("beta")
+        out = StringIO()
+
+        call_command("run_scheduled_jobs", stdout=out)
+
+        assert a == [False] and b == [False]
+        assert JobRun.objects.filter(status=JobRun.Status.SUCCESS).count() == 2
+        assert "alpha did 1 thing" in out.getvalue()
+
+    def test_job_option_runs_only_that_job(self, job_registry):
+        a, b = _register_counter("alpha"), _register_counter("beta")
+
+        call_command("run_scheduled_jobs", "--job", "beta", stdout=StringIO())
+
+        assert a == [] and b == [False]
+
+    def test_unknown_job_is_a_command_error(self, job_registry):
+        from django.core.management.base import CommandError
+
+        with pytest.raises(CommandError):
+            call_command("run_scheduled_jobs", "--job", "nope", stdout=StringIO())
+
+    def test_dry_run_is_passed_to_every_job_and_writes_nothing(self, job_registry):
+        from pingpong.models import JobRun
+
+        a, b = _register_counter("alpha"), _register_counter("beta")
+        out = StringIO()
+
+        call_command("run_scheduled_jobs", "--dry-run", stdout=out)
+
+        assert a == [True] and b == [True]
+        assert JobRun.objects.count() == 0
+        assert "DRY RUN" in out.getvalue()
+
+    def test_list_runs_nothing(self, job_registry):
+        a = _register_counter("alpha")
+        out = StringIO()
+
+        call_command("run_scheduled_jobs", "--list", stdout=out)
+
+        assert a == []
+        assert "alpha" in out.getvalue()
+
+    def test_held_lock_means_the_second_run_does_nothing(self, job_registry):
+        from django.core.cache import cache
+        from pingpong import cache_utils
+
+        a = _register_counter("alpha")
+        cache.add(cache_utils.job_lock_key("alpha"), "other-process", 60)
+        out = StringIO()
+
+        call_command("run_scheduled_jobs", stdout=out)
+
+        assert a == []
+        assert "skipped" in out.getvalue().lower()
+
+    def test_a_failing_job_is_reported_not_raised(self, job_registry):
+        from pingpong import jobs
+        from pingpong.models import JobRun
+
+        @jobs.register("broken")
+        def _broken(*, dry_run):
+            raise RuntimeError("kaboom")
+
+        out, err = StringIO(), StringIO()
+        call_command("run_scheduled_jobs", stdout=out, stderr=err)
+
+        assert JobRun.objects.get().status == JobRun.Status.FAILED
+        assert "broken" in err.getvalue()
+
+    def test_prune_job_runs_end_to_end_is_idempotent(self):
+        # The one real job, through the real registry.
+        from datetime import timedelta
+        from django.utils import timezone
+        from pingpong import scheduled_jobs
+        from pingpong.models import JobRun
+        from .conftest import JobRunFactory
+
+        JobRunFactory(
+            started_at=timezone.now()
+            - timedelta(days=scheduled_jobs.JOB_RUN_RETENTION_DAYS + 1)
+        )
+
+        call_command("run_scheduled_jobs", "--job", "prune_job_runs", stdout=StringIO())
+        assert JobRun.objects.count() == 1  # the aged row is gone; this run's row stays
+        call_command("run_scheduled_jobs", "--job", "prune_job_runs", stdout=StringIO())
+
+        assert JobRun.objects.count() == 2
+        assert set(JobRun.objects.values_list("name", flat=True)) == {"prune_job_runs"}

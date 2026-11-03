@@ -6,7 +6,7 @@ from django.core.cache import cache as django_cache
 from django.test import Client
 from factory.django import DjangoModelFactory
 
-from pingpong.models import Championship, ChampionshipEntry, ChampionshipEntryMember, Club, ClubMembership, ClubRole, Game, Location, Match, MatchConfirmation, Player, ScheduledMatch, Side
+from pingpong.models import Championship, ChampionshipEntry, ChampionshipEntryMember, Club, ClubMembership, ClubRole, Game, JobRun, Location, Match, MatchConfirmation, Player, ScheduledMatch, Side
 from pingpong.services import set_match_sides, set_scheduled_match_sides
 
 
@@ -50,6 +50,16 @@ class ClubMembershipFactory(DjangoModelFactory):
     # The model default. Pass role=ClubRole.OWNER/ADMIN where the test is
     # about permissions -- least privilege is the right default here.
     role = ClubRole.MEMBER
+
+
+class JobRunFactory(DjangoModelFactory):
+    """A scheduled-job log row; pass ``started_at`` to age it."""
+
+    class Meta:
+        model = JobRun
+
+    name = factory.Sequence(lambda n: f"job_{n}")
+    status = JobRun.Status.SUCCESS
 
 
 class LocationFactory(DjangoModelFactory):
