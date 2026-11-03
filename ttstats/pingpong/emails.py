@@ -398,3 +398,73 @@ If you didn't create an account, you can safely ignore this email.
         logger.info(f"Verification email sent to {user.email}")
     except Exception as e:
         logger.error(f"Failed to send verification email to {user.email}: {e}")
+
+
+def send_season_ended_email(player, *, season_name, standings, url):
+    """Email fallback for the season_ended push (KAN-51).
+
+    Same arguments as `notifications.notify_season_ended`, so the rollover job
+    hands both the same values. ``standings`` is ``[(format_label, rank), ...]``
+    and ``url`` the site-relative archive link.
+    """
+    from html import escape
+
+    user = player.user
+    if not user or not user.email:
+        return
+
+    protocol = getattr(settings, "SITE_PROTOCOL", "http")
+    domain = getattr(settings, "SITE_DOMAIN", "localhost:8000")
+    archive_url = f"{protocol}://{domain}{url}"
+    ranks = ", ".join(f"#{rank} in {label}" for label, rank in standings)
+
+    subject = f"🏁 {season_name} has ended"
+
+    message = f"""Hi {player.name},
+
+{season_name} has ended and the final table is in.
+
+🏆 Your final rank: {ranks}.
+
+See the final standings:
+{archive_url}
+
+A new season has started. Good luck!
+Table Tennis Tracker Team
+"""
+
+    html_message = f"""
+    <html>
+    <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2>🏁 {escape(season_name)} has ended</h2>
+        <p>Hi {escape(player.name)},</p>
+        <p>The final table is in.</p>
+
+        <div style="background: #f3f4f6; padding: 20px; border-radius: 8px; margin: 20px 0;">
+            <h3 style="margin-top: 0;">🏆 Your final rank</h3>
+            <p style="font-size: 20px; font-weight: bold; margin: 10px 0;">{escape(ranks)}</p>
+        </div>
+
+        <a href="{escape(archive_url)}"
+           style="display: inline-block; background: #2563eb; color: white; padding: 12px 24px;
+                  text-decoration: none; border-radius: 6px; font-weight: bold;">
+            See the final standings
+        </a>
+
+        <p style="margin-top: 30px;">A new season has started. Good luck!<br>Table Tennis Tracker Team</p>
+    </body>
+    </html>
+    """
+
+    try:
+        send_mail(
+            subject=subject,
+            message=message,
+            html_message=html_message,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[user.email],
+            fail_silently=False,
+        )
+        logger.info(f"Season ended email sent to player {player.pk}")
+    except Exception as e:
+        logger.error(f"Failed to send season ended email to player {player.pk}: {e}")

@@ -10,6 +10,7 @@ from datetime import timedelta
 from django.utils import timezone
 
 from . import jobs
+from . import season_rollover as rollover
 from .models import JobRun
 
 # How long the run log is kept. Long enough to look back over a season.
@@ -35,3 +36,9 @@ def prune_job_runs(*, dry_run):
             break
         deleted += JobRun.objects.filter(pk__in=batch).delete()[0]
     return f"deleted {deleted} job runs older than {JOB_RUN_RETENTION_DAYS} days"
+
+
+@jobs.register("season_rollover")
+def season_rollover(*, dry_run):
+    """Freeze and archive every season past its grace days; start the next (KAN-51)."""
+    return rollover.run(dry_run=dry_run)

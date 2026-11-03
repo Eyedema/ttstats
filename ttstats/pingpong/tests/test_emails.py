@@ -219,3 +219,46 @@ class TestScheduledMatchEmailSides:
         html = mail.outbox[0].alternatives[0][0]
         assert "<strong>You:</strong> Ada" in html
         assert "<strong>Opponent:</strong> Bob" in html
+
+
+@pytest.mark.django_db
+class TestSendSeasonEndedEmail:
+    """The email fallback for a season_ended push (KAN-51)."""
+
+    def _send(self, player, **kwargs):
+        from pingpong.emails import send_season_ended_email
+
+        kwargs.setdefault("season_name", "Q1 2026")
+        kwargs.setdefault("standings", [("Singles", 2), ("Doubles", 1)])
+        kwargs.setdefault("url", "/pingpong/seasons/7/")
+        send_season_ended_email(player, **kwargs)
+
+    @override_settings(SITE_PROTOCOL="https", SITE_DOMAIN="example.org")
+    def test_names_the_season_every_rank_and_the_archive_link(self):
+        player = PlayerFactory(with_user=True, name="Ann")
+        mail.outbox.clear()
+
+        self._send(player)
+
+        assert len(mail.outbox) == 1
+        sent = mail.outbox[0]
+        assert sent.to == [player.user.email]
+        assert "Q1 2026" in sent.subject
+        assert "#2 in Singles" in sent.body
+        assert "#1 in Doubles" in sent.body
+        assert "https://example.org/pingpong/seasons/7/" in sent.body
+
+    def test_names_are_escaped_in_the_html_part(self):
+        player = PlayerFactory(with_user=True, name="<b>Ann</b>")
+        mail.outbox.clear()
+
+        self._send(player, season_name="<i>Q1</i>")
+
+        html = mail.outbox[0].alternatives[0][0]
+        assert "<b>Ann</b>" not in html and "<i>Q1</i>" not in html
+        assert "&lt;b&gt;Ann&lt;/b&gt;" in html
+
+    def test_a_player_without_an_address_gets_nothing(self):
+        mail.outbox.clear()
+        self._send(PlayerFactory())
+        assert mail.outbox == []

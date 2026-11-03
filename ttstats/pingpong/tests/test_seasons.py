@@ -6,10 +6,14 @@ import pytest
 
 from ..seasons import (
     SEASON_CARRY_FACTOR,
+    ROLLOVER_GRACE_DAYS,
     carry_over_seed,
+    competition_ranks,
     first_season_bounds,
+    is_due_for_rollover,
     next_season_bounds,
     resolve_season,
+    season_name_for,
 )
 
 
@@ -114,3 +118,50 @@ class TestCarryOverSeed:
 
     def test_an_unrated_player_starts_at_the_mean(self):
         assert carry_over_seed(None) == 1500
+
+
+class TestCompetitionRanks:
+    """Ties share a rank and the next rank skips: 1, 1, 3 (KAN-51)."""
+
+    def test_no_ties(self):
+        assert competition_ranks([1700, 1600, 1500]) == [1, 2, 3]
+
+    def test_a_tie_for_first_shares_rank_one_and_skips_two(self):
+        assert competition_ranks([1700, 1700, 1600]) == [1, 1, 3]
+
+    def test_a_tie_in_the_middle(self):
+        assert competition_ranks([1800, 1600, 1600, 1600, 1500]) == [1, 2, 2, 2, 5]
+
+    def test_empty(self):
+        assert competition_ranks([]) == []
+
+    def test_input_must_be_best_first(self):
+        with pytest.raises(ValueError):
+            competition_ranks([1500, 1600])
+
+
+class TestIsDueForRollover:
+    def test_grace_is_three_days(self):
+        assert ROLLOVER_GRACE_DAYS == 3
+
+    @pytest.mark.parametrize("today, due", [
+        (date(2026, 3, 31), False),  # last day of the season
+        (date(2026, 4, 3), False),   # ends_on + 3: still inside the grace
+        (date(2026, 4, 4), True),    # ends_on + 3 < today
+    ])
+    def test_due_only_after_the_grace_days(self, today, due):
+        assert is_due_for_rollover(date(2026, 3, 31), today) is due
+
+
+class TestSeasonNameFor:
+    def test_whole_months_in_one_year(self):
+        assert season_name_for(date(2026, 4, 1), date(2026, 6, 30)) == "Apr–Jun 2026"
+
+    def test_a_single_month(self):
+        assert season_name_for(date(2026, 4, 1), date(2026, 4, 30)) == "Apr 2026"
+
+    def test_across_a_year_end(self):
+        assert season_name_for(date(2026, 11, 1), date(2027, 1, 31)) == "Nov 2026–Jan 2027"
+
+    def test_odd_dates_name_the_days(self):
+        assert season_name_for(date(2026, 5, 3), date(2026, 5, 9)) == "3 May–9 May 2026"

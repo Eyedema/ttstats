@@ -1,6 +1,9 @@
 ---
 paths:
   - "ttstats/pingpong/seasons.py"
+  - "ttstats/pingpong/season_rollover.py"
+  - "ttstats/pingpong/season_views.py"
+  - "ttstats/pingpong/templates/pingpong/seasons/**"
   - "ttstats/pingpong/elo.py"
   - "ttstats/pingpong/elo_replay.py"
   - "ttstats/pingpong/elo_parity.py"
@@ -18,7 +21,8 @@ paths:
 The contract is `docs/decisions/kan-9-seasons.md`; these are the rules it implies.
 
 - **`seasons.py` is pure** (no Django): `resolve_season`, `next_season_bounds`,
-  `first_season_bounds`, `carry_over_seed`. Models and the Elo pipeline call it;
+  `first_season_bounds`, `carry_over_seed`, `ranked`/`competition_ranks`,
+  `is_due_for_rollover`, `season_name_for`. Models and the Elo pipeline call it;
   never re-derive a boundary or the seed inline.
 - **Dates are inclusive UTC dates.** A match's season is the one containing
   `date_played.date()`. A day in no season resolves to `None` and the match
@@ -42,7 +46,8 @@ The contract is `docs/decisions/kan-9-seasons.md`; these are the rules it implie
   live only in `PlayerRating` (`season=NULL` = all-time) with `RatingChange`
   as its audit trail. `EloHistory` is untouched.
 - **It is a mirror: nothing outside `elo.py`, `elo_replay.py`, `elo_parity.py`
-  and `recalculate_elo` reads `PlayerRating` until S4.3.**
+  and `recalculate_elo` reads `PlayerRating` until S4.3** (plus
+  `season_rollover`, which freezes season rows into `SeasonStanding`).
 - **`projected_elo_changes(match, scope)` is the only arithmetic** for every
   scope (`LEGACY` or `RatingScope(season, format)`). Format experience is the
   all-time count in that format. A season row is seeded with
@@ -58,3 +63,19 @@ The contract is `docs/decisions/kan-9-seasons.md`; these are the rules it implie
   confirmations. `--season`/`--format` rewrite only those PlayerRating rows;
   legacy fields and `EloHistory` are rewritten only by a full run. `--dry-run`
   diffs stored vs replayed per player and scope and writes nothing.
+
+## Rollover and the archive (KAN-51)
+
+- **`SeasonStanding` is frozen at rollover and never written again** (only
+  `notified_at`). Late confirmations move `PlayerRating`, not the table; a test
+  asserts the table survives `recalculate_elo`. Never recompute an archived
+  table from ratings or matches.
+- `season_rollover.run` (job `season_rollover`): per season, one transaction
+  (freeze, `archived_at`, next season if none starts later). Notifications
+  happen after the commit, claimed per (season, player) by a conditional
+  `.update()` of `notified_at`: exactly-once by state, never by the limiter.
+- The archive views (`season_views.py`) read only `SeasonStanding`, are
+  uncached and stay out of leaderboard invalidation. 404 with the flag off;
+  scoped through `Season.objects` / `SeasonStanding.objects`.
+- Render names from `player_name` via `{% player_link row.player label=row.player_name %}`:
+  the player may be deleted (`SET_NULL`) or renamed.

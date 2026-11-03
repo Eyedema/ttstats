@@ -169,3 +169,42 @@ Jira: epic KAN-9; stories KAN-45 (Q4.8), 46 (S4.1), 47 (S4.2), 49 (S4.7),
   rare.
 - Ties share a rank (1, 1, 3), ordered by rating, then wins, then name for
   display.
+
+### As built (KAN-51)
+
+- `SeasonStanding` also stores `player_name` (the display name at freeze
+  time) and `notified_at`. `player` is `SET_NULL`, so deleting a player keeps
+  their row and name; a rename does not reach the archive. `season` is
+  `PROTECT`. There is no club column: the manager scopes through
+  `season__club`.
+- `rating` and `matches` come from the season's `PlayerRating` row; wins come
+  from that row's `RatingChange`s where the player was on the winning side, and
+  losses are the rest. Rank is by rating alone (`seasons.ranked`).
+- One transaction per season: lock the row, freeze, set `archived_at`, create
+  the next season. A season that fails rolls back, is logged and skipped, and
+  the run raises at the end so the `JobRun` shows the failure; other clubs
+  still roll over. A backlog catches up in one run (a next season that is
+  already due is archived in turn).
+- The next season is created only when the club has **no season starting
+  after** this one ends (so it can never hit the non-overlap constraint). Its
+  default name comes from `seasons.season_name_for` ("Apr–Jun 2026"); staff
+  can rename it.
+- **Notifications run after the commit, never inside it.** Each (season,
+  player) is claimed with a conditional `.update()` of `notified_at`, as
+  `Match.result_notified_at` does; only the winner of the claim sends one push
+  covering every format, then emails a verified address if push did not reach
+  them. This is at most once: a crash between claim and send loses that
+  message rather than risking a double. Unclaimed rows left by a crash after
+  archiving are picked up by the next run.
+- Rollover itself ignores the `seasons` flag (data is written either way). A
+  player for whom the flag is off is claimed but not told, so turning the flag
+  on later never announces an old season.
+- A live match belongs to the season of its `date_played` (its start). One
+  that finishes after rollover is a late confirmation like any other.
+- `--dry-run` reports only the seasons due now; it does not simulate a
+  backlog's follow-on seasons.
+- The archive (`/pingpong/seasons/`, `/pingpong/seasons/<pk>/?format=`) reads
+  only `SeasonStanding`, is not cached and is outside leaderboard
+  invalidation. It is 404 with the flag off. It has no nav entry yet: a
+  flag check in the drawer costs a query on every page (it broke the
+  match-list query budgets), so the link belongs to the S4.3 leaderboard.

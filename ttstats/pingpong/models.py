@@ -9,7 +9,7 @@ from django.db.models import Count, Exists, F, OuterRef, Q
 from django.utils import timezone
 
 from . import match_state, player_hues, seasons
-from .managers import ChampionshipManager, ClubDataManager, GameManager, LiveMatchManager, MatchManager, PlayerManager, ScheduledMatchManager
+from .managers import ChampionshipManager, ClubDataManager, GameManager, LiveMatchManager, MatchManager, PlayerManager, ScheduledMatchManager, SeasonStandingManager
 
 # Email verification token expires after 24 hours
 VERIFICATION_TOKEN_EXPIRY = timedelta(hours=24)
@@ -2217,3 +2217,56 @@ class RatingChange(models.Model):
 
     def __str__(self):
         return f"{self.player} {self.rating_change:+d} ({self.rating.format}, match {self.match_id})"
+
+
+class SeasonStanding(models.Model):
+    """One row of a season's frozen final table (KAN-51, S4.6).
+
+    Written once, by `season_rollover`, when the season is archived, and
+    **never recomputed or updated** afterwards (only `notified_at` is ever
+    set). A late confirmation still moves `PlayerRating`, and `recalculate_elo`
+    may rebuild every rating, but the archive is the record as it stood at
+    rollover.
+
+    `player` is SET_NULL and `player_name` is the display name at freeze time,
+    so deleting or renaming a player never changes or empties a past table.
+    `notified_at` is the exactly-once claim for the "season ended" message: a
+    conditional `.update()` across the player's rows in the season, the same
+    shape as `Match.result_notified_at`.
+    """
+
+    season = models.ForeignKey(
+        Season, on_delete=models.PROTECT, related_name="standings"
+    )
+    format = models.CharField(max_length=10, choices=RatingFormat.choices)
+    player = models.ForeignKey(
+        Player, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="season_standings",
+    )
+    player_name = models.CharField(max_length=100)
+    rank = models.PositiveIntegerField()
+    rating = models.IntegerField()
+    matches = models.PositiveIntegerField()
+    wins = models.PositiveIntegerField()
+    losses = models.PositiveIntegerField()
+    notified_at = models.DateTimeField(null=True, blank=True, editable=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    all_objects = models.Manager()
+    objects = SeasonStandingManager()
+
+    class Meta:
+        default_manager_name = "objects"
+        ordering = ["season", "format", "rank", "-wins", "player_name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["season", "format", "player"],
+                name="seasonstanding_one_per_season_format_player",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["season", "format", "rank"], name="seasonstanding_table"),
+        ]
+
+    def __str__(self):
+        return f"{self.season.name} {self.format} #{self.rank}: {self.player_name}"
