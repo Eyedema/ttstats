@@ -5,6 +5,7 @@ paths:
   - "ttstats/pingpong/season_views.py"
   - "ttstats/pingpong/templates/pingpong/seasons/**"
   - "ttstats/pingpong/elo.py"
+  - "ttstats/pingpong/glicko2.py"
   - "ttstats/pingpong/elo_*.py"
   - "ttstats/pingpong/ratings.py"
   - "ttstats/pingpong/management/commands/recalculate_elo.py"

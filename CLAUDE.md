@@ -61,7 +61,7 @@ docker compose -f compose.prod.yml up --build -d
 - `@pytest.mark.django_db` on test classes (or functions). Group tests in `Test<Subject>` classes, plain `assert`, helper functions instead of `setUp`.
 - Create data with the `conftest.py` factories, never raw `Model.objects.create()` (except when testing the ORM itself).
 - Test each layer directly: forms with `data={}`, views with the test `Client`, managers by setting the thread-local user, middleware and context processors with `RequestFactory`, emails via `mail.outbox`.
-- Pure decision modules (`match_state.py`, `live_scoring.py`, `point_stats.py`, `championship_scheduling.py`, `player_hues.py`, `seasons.py`) have no Django imports. Test them without a DB.
+- Pure decision modules (`match_state.py`, `live_scoring.py`, `point_stats.py`, `championship_scheduling.py`, `player_hues.py`, `seasons.py`, `glicko2.py`) have no Django imports. Test them without a DB.
 
 ### Factory Reference (`conftest.py`)
 
