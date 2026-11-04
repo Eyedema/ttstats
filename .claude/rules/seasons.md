@@ -112,8 +112,14 @@ The contract is `docs/decisions/kan-9-seasons.md`; these are the rules it implie
   shadow columns needed, no writes), scores pre-match predictions online
   (Brier, log-loss, favourite rate) and compares final rankings. End RD is
   inflated to the history's last match date, never now(), so output is
-  deterministic. It is the one deliberate reader of the shadow fields (listed in
-  the no-readers test's `ALLOWED`); KAN-68 uses it to fit the parameters.
+  deterministic. It reads the in-memory `MemoryBook` `RatingState` attributes of
+  its own replay, never the stored columns; it is exempt from the no-readers
+  test by repo-relative path (`ttstats/pingpong/rating_divergence.py`), not
+  basename. Skipped Glicko projections and players left without Glicko state are
+  counted in the report. KAN-68 uses it to fit the parameters. Glicko-2 is not
+  zero-sum and a high-RD player moves more than an established opponent, so a
+  uniform level shift with an unchanged ranking is expected (see the "Rating
+  sum" line).
 
 ## The seasons UI (S4.3 / S4.4)
 

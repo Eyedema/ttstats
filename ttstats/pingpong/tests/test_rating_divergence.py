@@ -9,11 +9,14 @@ import json
 import math
 from datetime import datetime, timedelta
 from io import StringIO
+from unittest import mock
 
 import pytest
 from django.core.management import call_command
 from django.utils import timezone
 
+from .. import glicko2, rating_divergence
+from ..elo_replay import iter_replay_matches
 from ..glicko_adapter import DEFAULT_PARAMS
 from ..models import EloHistory, Game, Match, Player, PlayerRating, RatingChange, Side
 from ..rating_divergence import (
@@ -284,21 +287,37 @@ class TestCommand:
     def test_options_are_applied(self):
         _history()
         out = StringIO()
-        call_command(
-            "rating_divergence",
-            "--tau",
-            "0.3",
-            "--period-days",
-            "14",
-            "--season-rd-floor",
-            "120",
-            "--top",
-            "2",
-            "--chunk-size",
-            "4",
-            stdout=out,
-        )
+        real = rating_divergence.iter_replay_matches
+        with mock.patch.object(
+            rating_divergence, "iter_replay_matches", wraps=real
+        ) as walk:
+            call_command(
+                "rating_divergence",
+                "--tau",
+                "0.3",
+                "--period-days",
+                "14",
+                "--season-rd-floor",
+                "120",
+                "--top",
+                "2",
+                "--chunk-size",
+                "4",
+                "--tiny-rd",
+                "1000",
+                stdout=out,
+            )
         assert "tau=0.3 period_days=14.0 season_rd_floor=120.0" in out.getvalue()
+        assert walk.call_args.kwargs["chunk_size"] == 4
+        out = StringIO()
+        call_command(
+            "rating_divergence", "--top", "2", "--tiny-rd", "1000", "--json", stdout=out
+        )
+        singles = next(
+            f for f in json.loads(out.getvalue())["formats"] if f["format"] == "singles"
+        )
+        assert len(singles["players"]) > 2
+        assert len(singles["movers"]) == 2
 
     def test_json(self):
         _history()
@@ -342,3 +361,229 @@ class TestCommand:
         call_command("rating_divergence", stdout=StringIO())
         call_command("rating_divergence", "--json", stdout=StringIO())
         assert snapshot() == before
+
+
+def _reference(records, params=DEFAULT_PARAMS):
+    """Hand-rolled singles Glicko-2 on plain dicts: the independent oracle.
+
+    Returns (final state by player, last day by player, per-match predictions).
+    """
+    state, last, predictions = {}, {}, []
+    for m in records:
+        day = m.date_played.date()
+        a, b = m.side1_ids[0], m.side2_ids[0]
+        pre = {}
+        for pid in (a, b):
+            if pid not in state:
+                pre[pid] = glicko2.Rating(
+                    1500, params.rd_max, params.initial_volatility
+                )
+            else:
+                periods = max(0, (day - last[pid]).days) / params.period_days
+                pre[pid] = glicko2.inflate(state[pid], periods, rd_max=params.rd_max)
+        s = 1.0 if m.winner_side == 1 else 0.0
+        predictions.append(
+            (
+                glicko2.win_probability(
+                    pre[a].rating, pre[a].rd, pre[b].rating, pre[b].rd
+                ),
+                s,
+            )
+        )
+        new_a = glicko2.rate(
+            pre[a],
+            [glicko2.Game(pre[b].rating, pre[b].rd, s)],
+            params.tau,
+            rd_max=params.rd_max,
+        )
+        new_b = glicko2.rate(
+            pre[b],
+            [glicko2.Game(pre[a].rating, pre[a].rd, 1 - s)],
+            params.tau,
+            rd_max=params.rd_max,
+        )
+        state[a], state[b] = new_a, new_b
+        last[a] = max(day, last.get(a, day))
+        last[b] = max(day, last.get(b, day))
+    return state, last, predictions
+
+
+def _gapped_history():
+    a, b, c = (PlayerFactory(name=n) for n in ("Ada", "Bob", "Cy"))
+    pattern = [
+        (a, b, 1),
+        (a, b, 2),
+        (b, c, 1),
+        (a, c, 1),
+        (a, b, 1),
+        (c, a, 2),
+        (b, c, 2),
+        (a, b, 1),
+        (a, c, 2),
+        (c, b, 1),
+        (a, b, 2),
+        (b, c, 1),
+    ]
+    gaps = [0, 1, 7, 30, 265, 0, 3, 14, 60, 0, 9, 120]
+    day = 0
+    for (x, y, w), gap in zip(pattern, gaps):
+        day += gap
+        _play([x], [y], day=day, winner=Side.ONE if w == 1 else Side.TWO)
+    return a, b, c
+
+
+@pytest.mark.django_db
+class TestGlickoArithmeticPinned:
+    def test_final_state_and_predictions_equal_the_hand_reference_exactly(self):
+        _gapped_history()
+        records = list(iter_replay_matches())
+        state, last, predictions = _reference(records)
+        report = run_divergence(tiny_rd=1000)
+        fr = _singles(report)
+
+        end = records[-1].date_played.date()
+        by_id = {p.player_id: p for p in fr.players}
+        for pid, rating in state.items():
+            periods = max(0, (end - last[pid]).days) / DEFAULT_PARAMS.period_days
+            expected = glicko2.inflate(rating, periods, rd_max=DEFAULT_PARAMS.rd_max)
+            assert by_id[pid].glicko == expected.rating
+            assert by_id[pid].rd == expected.rd
+
+        # Match k is predicted from the state after k-1 matches only (no leakage).
+        # Plain sequential accumulation (builtin sum() is compensated on 3.12).
+        brier_sum = loss_sum = 0.0
+        for p, s in predictions:
+            brier_sum += (p - s) ** 2
+            loss_sum += -math.log(min(max(p if s else 1 - p, 1e-15), 1 - 1e-15))
+        brier, loss = brier_sum / len(predictions), loss_sum / len(predictions)
+        stats = fr.prediction["glicko"]["all"]
+        assert stats.n == len(records)
+        assert stats.brier == brier
+        assert stats.log_loss == loss
+
+    def test_first_prediction_uses_only_the_unrated_state(self):
+        _gapped_history()
+        records = list(iter_replay_matches())
+        _, _, predictions = _reference(records)
+        assert predictions[0][0] == 0.5
+
+    def test_glicko_is_not_zero_sum(self):
+        _gapped_history()
+        fr = _singles(run_divergence(tiny_rd=1000))
+        state, _, _ = _reference(list(iter_replay_matches()))
+        assert fr.glicko_sum == sum(r.rating for r in state.values()) or math.isclose(
+            fr.glicko_sum, sum(r.rating for r in state.values()), rel_tol=1e-9
+        )
+        assert abs(fr.glicko_sum - 1500 * len(state)) > 1  # the level shifts
+
+    def test_rating_sums_are_reported(self):
+        _gapped_history()
+        report = run_divergence(tiny_rd=1000)
+        fr = _singles(report)
+        assert fr.elo_sum == sum(p.elo for p in fr.players)
+        assert "Rating sum" in report.render()
+        assert report.as_dict()["formats"][0]["rating_sum"]["elo"] == fr.elo_sum
+
+
+@pytest.mark.django_db
+class TestAccountingIsNotSilent:
+    def test_a_skipped_projection_is_counted_and_reported(self):
+        _gapped_history()
+        real = glicko2.rate
+        calls = []
+
+        def flaky(*args, **kwargs):
+            calls.append(1)
+            if len(calls) == 3:  # the first rate() call of the second match
+                raise glicko2.VolatilityConvergenceError("boom")
+            return real(*args, **kwargs)
+
+        with mock.patch.object(glicko2, "rate", flaky):
+            report = run_divergence(tiny_rd=1000)
+        assert report.skipped_shadow == 1
+        assert len(report.skipped_match_ids) == 1
+        assert "skipped" in report.render().lower()
+        assert report.as_dict()["skipped_shadow"] == 1
+        assert report.as_dict()["skipped_match_ids"] == report.skipped_match_ids
+
+    def test_a_clean_run_reports_zero(self):
+        _gapped_history()
+        report = run_divergence(tiny_rd=1000)
+        assert report.skipped_shadow == 0
+        assert _singles(report).no_glicko_state == 0
+        assert report.warnings == []
+
+    def test_players_left_without_glicko_state_are_counted(self):
+        _gapped_history()
+        with mock.patch.object(glicko2, "rate", side_effect=glicko2.Glicko2Error("x")):
+            report = run_divergence(tiny_rd=1000)
+        fr = _singles(report)
+        assert fr.no_glicko_state == 3
+        assert report.skipped_shadow == report.rated_matches
+        assert fr.as_dict()["no_glicko_state"] == 3
+        assert "without Glicko" in report.render()
+
+
+@pytest.mark.django_db
+class TestSnapshot:
+    def test_a_count_mismatch_warns_instead_of_asserting(self):
+        _gapped_history()
+        fake = mock.Mock()
+        fake.count.return_value = 999
+        with mock.patch.object(
+            rating_divergence, "confirmed_history", return_value=fake
+        ):
+            report = run_divergence()
+        assert report.warnings
+        assert "WARNING" in report.render()
+        assert report.as_dict()["warnings"] == report.warnings
+
+    def test_postgres_runs_in_a_repeatable_read_read_only_transaction(self):
+        _gapped_history()
+        fake_connection = mock.MagicMock()
+        fake_connection.vendor = "postgresql"
+        fake_connection.in_atomic_block = False
+        with mock.patch.object(rating_divergence, "connection", fake_connection):
+            run_divergence()
+        sql = fake_connection.cursor.return_value.__enter__.return_value.execute
+        sql.assert_called_once()
+        statement = sql.call_args.args[0].upper()
+        assert "REPEATABLE READ" in statement
+        assert "READ ONLY" in statement
+
+    def test_other_databases_run_plainly(self):
+        _gapped_history()
+        fake_connection = mock.MagicMock()
+        fake_connection.vendor = "sqlite"
+        with mock.patch.object(rating_divergence, "connection", fake_connection):
+            run_divergence()
+        fake_connection.cursor.assert_not_called()
+
+
+@pytest.mark.django_db
+class TestDeterminismAcrossClocks:
+    def test_two_different_nows_give_identical_reports(self):
+        _gapped_history()
+        reports = []
+        for now in (
+            datetime(2030, 1, 1, tzinfo=BASE.tzinfo),
+            datetime(2041, 6, 7, tzinfo=BASE.tzinfo),
+        ):
+            with mock.patch("django.utils.timezone.now", return_value=now):
+                reports.append(run_divergence(tiny_rd=1000))
+        assert reports[0].as_dict() == reports[1].as_dict()
+        assert reports[0].render() == reports[1].render()
+
+
+@pytest.mark.django_db
+class TestEloTies:
+    def test_tied_elo_is_marked_not_ranked_by_pk(self):
+        a, b, c, d = (PlayerFactory(name=n) for n in ("Ada", "Bob", "Cy", "Di"))
+        _play([a], [b], day=0)
+        _play([c], [d], day=1)  # Ada and Cy both 1524
+        report = run_divergence(tiny_rd=1000)
+        fr = _singles(report)
+        tied = [p for p in fr.players if p.name in ("Ada", "Cy")]
+        assert all(p.elo_tied and p.rank_change is None for p in tied)
+        assert not [m for m in fr.movers if m.elo_tied and m.rank_change is not None]
+        assert "tie" in report.render()

@@ -603,14 +603,18 @@ class TestMigration:
 class TestNothingReadsTheShadow:
     """The shadow is inert: no view, template, cache or serializer touches it."""
 
+    # Repo-relative paths, never basenames, so a same-named or sibling file
+    # (e.g. the management command) is not silently exempted.
     ALLOWED = frozenset(
         {
-            "elo.py",
-            "elo_replay.py",
-            "glicko_adapter.py",
-            "glicko2.py",
-            "models.py",
-            "rating_divergence.py",  # KAN-66: the offline harness is a deliberate reader
+            "ttstats/pingpong/elo.py",
+            "ttstats/pingpong/elo_replay.py",
+            "ttstats/pingpong/glicko_adapter.py",
+            "ttstats/pingpong/glicko2.py",
+            "ttstats/pingpong/models.py",
+            # KAN-66: the divergence harness reads the in-memory MemoryBook
+            # RatingState attributes of its own replay, not the stored columns.
+            "ttstats/pingpong/rating_divergence.py",
         }
     )
 
@@ -624,7 +628,7 @@ class TestNothingReadsTheShadow:
                 path.suffix not in {".py", ".html", ".js", ".txt"}
                 or "migrations" in rel.parts
                 or "tests" in rel.parts
-                or path.name in self.ALLOWED
+                or f"ttstats/pingpong/{rel.as_posix()}" in self.ALLOWED
             ):
                 continue
             if pattern.search(path.read_text(errors="ignore")):

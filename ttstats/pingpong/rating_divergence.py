@@ -28,7 +28,10 @@ instrument KAN-68 uses to fit them.
 
 import math
 import statistics
+from contextlib import contextmanager
 from dataclasses import dataclass, field
+
+from django.db import connection, transaction
 
 from . import elo, glicko2, glicko_adapter
 from .elo_replay import (
@@ -171,7 +174,8 @@ class PlayerRow:
     diff: float = None
     elo_rank: int = None
     glicko_rank: int = None
-    rank_change: int = None
+    rank_change: int = None  # None when Elo ties this player with another
+    elo_tied: bool = False
 
     def as_dict(self):
         return {
@@ -186,6 +190,7 @@ class PlayerRow:
             "elo_rank": self.elo_rank,
             "glicko_rank": self.glicko_rank,
             "rank_change": self.rank_change,
+            "elo_tied": self.elo_tied,
         }
 
 
@@ -200,6 +205,9 @@ class FormatReport:
     tau: float = None
     movers: list = field(default_factory=list)
     rd_summary: dict = None
+    no_glicko_state: int = 0  # players with a row but no Glicko state
+    elo_sum: int = 0
+    glicko_sum: float = None
 
     def as_dict(self):
         return {
@@ -215,6 +223,8 @@ class FormatReport:
             "movers": [p.as_dict() for p in self.movers],
             "not_comparable": [p.as_dict() for p in self.not_comparable],
             "rd": self.rd_summary,
+            "no_glicko_state": self.no_glicko_state,
+            "rating_sum": {"elo": self.elo_sum, "glicko": self.glicko_sum},
         }
 
 
@@ -230,6 +240,9 @@ class DivergenceReport:
     history_end: object
     rated_matches: int
     formats: list = field(default_factory=list)
+    skipped_shadow: int = 0  # singles matches whose Glicko projection was skipped
+    skipped_match_ids: list = field(default_factory=list)  # first few only
+    warnings: list = field(default_factory=list)
 
     def as_dict(self):
         return {
@@ -237,6 +250,9 @@ class DivergenceReport:
             "tiny_rd": self.tiny_rd,
             "history_end": self.history_end.isoformat() if self.history_end else None,
             "rated_matches": self.rated_matches,
+            "skipped_shadow": self.skipped_shadow,
+            "skipped_match_ids": self.skipped_match_ids,
+            "warnings": self.warnings,
             "formats": [f.as_dict() for f in self.formats],
         }
 
@@ -256,7 +272,17 @@ class DivergenceReport:
                 f"Rated matches: {self.rated_matches}; history ends {self.history_end or 'n/a'} "
                 "(RD is inflated to that date, never to now)."
             ),
+            (
+                f"Glicko projections skipped (error swallowed during replay): "
+                f"{self.skipped_shadow}"
+                + (
+                    f" (first match ids: {self.skipped_match_ids})"
+                    if self.skipped_shadow
+                    else ""
+                )
+            ),
         ]
+        lines += [f"WARNING: {w}" for w in self.warnings]
         for fr in self.formats:
             lines += ["", "=" * 72, f"{fr.format.upper()}: {fr.matches} matches"]
             lines += self._render_prediction(fr)
@@ -289,10 +315,18 @@ class DivergenceReport:
         lines = [
             "",
             (
+                f"Rating sum: Elo {fr.elo_sum}; Glicko-2 {_fmt(fr.glicko_sum, '.1f')} "
+                "(Glicko-2 is not zero-sum; a level shift with the same ranking is expected)."
+            ),
+            (
+                f"Players without Glicko state: {fr.no_glicko_state} (left without Glicko "
+                "state, excluded from the comparison)."
+            ),
+            (
                 f"Players compared: {len(fr.players)}; Kendall tau-b (Elo vs Glicko-2): "
                 f"{_fmt(fr.tau, '.4f')}"
             ),
-            "(d# = Elo rank - Glicko rank: positive means Glicko-2 ranks the player higher.)",
+            "(d# = Elo rank - Glicko rank: positive means Glicko-2 ranks the player higher; 'tie' = Elo ties them with another player, so no rank change is defined.)",
         ]
         header = (
             f"  {'name':<22}{'n':>5} {'last':<11}{'Elo':>6}{'Glicko':>8}{'RD':>6}"
@@ -331,7 +365,7 @@ class DivergenceReport:
             f"  {r.name[:21]:<22}{r.matches:>5} {r.last_match or '-'!s:<11}"
             f"{r.elo:>6}{_fmt(r.glicko, '.0f'):>8}{_fmt(r.rd, '.0f'):>6}"
             f"{_fmt(r.diff, '+.0f'):>7}{_fmt(r.elo_rank, 'd'):>4}"
-            f"{_fmt(r.glicko_rank, 'd'):>4}{_fmt(r.rank_change, '+d'):>4}"
+            f"{_fmt(r.glicko_rank, 'd'):>4}{'tie' if r.elo_tied else _fmt(r.rank_change, '+d'):>4}"
         )
 
 
@@ -373,6 +407,25 @@ def _predict(replay, record, fmt, params, match_day):
     return (p_elo, p_glicko), established
 
 
+@contextmanager
+def _snapshot():
+    """One consistent view of the database for the whole replay.
+
+    On PostgreSQL: a REPEATABLE READ, read-only transaction, so a confirmation
+    landing mid-run cannot make the match iterator and the final count disagree.
+    Elsewhere (SQLite) the plain behaviour is kept. Inside an existing
+    transaction (tests) the isolation level cannot be changed, so it is skipped.
+    """
+    outer = connection.in_atomic_block
+    with transaction.atomic():
+        if connection.vendor == "postgresql" and not outer:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY"
+                )
+        yield
+
+
 def run_divergence(
     *,
     params=DEFAULT_PARAMS,
@@ -381,6 +434,11 @@ def run_divergence(
     top=DEFAULT_TOP,
 ):
     """Replay the confirmed history once and return a `DivergenceReport`."""
+    with _snapshot():
+        return _run(params, chunk_size, tiny_rd, top)
+
+
+def _run(params, chunk_size, tiny_rd, top):
     from .models import Match, Player
 
     replay = Replay(*load_context(), glicko=params)
@@ -389,6 +447,7 @@ def run_divergence(
     last_played = {}  # (format, player_id) -> date
     history_end = None
     seen = 0
+    skipped = []
 
     for record in iter_replay_matches(chunk_size=chunk_size):
         # confirmed_history guarantees a winner; assert it so a future change
@@ -417,11 +476,23 @@ def run_divergence(
             counts[fmt] += 1
             for pk in record.side1_ids + record.side2_ids:
                 last_played[(fmt, pk)] = max(day, last_played.get((fmt, pk), day))
-        replay.play(record)
+        _, format_changes = replay.play(record)
+        # The all-time change carries the GlickoUpdate unless _plan_glicko
+        # swallowed an error for this match.
+        if (
+            rated
+            and fmt == elo.SINGLES
+            and not any(c.glicko for c in format_changes if c.row.season_id is None)
+        ):
+            skipped.append(record.pk)
 
-    assert seen == confirmed_history(Match._base_manager).count(), (
-        "the harness saw a different match set than elo_replay.confirmed_history"
-    )
+    warnings = []
+    expected = confirmed_history(Match._base_manager).count()
+    if seen != expected:
+        warnings.append(
+            f"the replay saw {seen} matches but confirmed_history now counts {expected}; "
+            "history changed during the run, so the figures are not one consistent snapshot."
+        )
 
     names = dict(Player._base_manager.values_list("pk", "name"))
     report = DivergenceReport(
@@ -430,6 +501,9 @@ def run_divergence(
         top=top,
         history_end=history_end,
         rated_matches=seen,
+        skipped_shadow=len(skipped),
+        skipped_match_ids=skipped[:10],
+        warnings=warnings,
     )
     for fmt in (elo.SINGLES, elo.DOUBLES):
         fr = FormatReport(
@@ -462,6 +536,7 @@ def _fill_ranking(fr, book, fmt, names, last_played, params, history_end, tiny_r
         key=lambda r: r.player_id,
     )
     everyone = []
+    fr.elo_sum = sum(r.rating for r in rows)
     for state in rows:
         row = PlayerRow(
             player_id=state.player_id,
@@ -474,6 +549,8 @@ def _fill_ranking(fr, book, fmt, names, last_played, params, history_end, tiny_r
             end = _end_rating(state, history_end, params)
             row.glicko, row.rd = end.rating, end.rd
             row.diff = end.rating - state.rating
+        elif fr.glicko_rated:
+            fr.no_glicko_state += 1
         everyone.append(row)
 
     if not fr.glicko_rated:
@@ -481,6 +558,7 @@ def _fill_ranking(fr, book, fmt, names, last_played, params, history_end, tiny_r
         return
 
     rated = [r for r in everyone if r.glicko is not None]
+    fr.glicko_sum = sum(r.glicko for r in rated) if rated else None
     rds = [r.rd for r in rated]
     if rds:
         fr.rd_summary = {
@@ -494,10 +572,17 @@ def _fill_ranking(fr, book, fmt, names, last_played, params, history_end, tiny_r
     ids = [r.player_id for r in comparable]
     elo_ranks = ordinal_ranks([r.elo for r in comparable], ids)
     glicko_ranks = ordinal_ranks([r.glicko for r in comparable], ids)
+    elo_counts = {}
+    for r in comparable:
+        elo_counts[r.elo] = elo_counts.get(r.elo, 0) + 1
     for r, er, gr in zip(comparable, elo_ranks, glicko_ranks):
-        r.elo_rank, r.glicko_rank, r.rank_change = er, gr, er - gr
+        r.elo_rank, r.glicko_rank = er, gr
+        r.elo_tied = elo_counts[r.elo] > 1
+        # Tied Elo ranks are broken by pk, which is arbitrary: no rank change.
+        r.rank_change = None if r.elo_tied else er - gr
     fr.tau = kendall_tau_b([r.elo for r in comparable], [r.glicko for r in comparable])
     fr.players = sorted(comparable, key=lambda r: r.glicko_rank)
     fr.movers = sorted(
-        comparable, key=lambda r: (-abs(r.rank_change), -abs(r.diff), r.player_id)
+        (r for r in comparable if r.rank_change is not None),
+        key=lambda r: (-abs(r.rank_change), -abs(r.diff), r.player_id),
     )[:top]
