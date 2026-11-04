@@ -205,6 +205,8 @@ def new_volatility(
     it never returns an unconverged sigma. Raises :class:`NonFiniteValueError`
     on NaN, infinity or overflow.
     """
+    if not (math.isfinite(tau) and tau > 0):
+        raise ValueError(f"tau must be positive and finite, got {tau!r}")
     try:
         return _new_volatility(phi, sigma, delta, v, tau)
     except (OverflowError, ZeroDivisionError, ValueError) as exc:
@@ -279,7 +281,10 @@ def rate(
     default: it is policy. With no games only step 6 applies: phi' =
     sqrt(phi^2 + sigma^2), with r and sigma unchanged. The returned RD is
     clamped to ``rd_max`` on both paths. Games are processed in the order
-    given. Raises ``ValueError`` on invalid input.
+    given. Raises ``ValueError`` on invalid input, and a
+    :class:`Glicko2Error` subclass when the arithmetic cannot produce a finite
+    result (non-convergence, or E saturating at a rating gap of ~6,400):
+    callers that must not fail, such as the shadow write, catch ``Glicko2Error``.
     """
     _validate_rating(rating)
     _validate_rd_max(rd_max)
@@ -307,10 +312,8 @@ def rate(
 
     phi_star = math.sqrt(phi * phi + sigma_new * sigma_new)  # step 6
     phi_new = 1.0 / math.sqrt(1.0 / (phi_star * phi_star) + 1.0 / v)  # step 7
-    total = 0.0
-    for game in scaled:
-        total += g(game.phi) * (game.score - expected(mu, game.mu, game.phi))
-    mu_new = mu + phi_new * phi_new * total  # step 7
+    # step 7: mu' = mu + phi'^2 * sum g(s - E), and that sum is Delta / v.
+    mu_new = mu + phi_new * phi_new * delta / v
 
     out = Rating(
         _finite(from_mu(mu_new), "new rating"),  # step 8

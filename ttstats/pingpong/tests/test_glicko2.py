@@ -94,13 +94,25 @@ class TestGlickmanWorkedExample:
         v = glicko2.estimated_variance(0.0, games)
         delta = glicko2.improvement(0.0, v, games)
         sigma = glicko2.new_volatility(glicko2.to_phi(200.0), 0.06, delta, v, TAU)
-        assert sigma == pytest.approx(0.05999, abs=1e-5)
+        # The paper prints sigma' to 5 places (0.05999); exact arithmetic gives
+        # 0.0599960. Pin it tightly: 0.06 (sigma unchanged) must fail.
+        assert sigma == pytest.approx(0.0599960, abs=5e-8)
 
     def test_full_update_steps_6_to_8(self):
         new = rate(PAPER_PLAYER, PAPER_GAMES, tau=TAU)
-        assert new.rating == pytest.approx(1464.06, abs=0.01)
-        assert new.rd == pytest.approx(151.52, abs=0.01)
-        assert new.volatility == pytest.approx(0.05999, abs=1e-5)
+        # The paper rounds to 1464.06 / 151.52; exact values pinned tighter.
+        assert new.rating == pytest.approx(1464.0507, abs=1e-4)
+        assert new.rd == pytest.approx(151.5165, abs=1e-4)
+        assert new.volatility == pytest.approx(0.0599960, abs=5e-8)
+
+    def test_volatility_moves_on_the_wide_bracket_branch(self):
+        # A big upset takes step 5's Delta^2 > phi^2 + v branch and visibly
+        # moves sigma. Reference values from an independent implementation
+        # written during review (KAN-65).
+        new = rate(Rating(1500.0, 50.0, 0.06), [Game(2000.0, 30.0, 1.0)], tau=1.2)
+        assert new.volatility == pytest.approx(0.0600646407, abs=1e-9)
+        assert new.rd == pytest.approx(50.9659378, abs=1e-6)
+        assert new.rating == pytest.approx(1514.0830, abs=1e-4)
 
     def test_new_mu_and_phi_on_internal_scale(self):
         new = rate(PAPER_PLAYER, PAPER_GAMES, tau=TAU)
@@ -133,6 +145,13 @@ class TestInflate:
     def test_zero_periods_is_unchanged(self):
         r = Rating(1530.0, 120.0, 0.06)
         assert inflate(r, 0.0) == r
+
+    def test_zero_periods_still_clamps_to_rd_max(self):
+        assert inflate(Rating(1500.0, 400.0, 0.06), 0.0).rd == 350.0
+
+    def test_new_volatility_rejects_a_bad_tau(self):
+        with pytest.raises(ValueError):
+            glicko2.new_volatility(1.0, 0.06, 0.1, 1.0, 0.0)
 
     def test_matches_the_decision_formula(self):
         r = Rating(1500.0, 100.0, 0.06)
@@ -239,7 +258,7 @@ class TestEdgeCases:
         new = rate(Rating(3000.0, 30.0, 0.06), [Game(0.0, 30.0, 0.0)], tau=TAU)
         assert all(math.isfinite(x) for x in new)
 
-    def test_games_are_processed_in_the_order_given_with_identical_result(self):
+    def test_game_order_does_not_change_the_result(self):
         # Within one period the update is symmetric in the games, so order
         # may not change the answer beyond float summation noise.
         a = rate(PAPER_PLAYER, PAPER_GAMES, tau=TAU)
@@ -373,11 +392,9 @@ class TestProperties:
         ):
             before = Rating(r, rd, sigma)
             after = rate(before, [Game(opp_r, opp_rd, score)], tau=TAU)
-            ceiling = inflate(before, 1.0, rd_max=1e9)
             # phi' <= phi* = sqrt(phi^2 + sigma'^2); sigma' stays near sigma.
             bound = math.sqrt(rd**2 + (after.volatility * SCALE) ** 2)
             assert after.rd <= min(bound, MAX_RD) + 1e-9
-            assert ceiling.rd >= rd
 
     def test_draws_between_equals_leave_the_rating_unchanged(self):
         for r, rd, opp_rd in itertools.product(RATINGS, RDS, RDS):

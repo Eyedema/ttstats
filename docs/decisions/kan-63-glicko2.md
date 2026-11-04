@@ -43,9 +43,10 @@ growth over the long idle gaps.
      to 0.
    - The opponent's φ in `g(φ)` is the opponent's **inflated** φ*. That is
      their uncertainty as of this match.
-   - `RATING_PERIOD_DAYS` (the time unit for σ²) and φ_max (350 on the
-     rating scale) are policy constants fitted and recorded in S6.5. They are
-     not literals in `glicko2.py`.
+   - `RATING_PERIOD_DAYS` (the time unit for σ²) and φ_max are policy
+     constants. S6.5 fits them and records them here. `glicko2.py` keeps
+     `MAX_RD = 350` only as Glickman's algorithm default. The adapter always
+     passes the policy value explicitly, so it never relies on that default.
    - This needs `last_rated_on` on `PlayerRating` (S6.4).
    - The pure module exposes the standard rating-period update, which takes a
      list of (µ_j, φ_j, s_j) and allows zero games. It also exposes a separate
