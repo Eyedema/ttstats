@@ -294,6 +294,81 @@ class TestNotifyMatchConfirmedOnce:
         assert not send.called
 
 
+def _season_ended(player, **overrides):
+    kwargs = dict(
+        season_name='Autumn 2026',
+        standings=[('Singles', 2), ('Doubles', 5)],
+        url='/pingpong/leaderboard/',
+    )
+    kwargs.update(overrides)
+    return notifications.notify_season_ended(player, **kwargs)
+
+
+@pytest.mark.django_db
+class TestNotifySeasonEnded:
+    """KAN-38: the season-rollover push. Takes plain values, not a Season, so
+    the rollover job owns the domain and this module owns only the wording."""
+
+    def test_reports_the_final_ranks_in_one_push(self):
+        player = verified_player('Ada')
+
+        with patch('pingpong.push.send_to_user', return_value=1) as send:
+            reached = _season_ended(player)
+
+        assert reached == {player.pk}
+        assert send.call_count == 1
+        kwargs = send.call_args.kwargs
+        assert kwargs['kind'] == NotificationKind.SEASON_ENDED
+        assert 'Autumn 2026' in kwargs['title']
+        assert '#2 in Singles' in kwargs['body']
+        assert '#5 in Doubles' in kwargs['body']
+        assert kwargs['url'] == '/pingpong/leaderboard/'
+
+    def test_player_without_an_account_is_not_reached(self):
+        guest = PlayerFactory(name='Guest')
+
+        with patch('pingpong.push.send_to_user') as send:
+            assert _season_ended(guest) == set()
+
+        assert not send.called
+
+    def test_undelivered_push_is_not_reached(self):
+        player = verified_player('Ada')
+
+        with patch('pingpong.push.send_to_user', return_value=0):
+            assert _season_ended(player) == set()
+
+    @with_vapid
+    def test_muted_kind_is_not_reached_so_the_caller_emails(self):
+        from pingpong import push
+
+        player = verified_player('Ada')
+        subscribe(player)
+        prefs = NotificationPreference.for_user(player.user)
+        prefs.push_season_ended = False
+        prefs.save()
+
+        with patch('pywebpush.webpush') as mock_webpush:
+            reached = _season_ended(player)
+
+        assert reached == set()
+        assert not mock_webpush.called
+        assert push.user_has_push(player.user, NotificationKind.SEASON_ENDED) is False
+
+    @with_vapid
+    def test_second_send_the_same_day_is_rate_limited(self):
+        player = verified_player('Ada')
+        subscribe(player)
+
+        with patch('pywebpush.webpush') as mock_webpush:
+            first = _season_ended(player)
+            second = _season_ended(player, season_name='Another season')
+
+        assert first == {player.pk}
+        assert second == set()
+        assert mock_webpush.call_count == 1
+
+
 @pytest.mark.django_db
 class TestEmailFallback:
     """The push-preferred/email-fallback rule, exercised through the signals.

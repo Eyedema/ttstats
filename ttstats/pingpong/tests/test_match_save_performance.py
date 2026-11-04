@@ -43,7 +43,10 @@ class TestMatchCompletionQueryCount:
     # Measured at 39 queries after the rework, from 114. The headroom
     # is deliberate: it must not be so tight that adding one legitimate field
     # fails CI, nor so loose that the N+1 could come back unnoticed.
-    CEILING = 40
+    # KAN-47 added the PlayerRating mirror: 42 measured (+3: read the rating
+    # rows, write them, write the RatingChange audit rows -- all bulk), plus
+    # one season lookup when the match belongs to a club.
+    CEILING = 44
 
     def test_saving_the_winning_game_stays_under_the_ceiling(self):
         # ARRANGE

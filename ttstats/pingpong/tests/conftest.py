@@ -1,12 +1,12 @@
 import factory
 import pytest
 from datetime import date, time, timedelta
-from django.contrib.auth.models import User, AnonymousUser
+from django.contrib.auth.models import User
 from django.core.cache import cache as django_cache
 from django.test import Client
 from factory.django import DjangoModelFactory
 
-from pingpong.models import Championship, ChampionshipEntry, ChampionshipEntryMember, Club, ClubMembership, ClubRole, Game, Location, Match, MatchConfirmation, Player, ScheduledMatch, Side
+from pingpong.models import Championship, ChampionshipEntry, ChampionshipEntryMember, Club, ClubMembership, ClubRole, Game, JobRun, Location, Match, MatchConfirmation, Player, PlayerRating, ScheduledMatch, Season, SeasonStanding
 from pingpong.services import set_match_sides, set_scheduled_match_sides
 
 
@@ -52,6 +52,32 @@ class ClubMembershipFactory(DjangoModelFactory):
     role = ClubRole.MEMBER
 
 
+class SeasonFactory(DjangoModelFactory):
+    """A club season. Nothing else defaults to one, so existing tests are
+    unaffected: each call makes its own club unless given one, and the dates
+    step 100 days per instance from 1990 so seasons sharing a club never
+    overlap (and never contain a match a test dated "now")."""
+
+    class Meta:
+        model = Season
+
+    club = factory.SubFactory(ClubFactory)
+    name = factory.Sequence(lambda n: f"Season {n}")
+    starts_on = factory.Sequence(lambda n: date(1990, 1, 1) + timedelta(days=100 * n))
+    ends_on = factory.LazyAttribute(lambda o: o.starts_on + timedelta(days=89))
+    archived_at = None
+
+
+class JobRunFactory(DjangoModelFactory):
+    """A scheduled-job log row; pass ``started_at`` to age it."""
+
+    class Meta:
+        model = JobRun
+
+    name = factory.Sequence(lambda n: f"job_{n}")
+    status = JobRun.Status.SUCCESS
+
+
 class LocationFactory(DjangoModelFactory):
     class Meta:
         model = Location
@@ -76,6 +102,42 @@ class PlayerFactory(DjangoModelFactory):
         with_user = factory.Trait(
             user=factory.SubFactory(UserFactory),
         )
+
+
+class PlayerRatingFactory(DjangoModelFactory):
+    """A PlayerRating row: all-time singles unless told otherwise. For tests
+    that need a player to arrive with format history already in place."""
+
+    class Meta:
+        model = PlayerRating
+
+    player = factory.SubFactory(PlayerFactory)
+    club = None
+    season = None
+    format = "singles"
+    rating = 1500
+    peak = factory.LazyAttribute(lambda o: max(o.rating, 1500))
+    matches = 0
+
+
+class SeasonStandingFactory(DjangoModelFactory):
+    """A frozen final-table row (KAN-51). `player_name` defaults to the
+    player's name at creation, as rollover freezes it; `matches` is
+    `wins + losses`."""
+
+    class Meta:
+        model = SeasonStanding
+
+    season = factory.SubFactory(SeasonFactory)
+    format = "singles"
+    player = factory.SubFactory(PlayerFactory)
+    player_name = factory.LazyAttribute(lambda o: o.player.name if o.player else "Deleted player")
+    rank = 1
+    rating = 1500
+    wins = 1
+    losses = 0
+    matches = factory.LazyAttribute(lambda o: o.wins + o.losses)
+    notified_at = None
 
 
 class MatchFactory(DjangoModelFactory):

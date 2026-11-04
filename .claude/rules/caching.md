@@ -31,6 +31,9 @@ the single source of the namespace.
 - **A player's keys are namespaced by that player's club, not the viewer's.**
 - **A cross-club match invalidates both clubs.**
 - Flag off: `club_prefix()` is `""` and keys keep their pre-tenancy shape.
+- **The seasons leaderboard key** is
+  `{club}leaderboard_{gen}_season{id|all}_{format}_{top_x}`, built only in
+  `_leaderboard_cache_key()`; with `seasons` off the legacy key is unchanged.
 - **`warm_cache` scopes by explicit filter, never by faking a request.** A
   command has no user, so managers run unfiltered; a club in thread-local alone
   would write each club's key with the whole database's numbers.

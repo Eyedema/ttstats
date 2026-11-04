@@ -4,11 +4,12 @@ from datetime import timedelta
 
 from django.contrib.auth.models import User
 from django.db import models
-from django.db.models import Count, Exists, OuterRef, Q
+from django.core.exceptions import ValidationError
+from django.db.models import Count, Exists, F, OuterRef, Q
 from django.utils import timezone
 
-from . import match_state, player_hues
-from .managers import ChampionshipManager, GameManager, LiveMatchManager, MatchManager, PlayerManager, ScheduledMatchManager
+from . import match_state, player_hues, seasons
+from .managers import ChampionshipManager, ClubDataManager, GameManager, LiveMatchManager, MatchManager, PlayerManager, ScheduledMatchManager, SeasonStandingManager
 
 # Email verification token expires after 24 hours
 VERIFICATION_TOKEN_EXPIRY = timedelta(hours=24)
@@ -1754,6 +1755,7 @@ class NotificationKind(models.TextChoices):
     MATCH_RESULT = 'match_result', 'A match you played was confirmed'
     SCHEDULED_MATCH = 'scheduled_match', 'A match was scheduled for you'
     LEADERBOARD_OVERTAKE = 'leaderboard_overtake', 'Someone passed you on the leaderboard'
+    SEASON_ENDED = 'season_ended', 'A season ended (your final rank)'
 
 
 class NotificationPreference(models.Model):
@@ -1773,6 +1775,9 @@ class NotificationPreference(models.Model):
     # Off by default: it is the one notification that fires without the user
     # having done anything, so opting in should be a deliberate act.
     push_leaderboard_overtake = models.BooleanField(default=False)
+    # On by default: at most once per season, rate limited to one a day, and
+    # muting it still leaves the email, so push is the quieter channel.
+    push_season_ended = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     @classmethod
@@ -1831,6 +1836,40 @@ class PushSubscription(models.Model):
 
     def __str__(self):
         return f"Push subscription for {self.user.username} ({self.endpoint[:40]}...)"
+
+
+class JobRun(models.Model):
+    """One invocation of a scheduled job (KAN-37 / T3.6), written by `jobs.run_job`.
+
+    The run log answers "did the nightly job run, when, and what did it do?"
+    without shell access to the host. Operational, not club data: it has no
+    club and no row-level manager, and it is only shown in the admin.
+    Dry runs write no row.
+    """
+
+    class Status(models.TextChoices):
+        RUNNING = 'running', 'Running'
+        SUCCESS = 'success', 'Succeeded'
+        FAILED = 'failed', 'Failed'
+        # Lock held by another run, or the cache was unreachable (fail closed).
+        SKIPPED = 'skipped', 'Skipped'
+        # Found still RUNNING by the next holder of the lock: the process died.
+        INTERRUPTED = 'interrupted', 'Interrupted'
+
+    name = models.CharField(max_length=100)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.RUNNING)
+    # Not auto_now_add, so retention tests (and the admin) can set it.
+    started_at = models.DateTimeField(default=timezone.now)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    summary = models.TextField(blank=True)
+    error = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ['-started_at']
+        indexes = [models.Index(fields=['name', '-started_at'])]
+
+    def __str__(self):
+        return f"{self.name} {self.status} at {self.started_at:%Y-%m-%d %H:%M}"
 
 
 class FeatureFlagOverride(models.Model):
@@ -1998,3 +2037,236 @@ class ClubInvite(models.Model):
 
     def __str__(self):
         return f"Invite to {self.club.name} ({'valid' if self.is_valid else 'invalid'})"
+
+
+class Season(models.Model):
+    """A club's rating period (KAN-9; docs/decisions/kan-9-seasons.md).
+
+    Both dates are inclusive and are UTC dates: a match belongs to the season
+    containing `date_played.date()`. Seasons in one club never overlap, and
+    the **database** enforces it (an exclusion constraint on PostgreSQL,
+    triggers on SQLite -- migration 0038), because "a match belongs to exactly
+    one season" must not depend on every write path remembering to check.
+
+    Once archived, the dates are frozen: matches have been ranked against
+    them, and moving a boundary would silently move matches between seasons.
+    """
+
+    club = models.ForeignKey(
+        "Club", on_delete=models.PROTECT, related_name="seasons"
+    )
+    name = models.CharField(max_length=100)
+    starts_on = models.DateField()
+    ends_on = models.DateField()
+    archived_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    all_objects = models.Manager()
+    objects = ClubDataManager()
+
+    class Meta:
+        default_manager_name = "objects"
+        ordering = ["-starts_on"]
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(ends_on__gte=F("starts_on")),
+                name="season_ends_on_or_after_starts_on",
+            ),
+        ]
+        indexes = [models.Index(fields=["club", "starts_on"])]
+
+    def __str__(self):
+        return f"{self.name} ({self.starts_on} to {self.ends_on})"
+
+    @classmethod
+    def for_day(cls, club_id, day):
+        """The club's season containing `day` (a date or a UTC datetime), or None.
+
+        Reads `all_objects`: callers pass the club of a row they already hold
+        (a match), so this is transitively club-scoped, and a write path must
+        resolve the *match's* season whatever club the viewer has active.
+        """
+        if club_id is None:
+            return None
+        return seasons.resolve_season(day, cls.all_objects.filter(club_id=club_id))
+
+    def clean(self):
+        super().clean()
+        if self.starts_on and self.ends_on and self.ends_on < self.starts_on:
+            raise ValidationError({"ends_on": "A season cannot end before it starts."})
+
+        if self.pk:
+            stored = Season.all_objects.filter(pk=self.pk).values(
+                "club_id", "starts_on", "ends_on", "archived_at"
+            ).first()
+            if stored and stored["archived_at"] is not None and (
+                stored["club_id"], stored["starts_on"], stored["ends_on"]
+            ) != (self.club_id, self.starts_on, self.ends_on):
+                raise ValidationError(
+                    "An archived season's club and dates cannot be changed."
+                )
+
+        if self.club_id and self.starts_on and self.ends_on:
+            clash = Season.all_objects.filter(
+                club_id=self.club_id,
+                starts_on__lte=self.ends_on,
+                ends_on__gte=self.starts_on,
+            ).exclude(pk=self.pk).first()
+            if clash:
+                raise ValidationError(f"Overlaps {clash}.")
+
+
+class RatingFormat(models.TextChoices):
+    SINGLES = "singles", "Singles"
+    DOUBLES = "doubles", "Doubles"
+
+
+class PlayerRating(models.Model):
+    """A player's rating in one format, all-time or in one season (KAN-47).
+
+    `season=NULL` is the **all-time** rating for the format. Written by
+    `elo.update_player_elo` alongside the legacy `Player.elo_*` fields, which
+    stay lifetime and combined (decision 3). **A mirror for now: nothing
+    outside elo.py, elo_replay.py, elo_parity.py and recalculate_elo reads it.**
+
+    `peak` is per row: per format all-time, and per format per season.
+    A player with no row in a format is *unrated* in it, which is not the same
+    as 1500-with-history.
+    """
+
+    player = models.ForeignKey(
+        Player, on_delete=models.CASCADE, related_name="ratings"
+    )
+    club = models.ForeignKey(
+        "Club", on_delete=models.PROTECT, null=True, blank=True,
+        related_name="player_ratings",
+    )
+    season = models.ForeignKey(
+        Season, on_delete=models.PROTECT, null=True, blank=True,
+        related_name="player_ratings",
+    )
+    format = models.CharField(max_length=10, choices=RatingFormat.choices)
+    rating = models.IntegerField(default=1500)
+    peak = models.IntegerField(default=1500)
+    matches = models.IntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    all_objects = models.Manager()
+    objects = ClubDataManager()
+
+    class Meta:
+        default_manager_name = "objects"
+        constraints = [
+            # Two conditional constraints rather than nulls_distinct=False,
+            # which SQLite (the test database) does not support.
+            models.UniqueConstraint(
+                fields=["player", "season", "format"],
+                condition=Q(season__isnull=False),
+                name="playerrating_one_per_season_format",
+            ),
+            models.UniqueConstraint(
+                fields=["player", "format"],
+                condition=Q(season__isnull=True),
+                name="playerrating_one_all_time_per_format",
+            ),
+        ]
+        indexes = [
+            # The leaderboard read: one club, one season (or all-time), one
+            # format, best first.
+            models.Index(
+                fields=["club", "season", "format", "-rating"],
+                name="playerrating_leaderboard",
+            ),
+        ]
+
+    def __str__(self):
+        scope = self.season.name if self.season_id else "all-time"
+        return f"{self.player} {self.format} {scope}: {self.rating}"
+
+
+class RatingChange(models.Model):
+    """The audit trail for `PlayerRating`, one row per player per scope per match.
+
+    `EloHistory` stays the immutable legacy trail (lifetime, combined). The
+    unique `(match, rating)` is what makes a concurrent second confirmation
+    roll back instead of applying a match twice.
+    """
+
+    match = models.ForeignKey(
+        Match, on_delete=models.CASCADE, related_name="rating_changes"
+    )
+    player = models.ForeignKey(
+        Player, on_delete=models.CASCADE, related_name="rating_changes"
+    )
+    rating = models.ForeignKey(
+        PlayerRating, on_delete=models.CASCADE, related_name="changes"
+    )
+    old_rating = models.IntegerField()
+    new_rating = models.IntegerField()
+    rating_change = models.IntegerField()
+    k_factor = models.FloatField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["match", "rating"], name="ratingchange_once_per_match_rating"
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.player} {self.rating_change:+d} ({self.rating.format}, match {self.match_id})"
+
+
+class SeasonStanding(models.Model):
+    """One row of a season's frozen final table (KAN-51, S4.6).
+
+    Written once, by `season_rollover`, when the season is archived, and
+    **never recomputed or updated** afterwards (only `notified_at` is ever
+    set). A late confirmation still moves `PlayerRating`, and `recalculate_elo`
+    may rebuild every rating, but the archive is the record as it stood at
+    rollover.
+
+    `player` is SET_NULL and `player_name` is the display name at freeze time,
+    so deleting or renaming a player never changes or empties a past table.
+    `notified_at` is the exactly-once claim for the "season ended" message: a
+    conditional `.update()` across the player's rows in the season, the same
+    shape as `Match.result_notified_at`.
+    """
+
+    season = models.ForeignKey(
+        Season, on_delete=models.PROTECT, related_name="standings"
+    )
+    format = models.CharField(max_length=10, choices=RatingFormat.choices)
+    player = models.ForeignKey(
+        Player, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="season_standings",
+    )
+    player_name = models.CharField(max_length=100)
+    rank = models.PositiveIntegerField()
+    rating = models.IntegerField()
+    matches = models.PositiveIntegerField()
+    wins = models.PositiveIntegerField()
+    losses = models.PositiveIntegerField()
+    notified_at = models.DateTimeField(null=True, blank=True, editable=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    all_objects = models.Manager()
+    objects = SeasonStandingManager()
+
+    class Meta:
+        default_manager_name = "objects"
+        ordering = ["season", "format", "rank", "-wins", "player_name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["season", "format", "player"],
+                name="seasonstanding_one_per_season_format_player",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["season", "format", "rank"], name="seasonstanding_table"),
+        ]
+
+    def __str__(self):
+        return f"{self.season.name} {self.format} #{self.rank}: {self.player_name}"

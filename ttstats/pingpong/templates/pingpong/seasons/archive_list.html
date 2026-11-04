@@ -1,0 +1,59 @@
+{% extends "pingpong/base.html" %}
+{% load player_tags %}
+
+{% block title %}Past seasons - TTStats{% endblock %}
+{% block nav_title %}Past seasons{% endblock %}
+
+{% comment %}
+The season archive (KAN-51): every archived season, newest first, with its
+champions. Read only from SeasonStanding -- the frozen record -- never from
+ratings, so it reads the same forever. No JS, no hidden state.
+{% endcomment %}
+
+{% block content %}
+<div class="mx-auto max-w-3xl" data-testid="season-archive">
+
+  <header class="mb-4">
+    <h1 class="text-display">Past seasons</h1>
+    <p class="mt-1 text-[13px] font-semibold text-muted-foreground">
+      Final tables, frozen the day each season was archived.
+    </p>
+  </header>
+
+  {% if seasons %}
+  <ul class="border-y-2 border-court-line">
+    {% for entry in seasons %}
+    <li class="border-b border-court-line last:border-b-0">
+      <a href="{% url 'pingpong:season_archive_detail' entry.season.pk %}"
+         class="flex items-center justify-between gap-4 px-4 py-3">
+        <span class="min-w-0">
+          <span class="block truncate text-[18px] font-extrabold leading-tight tracking-[-0.02em]">{{ entry.season.name }}</span>
+          <span class="block text-[12px] font-semibold text-muted-foreground">
+            {{ entry.season.starts_on|date:"j M Y" }} &ndash; {{ entry.season.ends_on|date:"j M Y" }}
+          </span>
+        </span>
+        <span class="flex-none text-right text-[12px] font-semibold text-muted-foreground">
+          {% for label, champions in entry.champions %}
+          <span class="block">
+            <span class="label-cap">{{ label }}</span>
+            {% for row in champions %}{{ row.player_name }}{% if not forloop.last %}, {% endif %}{% endfor %}
+          </span>
+          {% empty %}
+          <span class="block">No matches</span>
+          {% endfor %}
+        </span>
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <div class="surface p-6">
+    <p class="text-heading">No season has ended yet</p>
+    <p class="mt-1 text-[13px] font-semibold text-muted-foreground">
+      When the current season ends, its final table is kept here.
+    </p>
+  </div>
+  {% endif %}
+
+</div>
+{% endblock %}

@@ -42,6 +42,7 @@ cd ttstats && python manage.py rebuild_point_rollups [--check]  # Rebuild (or on
 cd ttstats && python manage.py point_storage --by-club          # Point-log row counts, growth rate, retention threshold
 cd ttstats && python manage.py cache_control --stats|--clear|--test
 cd ttstats && python manage.py warm_cache                       # Pre-populate common caches
+cd ttstats && python manage.py run_scheduled_jobs [--job X] [--dry-run|--list]  # What host cron runs daily
 
 # Production
 docker compose -f compose.prod.yml up --build -d
@@ -60,7 +61,7 @@ docker compose -f compose.prod.yml up --build -d
 - `@pytest.mark.django_db` on test classes (or functions). Group tests in `Test<Subject>` classes, plain `assert`, helper functions instead of `setUp`.
 - Create data with the `conftest.py` factories, never raw `Model.objects.create()` (except when testing the ORM itself).
 - Test each layer directly: forms with `data={}`, views with the test `Client`, managers by setting the thread-local user, middleware and context processors with `RequestFactory`, emails via `mail.outbox`.
-- Pure decision modules (`match_state.py`, `live_scoring.py`, `point_stats.py`, `championship_scheduling.py`, `player_hues.py`) have no Django imports. Test them without a DB.
+- Pure decision modules (`match_state.py`, `live_scoring.py`, `point_stats.py`, `championship_scheduling.py`, `player_hues.py`, `seasons.py`) have no Django imports. Test them without a DB.
 
 ### Factory Reference (`conftest.py`)
 
@@ -107,6 +108,7 @@ When adding a feature, also add an integration test for its happy path. These mu
 4. Scheduled match conversion (`test_scheduled_match_conversion.py::TestConversionIntegration`)
 5. Head-to-head with data (`test_views.py::TestHeadToHead*`)
 6. Club invite -> anonymous signup -> membership (`test_club_invites.py::TestAnonymousSignupThroughAnInvite`)
+7. Season: confirm -> leaderboard -> rollover job -> archive (`test_integration.py::TestSeasonLifecycleIntegration`)
 
 ---
 
@@ -129,7 +131,7 @@ When adding a feature, also add an integration test for its happy path. These mu
 - When a winner is first set: if any player is unverified, auto-confirm all; otherwise send confirmation emails. `match_confirmed` is True when all *verified* players confirmed (empty verified set = True).
 - Views filter with `Match.objects.filter(is_confirmed=True)`, not in Python.
 - Championship matches can have a winner with `is_confirmed=False`: filter championship data by `winner_side__isnull=False`.
-- `elo.projected_elo_changes()` is the only source of an Elo preview *and* of what gets written. Never compute a preview separately.
+- `elo.projected_elo_changes(match, scope)` is the only source of an Elo preview *and* of what gets written, for every scope. Formats and seasons live only in `PlayerRating`; `Player.elo_rating` is the lifetime combined mirror (see `seasons.md`).
 - Scoring rules (`WIN_POINTS`, `MIN_LEAD`, valid final scores) live only in `live_scoring.py`. Never re-type scorelines.
 
 ### Templates and forms
@@ -162,5 +164,5 @@ When adding a feature, also add an integration test for its happy path. These mu
 Subsystem details live in `.claude/rules/*.md`. Each declares `paths:` and loads
 only when Claude touches matching files: `tenancy`, `clubs`, `caching`,
 `match-pipeline`, `live-scoring`, `championships`, `frontend`, `push`,
-`passkeys`, `observability`, `flags`, `build-and-deploy`. Decision records are
+`passkeys`, `observability`, `flags`, `build-and-deploy`, `seasons`, `jobs`. Decision records are
 in `docs/decisions/`; the tenancy runbook is `docs/tenancy-rollout.md`.

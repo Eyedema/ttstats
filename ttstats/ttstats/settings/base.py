@@ -224,6 +224,10 @@ FEATURE_FLAGS = {
     # the hottest path in the app, so it is separately killable without a
     # deploy -- and gated again by TENANCY_CANARY_SAMPLE_RATE below.
     'tenancy_canary': False,
+    # Seasonal leaderboards and the S4.4 provisional marker (KAN-9). Off means
+    # every page renders exactly as before; the PlayerRating mirror is
+    # written either way.
+    'seasons': False,
 }
 
 # Fraction of scoped querysets the canary inspects. 0.0 means never; the flag

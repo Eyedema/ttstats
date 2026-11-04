@@ -1,11 +1,13 @@
 from datetime import date, timedelta
-from django.contrib import admin
+from django.contrib import admin, messages
 from django.contrib.admin import SimpleListFilter
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import User
 from django.core.management import call_command
 from django.http import HttpResponseRedirect
 from django.urls import path
+from django.db.models import Exists, OuterRef
+from django.utils import timezone
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 from django_otp_webauthn.models import WebAuthnCredential
@@ -19,6 +21,7 @@ from .models import (
     EloHistory,
     FeatureFlagOverride,
     Game,
+    JobRun,
     Location,
     Match,
     MatchConfirmation,
@@ -26,7 +29,9 @@ from .models import (
     Player,
     PlayerAchievement,
     PushSubscription,
+    RatingChange,
     ScheduledMatch,
+    Season,
     UserProfile,
 )
 
@@ -950,12 +955,29 @@ class PushSubscriptionAdmin(admin.ModelAdmin):
         return False
 
 
+@admin.register(JobRun)
+class JobRunAdmin(admin.ModelAdmin):
+    """The scheduled-job run log (KAN-37): read-only, written by jobs.run_job."""
+
+    list_display = ('name', 'status', 'started_at', 'finished_at', 'summary')
+    list_filter = ('status', 'name')
+    readonly_fields = ('name', 'status', 'started_at', 'finished_at', 'summary', 'error')
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+
 @admin.register(NotificationPreference)
 class NotificationPreferenceAdmin(admin.ModelAdmin):
     list_display = ('user', 'push_match_confirmation', 'push_match_result',
-                    'push_scheduled_match', 'push_leaderboard_overtake')
+                    'push_scheduled_match', 'push_leaderboard_overtake',
+                    'push_season_ended')
     list_filter = ('push_match_confirmation', 'push_match_result',
-                   'push_scheduled_match', 'push_leaderboard_overtake')
+                   'push_scheduled_match', 'push_leaderboard_overtake',
+                   'push_season_ended')
     search_fields = ('user__username',)
 
 
@@ -1028,3 +1050,62 @@ class ClubMembershipAdmin(admin.ModelAdmin):
     search_fields = ('user__username', 'club__name')
     autocomplete_fields = ('user', 'club')
     readonly_fields = ('joined_at',)
+
+
+@admin.register(Season)
+class SeasonAdmin(admin.ModelAdmin):
+    """Seasons are created by staff with explicit dates (KAN-9 decision 1).
+
+    Once archived, the club and dates are read-only: matches have been ranked
+    against those boundaries. `Season.clean()` enforces the same rule for any
+    other form; the database enforces non-overlap.
+    """
+
+    list_display = ('name', 'club', 'starts_on', 'ends_on', 'archived_at')
+    list_filter = ('club',)
+    search_fields = ('name', 'club__name')
+    readonly_fields = ('created_at',)
+    FROZEN_WHEN_ARCHIVED = ('club', 'starts_on', 'ends_on')
+
+    def get_readonly_fields(self, request, obj=None):
+        fields = list(super().get_readonly_fields(request, obj))
+        if obj is not None and obj.archived_at is not None:
+            fields += [f for f in self.FROZEN_WHEN_ARCHIVED if f not in fields]
+        return fields
+
+    def save_model(self, request, obj, form, change):
+        """Save, then warn when the season covers confirmed matches it has not rated.
+
+        Season ratings are written at confirmation time only, so a season
+        created (or widened) over the past leaves those matches with all-time
+        ratings and no season rows until staff replay them.
+        """
+        super().save_model(request, obj, form, change)
+        unrated = self._unrated_confirmed_matches(obj)
+        if unrated:
+            noun = "match" if unrated == 1 else "matches"
+            messages.warning(
+                request,
+                f"{unrated} confirmed {noun} in this season's dates have no season "
+                f"ratings yet. Run `python manage.py recalculate_elo --season {obj.pk}` "
+                "to rate them.",
+            )
+
+    @staticmethod
+    def _unrated_confirmed_matches(season):
+        """Confirmed, decided matches of the season's club in its dates (up to
+        today) with no RatingChange in this season. `all_objects`: explicitly
+        filtered by the season's club; the admin has no club context."""
+        today = timezone.now().date()
+        if season.starts_on > today:
+            return 0
+        rated = RatingChange.objects.filter(match=OuterRef("pk"), rating__season=season)
+        return (
+            Match.all_objects.filter(
+                club_id=season.club_id, is_confirmed=True, winner_side__isnull=False,
+                date_played__date__gte=season.starts_on,
+                date_played__date__lte=min(season.ends_on, today),
+            )
+            .exclude(Exists(rated))
+            .count()
+        )

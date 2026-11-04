@@ -1,0 +1,113 @@
+{% load player_tags %}
+{% comment %}
+The seasons table (KAN-48 / S4.3): one season (or all-time), one format.
+
+Same contract as _leaderboard_results.html, which it replaces when the
+`seasons` flag is on: returned on its own for htmx and included by
+leaderboard.html on first paint, and it renders its own `id` because it is
+swapped with hx-swap="outerHTML".
+
+Rows are PlayerRating rows, so the number is that format's rating in that
+scope, never a shared number filtered by match type. Each name is a
+`{% player_link %}` stretched over its row, so the whole row is still the tap
+target without a raw player_detail URL.
+
+Provisional rows carry the S4.4 marker; players with no row in this scope are
+listed separately as Unrated, with no number -- not 1500. The explanation sits
+directly under the table whenever either state is on screen.
+{% endcomment %}
+<div id="leaderboard-results" data-scope="{{ rating_scope.season_id|default:'all' }}-{{ rating_scope.format }}">
+  <p class="-mt-3 mb-4 text-[13px] font-semibold text-muted-foreground" data-scope-label>
+    {{ player_stats|length }} rated · {{ scope_label }}
+  </p>
+  {% if player_stats %}
+
+  <div class="border-y-2 border-court-line">
+    {% for stat in player_stats %}
+    {% if forloop.counter <= 3 %}
+    <div class="relative flex items-stretch border-b border-court-line bg-court-raised last:border-b-0" data-rated-row>
+      <span class="{{ stat.player|hue }} hue-bar w-1.5"></span>
+      <span class="flex w-12 flex-none items-center justify-center">
+        <span class="n text-[26px]">{{ forloop.counter }}</span>
+      </span>
+      <span class="min-w-0 flex-1 py-3">
+        {% player_link stat.player css="block truncate text-[18px] font-extrabold leading-tight tracking-[-0.02em] after:absolute after:inset-0 after:content-['']" %}
+        <span class="flex flex-wrap items-center gap-x-1.5 text-[12px] font-semibold text-muted-foreground">
+          <span>{{ stat.total_matches }} played · {{ stat.wins }}–{{ stat.losses }} · peak {{ stat.elo_peak }}</span>
+          {% include 'pingpong/_rating_status.html' with status=stat.status %}
+        </span>
+      </span>
+      <span class="flex-none px-4 py-3 text-right">
+        <span class="n block text-[24px]">{{ stat.elo_rating }}</span>
+        {% include 'pingpong/_movement.html' with movement=stat.movement size_class='text-[12px]' %}
+      </span>
+    </div>
+
+    {% else %}
+    <div class="relative flex items-stretch border-b border-court-line last:border-b-0" data-rated-row>
+      <span class="{{ stat.player|hue }} hue-bar w-1.5"></span>
+      <span class="flex w-12 flex-none items-center justify-center">
+        <span class="n text-[22px] text-muted-foreground">{{ forloop.counter }}</span>
+      </span>
+      <span class="min-w-0 flex-1 py-2.5">
+        {% player_link stat.player css="block truncate text-[16px] font-extrabold leading-tight after:absolute after:inset-0 after:content-['']" %}
+        <span class="flex flex-wrap items-center gap-x-1.5 text-[11.5px] font-semibold text-muted-foreground">
+          <span>{{ stat.total_matches }} played · {{ stat.wins }}–{{ stat.losses }}</span>
+          {% include 'pingpong/_rating_status.html' with status=stat.status %}
+        </span>
+      </span>
+      <span class="flex-none px-4 py-2.5 text-right">
+        <span class="n block text-[20px]">{{ stat.elo_rating }}</span>
+        {% include 'pingpong/_movement.html' with movement=stat.movement size_class='text-[11.5px]' %}
+      </span>
+    </div>
+    {% endif %}
+    {% endfor %}
+  </div>
+
+  {% if biggest_mover %}
+  <p class="flex items-center justify-between px-4 py-3.5">
+    <span class="text-[13px] font-semibold text-muted-foreground">Biggest mover this week</span>
+    <span class="{{ biggest_mover.player|hue }} hue-text text-[13px] font-extrabold">
+      {% player_link biggest_mover.player %}, {{ biggest_mover.movement|stringformat:"+d" }}
+    </span>
+  </p>
+  {% endif %}
+
+  {% else %}
+  <div class="surface p-6">
+    <p class="text-heading">Nobody is rated here yet</p>
+    <p class="mt-1 text-[12.5px] font-semibold leading-relaxed text-muted-foreground">
+      {% if rating_scope.season %}
+        No confirmed {{ format_label|lower }} result in {{ rating_scope.season.name }} so far. The first one puts two people on the table.
+      {% else %}
+        No confirmed {{ format_label|lower }} result yet. The table fills itself the moment two people agree on a scoreline.
+      {% endif %}
+    </p>
+    {% if rating_scope.season %}
+      <a href="{% url 'pingpong:leaderboard' %}?season=all&amp;format={{ rating_scope.format }}" class="btn-paddle mt-4 w-full">See all-time</a>
+    {% else %}
+      <a href="{% url 'pingpong:play' %}" class="btn-paddle mt-4 w-full">Go start something</a>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% if unrated_players %}
+  <div class="mt-4" data-unrated-list>
+    <p class="label-cap px-1 pb-1">Not rated {% if rating_scope.season %}this season{% else %}in {{ format_label|lower }}{% endif %}</p>
+    <ul class="border-y border-court-line">
+      {% for player in unrated_players %}
+      <li class="flex items-center gap-2 border-b border-court-line px-3 py-2 last:border-b-0">
+        <span class="{{ player|hue }} hue-bar h-4 w-1"></span>
+        {% player_link player css="min-w-0 flex-1 truncate text-[14px] font-bold" %}
+        {% include 'pingpong/_rating_status.html' with status='unrated' %}
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  {% if show_rating_help %}
+  {% include 'pingpong/_rating_help.html' %}
+  {% endif %}
+</div>
