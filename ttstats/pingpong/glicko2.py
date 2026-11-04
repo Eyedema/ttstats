@@ -354,3 +354,23 @@ def expected_score(rating: float, opponent_rating: float, opponent_rd: float) ->
     if not (math.isfinite(opponent_rd) and opponent_rd > 0):
         raise ValueError(f"opponent rd must be positive, got {opponent_rd!r}")
     return expected(to_mu(rating), to_mu(opponent_rating), to_phi(opponent_rd))
+
+
+def win_probability(rating1: float, rd1: float, rating2: float, rd2: float) -> float:
+    """Probability that player 1 beats player 2, using both players' RD.
+
+    Glickman's prediction form: E = 1 / (1 + 10^(-(r1 - r2) / (400 sqrt(1 +
+    3 q^2 (RD1^2 + RD2^2) / pi^2)))) with q = ln(10) / 400. Symmetric:
+    win_probability(a, b) + win_probability(b, a) == 1. Unlike
+    ``expected_score`` (the update's one-sided g(phi) form) this is the
+    prediction both sides' uncertainty shrinks towards 0.5.
+    """
+    for name, value in (("rating", rating1), ("rating", rating2)):
+        if not math.isfinite(value):
+            raise ValueError(f"{name} must be finite, got {value!r}")
+    for value in (rd1, rd2):
+        if not (math.isfinite(value) and value >= 0):
+            raise ValueError(f"rd must be finite and >= 0, got {value!r}")
+    q = math.log(10.0) / 400.0
+    denominator = math.sqrt(1.0 + 3.0 * q * q * (rd1 * rd1 + rd2 * rd2) / math.pi**2)
+    return 1.0 / (1.0 + 10.0 ** (-(rating1 - rating2) / (400.0 * denominator)))

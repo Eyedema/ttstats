@@ -454,3 +454,37 @@ class TestPurity:
                 modules.append(node.module or "")
         assert not [m for m in modules if m.split(".")[0] in {"django", "pingpong"}]
         assert not [m for m in modules if "elo" in m]
+
+
+class TestWinProbability:
+    def test_equal_ratings_give_a_half(self):
+        assert glicko2.win_probability(1500, 200, 1500, 50) == pytest.approx(0.5)
+
+    def test_zero_rd_is_the_plain_elo_form(self):
+        assert glicko2.win_probability(1600, 0, 1500, 0) == pytest.approx(
+            1 / (1 + 10 ** (-100 / 400))
+        )
+
+    def test_hand_computed_with_rd(self):
+        # q = ln10/400; 3 q^2 (350^2 + 350^2)/pi^2 = 0.99716...; denominator sqrt(1.99716)
+        q = math.log(10) / 400
+        d = math.sqrt(1 + 3 * q * q * (2 * 350**2) / math.pi**2)
+        expected = 1 / (1 + 10 ** (-(100) / (400 * d)))
+        assert glicko2.win_probability(1600, 350, 1500, 350) == pytest.approx(expected)
+        assert 0.5 < expected < 1 / (1 + 10 ** (-100 / 400))
+
+    def test_is_symmetric(self):
+        a = glicko2.win_probability(1700, 80, 1450, 300)
+        b = glicko2.win_probability(1450, 300, 1700, 80)
+        assert a + b == pytest.approx(1.0)
+
+    def test_more_uncertainty_pulls_towards_a_half(self):
+        sure = glicko2.win_probability(1700, 30, 1500, 30)
+        unsure = glicko2.win_probability(1700, 300, 1500, 300)
+        assert 0.5 < unsure < sure
+
+    def test_rejects_bad_input(self):
+        with pytest.raises(ValueError):
+            glicko2.win_probability(float("nan"), 50, 1500, 50)
+        with pytest.raises(ValueError):
+            glicko2.win_probability(1500, -1, 1500, 50)

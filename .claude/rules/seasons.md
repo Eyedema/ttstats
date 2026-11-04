@@ -9,6 +9,9 @@ paths:
   - "ttstats/pingpong/glicko_adapter.py"
   - "ttstats/pingpong/elo_*.py"
   - "ttstats/pingpong/ratings.py"
+  - "ttstats/pingpong/rating_divergence.py"
+  - "ttstats/pingpong/management/commands/rating_divergence.py"
+  - "ttstats/pingpong/tests/test_rating_divergence.py"
   - "ttstats/pingpong/management/commands/recalculate_elo.py"
   - "ttstats/pingpong/models.py"
   - "ttstats/pingpong/admin.py"
@@ -103,6 +106,14 @@ The contract is `docs/decisions/kan-9-seasons.md`; these are the rules it implie
   idempotent (pinned in `test_glicko_shadow.py`).
 - A season row with NULL shadow fields is seeded like a missing one (decision
   3), so one failed projection costs only that match's update.
+- **`manage.py rating_divergence` (KAN-66) is the read-only Elo vs Glicko-2
+  harness** (`--tau`, `--period-days`, `--season-rd-floor`, `--top`, `--json`).
+  It replays through `iter_replay_matches` + `Replay(glicko=...)` in memory (no
+  shadow columns needed, no writes), scores pre-match predictions online
+  (Brier, log-loss, favourite rate) and compares final rankings. End RD is
+  inflated to the history's last match date, never now(), so output is
+  deterministic. It is the one deliberate reader of the shadow fields (listed in
+  the no-readers test's `ALLOWED`); KAN-68 uses it to fit the parameters.
 
 ## The seasons UI (S4.3 / S4.4)
 
