@@ -10,8 +10,8 @@ timeout that has already failed deploys, and a job must not extend it.
 
 ## Install (once, and again after editing the file)
 
-1. If the deploy checkout (the `WORK_DIR` secret) is not `/opt/ttstats`, edit
-   the `cd` path in the host's copy. Keep the committed copy generic.
+1. The `cd` path is the production checkout, `/root/ttstats` (the `WORK_DIR`
+   secret). If the checkout moves, change it here and re-install.
 2. As the user that runs `docker compose` for the deploy, install it as that
    user's crontab:
 

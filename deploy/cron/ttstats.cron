@@ -9,4 +9,4 @@ SHELL=/bin/sh
 PATH=/usr/local/bin:/usr/bin:/bin
 
 # m  h  dom mon dow  command
-15   3  *   *   *    cd /opt/ttstats && docker compose -f compose.prod.yml exec -T web python manage.py run_scheduled_jobs 2>&1 | logger -t ttstats-jobs
+15   3  *   *   *    cd /root/ttstats && docker compose -f compose.prod.yml exec -T web python manage.py run_scheduled_jobs 2>&1 | logger -t ttstats-jobs
