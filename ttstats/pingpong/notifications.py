@@ -169,6 +169,30 @@ def notify_leaderboard_overtakes(match):
     return reached
 
 
+def notify_season_ended(player, *, season_name, standings, url):
+    """"Autumn 2026 has ended: #2 in Singles." Returns Player ids reached.
+
+    Takes plain values rather than a Season so the rollover job owns the
+    domain and this module owns only the wording. ``standings`` is an iterable
+    of ``(format_label, rank)``; one push covers every format, because the
+    kind's daily limit is one per player. A push suppressed by that limit, a
+    mute or a missing device leaves the player out of the returned set, and
+    the caller emails them.
+    """
+    if not player.user_id:
+        return set()
+    ranks = ', '.join(f"#{rank} in {label}" for label, rank in standings)
+    delivered = push.send_to_user(
+        player.user,
+        kind=NotificationKind.SEASON_ENDED,
+        title=f"{season_name} has ended",
+        body=f"Your final rank: {ranks}." if ranks else "See the final standings.",
+        url=url,
+        tag=f'season-ended-{season_name}',
+    )
+    return {player.pk} if delivered else set()
+
+
 def notify_match_confirmed(match):
     """Fire the post-confirmation notifications exactly once per match.
 

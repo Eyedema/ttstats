@@ -642,3 +642,34 @@ class ClubInviteForm(StyledFormMixin, forms.Form):
         label="Note",
         help_text="Who is this for? For your records only.",
     )
+
+
+# The leaderboard's "Show" sizes. The legacy (flag-off) template still
+# hand-writes these; the seasons table renders this field instead.
+TOP_X_CHOICES = [("10", "Top 10"), ("20", "Top 20"), ("50", "Top 50"), ("100", "Top 100")]
+DEFAULT_TOP_X = "10"
+
+
+class LeaderboardScopeForm(StyledFormMixin, forms.Form):
+    """Season, format and size for the seasons leaderboard (KAN-48).
+
+    Bound to the cleaned values, never to raw GET data, so the widgets render
+    exactly the scope the view resolved -- a garbage or foreign `season` id
+    falls back to the default and the select shows the default. Seasons come
+    from the view (the active club's, explicitly), not from a class-body
+    queryset evaluated at import time.
+    """
+
+    season = forms.ChoiceField(label="Season")
+    format = forms.ChoiceField(label="Format", choices=[])
+    top_x = forms.ChoiceField(label="Show", choices=TOP_X_CHOICES)
+
+    def __init__(self, *args, seasons=(), current=None, all_time_value="all", **kwargs):
+        from .models import RatingFormat
+
+        super().__init__(*args, **kwargs)
+        self.fields["season"].choices = [
+            (str(s.pk), f"{s.name} (current)" if s == current else s.name)
+            for s in seasons
+        ] + [(all_time_value, "All-time")]
+        self.fields["format"].choices = RatingFormat.choices

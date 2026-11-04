@@ -52,13 +52,22 @@ test.describe('bottom tab bar', () => {
     // The single thing a fixed bottom bar gets wrong. `pb-tabbar` on <main>
     // and the bar's own height come from one spacing token so they cannot
     // disagree -- this asserts the token is actually applied.
-    await page.goto('/pingpong/leaderboard/');
+    // A page long enough to scroll: on one that fits the screen this passes
+    // whatever the padding is, so the guard below makes that a failure.
+    await page.goto('/pingpong/matches/');
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
 
     const barTop = (await tabBar(page).boundingBox()).y;
+    // The CONTENT box: `pb-tabbar` is padding inside <main>, so main's border
+    // box reaches under the bar by design. Measuring the border box only ever
+    // passed while the page was shorter than the screen -- one more
+    // leaderboard row (the KAN-48 seed) made it fail with nothing covered.
+    // Without the padding the content box ends under the bar and this fails.
     const contentBottom = await page.evaluate(() => {
       const main = document.querySelector('main');
-      return main.getBoundingClientRect().bottom;
+      const padding = parseFloat(getComputedStyle(main).paddingBottom);
+      return main.getBoundingClientRect().bottom - padding;
     });
 
     expect(contentBottom).toBeLessThanOrEqual(barTop + 1);

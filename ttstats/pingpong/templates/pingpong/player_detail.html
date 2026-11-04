@@ -77,6 +77,40 @@
         </div>
     </div>
 
+    {% if format_ratings %}
+    {% comment %}
+    Ratings per format (KAN-48 / KAN-50, seasons flag on). Singles and doubles
+    are separate numbers, each this season and all-time, and each carries its
+    provisional / unrated state as a word -- never as a colour, never as a
+    1500 standing in for "no matches yet". The marker links to the
+    explanation below, which says why the ratings split at all.
+    {% endcomment %}
+    <section class="surface" data-format-ratings>
+      <div class="grid grid-cols-[1fr_auto_auto] items-center gap-x-4 gap-y-2 p-4">
+        <span class="label-cap">Format</span>
+        <span class="label-cap text-right">{% if format_ratings.season %}{{ format_ratings.season.name }}{% else %}This season{% endif %}</span>
+        <span class="label-cap text-right">All-time</span>
+        {% for entry in format_ratings.formats %}
+        <span class="text-[15px] font-extrabold">{{ entry.label }}</span>
+        {% for cell in entry.columns %}
+        <span class="flex flex-col items-end gap-0.5 text-right" data-rating-cell>
+          {% if cell.status == 'unrated' %}
+            <a href="#rating-help">{% include 'pingpong/_rating_status.html' with status=cell.status %}</a>
+          {% else %}
+            <span class="n text-[20px]">{{ cell.rating }}</span>
+            {% if cell.status == 'provisional' %}<a href="#rating-help">{% include 'pingpong/_rating_status.html' with status=cell.status %}</a>{% endif %}
+          {% endif %}
+        </span>
+        {% endfor %}
+        {% endfor %}
+      </div>
+      {% if not format_ratings.season %}
+      <p class="border-t border-court-line px-4 py-2 text-[12px] font-semibold text-muted-foreground">No season is running for this club, so there is no season rating.</p>
+      {% endif %}
+    </section>
+    {% include 'pingpong/_rating_help.html' %}
+    {% endif %}
+
     <!-- Statistics Grid -->
     <div class="grid grid-cols-2 lg:grid-cols-3 gap-3 md:gap-4">
         <div class="rounded-lg border bg-card p-4 md:p-6">

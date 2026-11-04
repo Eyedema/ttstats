@@ -4,20 +4,29 @@ The e2e suite drives the real app in a real browser engine, so it needs a
 known user and a known live match to point at. Refuses to run unless DEBUG is
 on, because it creates an account with a published password.
 """
+from datetime import date, timedelta
+
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.core.management.base import BaseCommand, CommandError
+from django.utils import timezone
 
 from pingpong import live_scoring as ls, point_rollups, services
 from pingpong.models import (
-    Club, ClubInvite, ClubMembership, ClubRole, Game, Match, MatchConfirmation,
-    Player,
+    Club, ClubInvite, ClubMembership, ClubRole, FeatureFlagOverride, Game, Match,
+    MatchConfirmation, Player, PlayerRating, Season, SeasonStanding,
 )
 
 E2E_USERNAME = "e2e"
 E2E_PASSWORD = "e2e-local-only"
 E2E_OPPONENT = "e2e-opponent"
 E2E_MOMENTUM_OPPONENT = "e2e-momentum"
+# The seasons user (KAN-48/50): same password, `seasons` flag on by override,
+# so the season leaderboard specs see the flag-on UI while every other spec
+# keeps exercising the flag-off one -- the staff-first rollout, in miniature.
+E2E_SEASONS_USERNAME = "e2e-seasons"
+# Every player the seed rates. A re-seed starts them from scratch.
+E2E_PLAYER_NAMES = ("E2E Player", "E2E Opponent", "E2E Momentum", "E2E Seasons Player")
 
 
 class Command(BaseCommand):
@@ -27,10 +36,11 @@ class Command(BaseCommand):
         if not settings.DEBUG:
             raise CommandError("seed_e2e refuses to run with DEBUG=False.")
 
-        # Idempotent: the suite re-seeds before every run, and a live match
-        # left over from a previous run would make the scoreboard specs
-        # start from a non-zero score.
-        Match.all_objects.filter(is_live=True, scorekeeper__name="E2E Player").delete()
+        # Idempotent: the suite re-seeds before every run. A live match left
+        # over from a previous run would make the scoreboard specs start from
+        # a non-zero score, and a finished one (or Elo applied on top of the
+        # last run's) would move every rating the season specs assert.
+        self._reset_seeded_players()
 
         user, _ = User.objects.get_or_create(
             username=E2E_USERNAME, defaults={"email": "e2e@example.test"}
@@ -89,12 +99,16 @@ class Command(BaseCommand):
             club=second, user=user, defaults={"role": ClubRole.MEMBER}
         )
 
+        season = self._seed_season(club, player, opponent)
+
         # One live invite and one revoked one, so the suite can render both the
         # working and the dead page without mutating state mid-run.
         ClubInvite.objects.filter(club=club).delete()
         live_invite = ClubInvite.issue(club, user, max_uses=50, note="e2e")
         dead_invite = ClubInvite.issue(club, user, note="e2e revoked")
         dead_invite.revoke()
+
+        archived_season = self._seed_archived_season(club, user, player, opponent)
 
         # The suite reads these off stdout rather than hard-coding a pk.
         self.stdout.write(f"E2E_USERNAME={E2E_USERNAME}")
@@ -105,6 +119,114 @@ class Command(BaseCommand):
         self.stdout.write(f"E2E_REVOKED_INVITE_TOKEN={dead_invite.token}")
         self.stdout.write(f"E2E_CLUB={club.name}")
         self.stdout.write(f"E2E_CLUB_TWO={second.name}")
+        self.stdout.write(f"E2E_SEASONS_USERNAME={E2E_SEASONS_USERNAME}")
+        self.stdout.write(f"E2E_SEASON={season.name}")
+        self.stdout.write(f"E2E_ARCHIVED_SEASON_PK={archived_season.pk}")
+
+    def _reset_seeded_players(self):
+        """Back to a fresh database for the seeded players: no matches, no ratings.
+
+        Every match involving them goes (live, finished, seeded or left behind
+        by a spec), which cascades EloHistory and RatingChange; their
+        PlayerRating rows go and the legacy fields return to the model
+        defaults. Everything is then rebuilt by the real pipeline below, so a
+        re-run writes exactly what the first run wrote.
+        """
+        players = Player.objects.filter(name__in=E2E_PLAYER_NAMES)
+        Match.all_objects.filter(participants__player__in=players).distinct().delete()
+        PlayerRating.all_objects.filter(player__in=players).delete()
+        players.update(elo_rating=1500, elo_peak=1500, matches_for_elo=0)
+
+    def _seed_season(self, club, player, opponent):
+        """A current season with confirmed singles results, for the season table.
+
+        Matches are confirmed through the real pipeline (MatchConfirmation ->
+        recompute -> update_player_elo), so the PlayerRating and RatingChange
+        rows the specs read are the ones the app writes. Everyone ends up
+        provisional (a handful of matches), and E2E Momentum -- rated
+        all-time from the momentum match, which predates the club -- is
+        unrated this season. Doubles has nobody, so its empty state renders.
+        """
+        today = timezone.now().date()
+        # update_or_create: a season seeded on an earlier day is moved to
+        # cover today, so a current season always exists.
+        season, _ = Season.all_objects.update_or_create(
+            club=club,
+            name="E2E Season",
+            defaults={
+                "starts_on": today - timedelta(days=30),
+                "ends_on": today + timedelta(days=60),
+            },
+        )
+
+        user, _ = User.objects.get_or_create(
+            username=E2E_SEASONS_USERNAME,
+            defaults={"email": "e2e-seasons@example.test"},
+        )
+        user.set_password(E2E_PASSWORD)
+        user.save()
+        user.profile.email_verified = True
+        user.profile.save()
+        me, _ = Player.objects.get_or_create(name="E2E Seasons Player")
+        me.user = user
+        me.club = club
+        me.save()
+        ClubMembership.objects.get_or_create(
+            club=club, user=user, defaults={"role": ClubRole.MEMBER}
+        )
+        FeatureFlagOverride.objects.update_or_create(
+            name="seasons", user=user,
+            defaults={"enabled": True, "note": "e2e: season leaderboard specs"},
+        )
+
+        for winner, loser in ((me, opponent), (me, opponent), (player, opponent)):
+            match = Match.all_objects.create(club=club, best_of=3)
+            services.set_match_sides(match, [winner], [loser])
+            for n in (1, 2):
+                Game.objects.create(
+                    match=match, game_number=n, team1_score=11, team2_score=6
+                )
+            for p in (winner, loser):
+                MatchConfirmation.objects.get_or_create(match=match, player=p)
+        return season
+
+    def _seed_archived_season(self, club, user, player, opponent):
+        """An archived season with a frozen table, for the archive specs (KAN-51).
+
+        The archive screens are behind the `seasons` flag, so the specs run
+        as the `e2e-seasons` user, who has the override. The rows are
+        written directly rather than through a rollover: the specs are about
+        what the archive *renders*, and real matches here would move every
+        other spec's leaderboard. Rollover itself is covered in pytest.
+
+        The table carries a shared first place and a deleted player (no
+        Player, only the frozen name), the two rows most likely to break.
+        """
+        # The flag is on for the `e2e-seasons` user only (see _seed_season);
+        # turning it on for `e2e` would move every flag-off spec onto the
+        # season leaderboard.
+        SeasonStanding.all_objects.filter(season__club=club).delete()
+        Season.all_objects.filter(club=club, name="E2E Spring 2025").delete()
+        season = Season.all_objects.create(
+            club=club, name="E2E Spring 2025",
+            starts_on=date(2025, 1, 1), ends_on=date(2025, 3, 31),
+            archived_at=timezone.now(),
+        )
+        rows = [
+            ("singles", player, player.name, 1, 1532, 4, 3, 1),
+            ("singles", opponent, opponent.name, 1, 1532, 4, 2, 2),
+            ("singles", None, "E2E Departed", 3, 1468, 4, 1, 3),
+            ("doubles", player, player.name, 1, 1516, 1, 1, 0),
+        ]
+        SeasonStanding.all_objects.bulk_create(
+            SeasonStanding(
+                season=season, format=fmt, player=who, player_name=name,
+                rank=rank, rating=rating, matches=matches, wins=wins, losses=losses,
+                notified_at=timezone.now(),
+            )
+            for fmt, who, name, rank, rating, matches, wins, losses in rows
+        )
+        return season
 
     def _seed_completed_live_match(self, player):
         """A FINISHED live-scored match, so the momentum specs have a chart.
@@ -129,11 +251,6 @@ class Command(BaseCommand):
         opponent, _ = Player.objects.get_or_create(name="E2E Momentum")
         opponent.user = opponent_user
         opponent.save()
-
-        # Idempotent, like everything else here.
-        Match.all_objects.filter(
-            participants__player=opponent
-        ).distinct().delete()
 
         match = Match.all_objects.create(
             best_of=3,

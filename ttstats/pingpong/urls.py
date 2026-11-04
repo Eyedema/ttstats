@@ -1,5 +1,5 @@
 from django.urls import path
-from . import views
+from . import season_views, views
 
 app_name = "pingpong"
 
@@ -108,4 +108,8 @@ urlpatterns = [
     path('championships/<int:pk>/register/', views.ChampionshipRegisterView.as_view(), name='championship_register'),
     path('championships/<int:pk>/unregister/', views.ChampionshipUnregisterView.as_view(), name='championship_unregister'),
     path('championships/<int:pk>/start/', views.ChampionshipStartView.as_view(), name='championship_start'),
+
+    # Season archive (KAN-51): frozen final tables, read-only.
+    path('seasons/', season_views.SeasonArchiveListView.as_view(), name='season_archive'),
+    path('seasons/<int:pk>/', season_views.SeasonArchiveDetailView.as_view(), name='season_archive_detail'),
 ]

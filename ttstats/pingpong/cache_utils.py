@@ -67,6 +67,25 @@ def player_point_stats_key(player):
     return f'{club_prefix(player.club)}player_point_stats_{player.pk}'
 
 
+def job_lock_key(name):
+    """The overlap lock for one scheduled job (KAN-37).
+
+    Deliberately carries no club: a job runs once for the whole deployment,
+    and a lock per club would let two runs overlap.
+    """
+    return f'job_lock:{name}'
+
+
+def notification_count_key(user_id, scope, day):
+    """A user's push count for one UTC day: per kind, or ``all`` (KAN-38).
+
+    Deliberately carries no club: the limit protects a person, and a player
+    in two clubs must not get two daily budgets. The date is in the key, so a
+    new day is a new counter regardless of the TTL.
+    """
+    return f'notif_count:{day:%Y%m%d}:u{user_id}:{scope}'
+
+
 def h2h_point_stats_key(player1, player2):
     """The point-level head-to-head fold for a pair, order-independent."""
     low, high = sorted([player1.pk, player2.pk])

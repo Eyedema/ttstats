@@ -409,3 +409,352 @@ class TestEloEmptySideGuard:
         update_player_elo(m)  # must not raise
 
         assert EloHistory.objects.filter(match=m).count() == 0
+
+
+# ---------------------------------------------------------------------------
+# KAN-47 (S4.2): the PlayerRating mirror. Everything above is today's
+# behaviour and is deliberately left exactly as it was.
+# ---------------------------------------------------------------------------
+
+from datetime import date, datetime, timezone as dt_timezone
+from unittest import mock
+
+from django.db import IntegrityError
+
+from .. import elo
+from ..elo import LEGACY, PROVISIONAL_MATCHES, RatingScope, k_factor, projected_elo_changes
+from ..models import PlayerRating, RatingChange
+from .conftest import ClubFactory, PlayerRatingFactory, SeasonFactory
+
+
+def _finish(side1, side2, *, winner=Side.ONE, club=None, when=None, best_of=5, **kwargs):
+    """A won match. Players without accounts auto-confirm, so Elo is applied."""
+    extra = {"club": club} if club is not None else {}
+    if when is not None:
+        extra["date_played"] = when
+    match = MatchFactory(
+        team1_players=list(side1), team2_players=list(side2),
+        is_double=len(side1) > 1, best_of=best_of, **extra, **kwargs,
+    )
+    for n in range(1, best_of // 2 + 2):
+        t1, t2 = (11, 5) if winner == Side.ONE else (5, 11)
+        GameFactory(match=match, game_number=n, team1_score=t1, team2_score=t2)
+    match.refresh_from_db()
+    return match
+
+
+def _all_time(player, fmt):
+    return PlayerRating.all_objects.filter(player=player, season=None, format=fmt).first()
+
+
+def _verified_pair():
+    players = [PlayerFactory(with_user=True) for _ in range(2)]
+    for p in players:
+        p.user.profile.email_verified = True
+        p.user.profile.save()
+    return players
+
+
+@pytest.mark.django_db
+class TestKFactorHelpers:
+    def test_provisional_threshold_is_a_constant(self):
+        assert PROVISIONAL_MATCHES == 20
+
+    def test_k_factor_takes_a_match_count(self):
+        match = MatchFactory(match_type='tournament', best_of=7)
+
+        assert k_factor(match, 5) == 79.2
+        assert k_factor(match, PROVISIONAL_MATCHES) == pytest.approx(52.8)
+
+    def test_calculate_k_factor_delegates_with_the_legacy_count(self):
+        player = PlayerFactory(matches_for_elo=19)
+        match = MatchFactory()
+
+        assert calculate_k_factor(match, player) == k_factor(match, 19)
+
+
+@pytest.mark.django_db
+class TestFormatRatingsAreSeparate:
+    def test_a_singles_match_changes_only_singles(self):
+        p1, p2 = PlayerFactory(), PlayerFactory()
+
+        match = _finish([p1], [p2])
+
+        assert not PlayerRating.all_objects.filter(format="doubles").exists()
+        r1, r2 = _all_time(p1, "singles"), _all_time(p2, "singles")
+        h1 = EloHistory.objects.get(match=match, player=p1)
+        assert (r1.rating, r1.peak, r1.matches) == (h1.new_rating, h1.new_rating, 1)
+        assert r2.rating == 1500 + EloHistory.objects.get(match=match, player=p2).rating_change
+        assert RatingChange.objects.filter(match=match).count() == 2
+
+    def test_a_doubles_match_changes_only_doubles_with_the_same_delta_per_side(self):
+        a, b, c, d = (PlayerFactory() for _ in range(4))
+
+        match = _finish([a, b], [c, d])
+
+        assert not PlayerRating.all_objects.filter(format="singles").exists()
+        changes = {rc.player_id: rc for rc in RatingChange.objects.filter(match=match)}
+        assert len(changes) == 4
+        assert changes[a.pk].rating_change == changes[b.pk].rating_change > 0
+        assert changes[c.pk].rating_change == changes[d.pk].rating_change < 0
+        # Same delta as the legacy write, since everyone started level.
+        assert changes[a.pk].rating_change == EloHistory.objects.get(match=match, player=a).rating_change
+
+    def test_a_doubles_only_player_is_unrated_in_singles(self):
+        a, b, c, d = (PlayerFactory() for _ in range(4))
+        _finish([a, b], [c, d])
+
+        assert _all_time(a, "singles") is None
+        assert _all_time(a, "doubles") is not None
+
+    def test_legacy_fields_still_combine_both_formats(self):
+        a, b, c, d = (PlayerFactory() for _ in range(4))
+        _finish([a], [b])
+        _finish([a, c], [b, d])
+
+        a.refresh_from_db()
+        assert a.matches_for_elo == 2
+        assert _all_time(a, "singles").matches == 1
+        assert _all_time(a, "doubles").matches == 1
+
+    def test_format_experience_is_the_all_time_count_in_that_format(self):
+        """Established in legacy (25 matches) but new to singles: provisional
+        K for the singles rating, normal K for the legacy one."""
+        p1 = PlayerFactory(matches_for_elo=25)
+        p2 = PlayerFactory(matches_for_elo=25)
+
+        match = _finish([p1], [p2])
+
+        assert EloHistory.objects.get(match=match, player=p1).k_factor == 32
+        assert RatingChange.objects.get(match=match, player=p1).k_factor == 48
+
+    def test_the_preview_for_a_scope_is_what_gets_written(self):
+        p1, p2 = _verified_pair()
+        PlayerRatingFactory(player=p1, rating=1620, matches=30)
+        match = _finish([p1], [p2], match_type="tournament")
+        scope = RatingScope(None, "singles")
+        preview = projected_elo_changes(match, scope)
+
+        confirm_match(match)
+
+        written = {rc.player_id: rc for rc in RatingChange.objects.filter(match=match)}
+        assert written[p1.pk].rating_change == preview.side1_change
+        assert written[p1.pk].k_factor == preview.side1_k
+        assert written[p2.pk].rating_change == preview.side2_change
+        assert written[p1.pk].old_rating == 1620
+
+    def test_legacy_scope_is_the_default(self):
+        p1, p2 = _verified_pair()
+        match = _finish([p1], [p2])
+
+        assert projected_elo_changes(match) == projected_elo_changes(match, LEGACY)
+
+
+@pytest.mark.django_db
+class TestSeasonRatings:
+    def _season_q1(self, club):
+        return SeasonFactory(club=club, starts_on=date(2026, 1, 1), ends_on=date(2026, 3, 31))
+
+    def test_a_match_in_a_season_writes_all_time_and_season_rows(self):
+        club = ClubFactory()
+        season = self._season_q1(club)
+        p1, p2 = PlayerFactory(club=club), PlayerFactory(club=club)
+
+        match = _finish([p1], [p2], club=club, when=datetime(2026, 2, 1, tzinfo=dt_timezone.utc))
+
+        rows = PlayerRating.all_objects.filter(player=p1)
+        assert {(r.season_id, r.format) for r in rows} == {(None, "singles"), (season.pk, "singles")}
+        season_row = rows.get(season=season)
+        assert season_row.club_id == club.pk
+        assert season_row.matches == 1
+        assert RatingChange.objects.filter(match=match).count() == 4
+
+    def test_first_season_rating_is_seeded_by_soft_reset_before_this_match(self):
+        club = ClubFactory()
+        season = self._season_q1(club)
+        p1, p2 = PlayerFactory(club=club), PlayerFactory(club=club)
+        PlayerRatingFactory(player=p1, rating=1700, peak=1750, matches=40)
+
+        match = _finish([p1], [p2], club=club, when=datetime(2026, 2, 1, tzinfo=dt_timezone.utc))
+
+        season_change = RatingChange.objects.get(match=match, player=p1, rating__season=season)
+        all_time_change = RatingChange.objects.get(match=match, player=p1, rating__season=None)
+        assert all_time_change.old_rating == 1700
+        assert season_change.old_rating == 1600  # 1500 + 0.5 * (1700 - 1500)
+        # Experience is the all-time format count, so both scopes share a K.
+        assert season_change.k_factor == all_time_change.k_factor == 32
+        assert PlayerRating.all_objects.get(player=p1, season=season).peak == max(1600, season_change.new_rating)
+
+    def test_an_unrated_player_starts_the_season_at_1500(self):
+        club = ClubFactory()
+        season = self._season_q1(club)
+        p1, p2 = PlayerFactory(club=club), PlayerFactory(club=club)
+
+        match = _finish([p1], [p2], club=club, when=datetime(2026, 2, 1, tzinfo=dt_timezone.utc))
+
+        assert RatingChange.objects.get(match=match, player=p2, rating__season=season).old_rating == 1500
+
+    def test_a_second_season_match_continues_the_season_row(self):
+        club = ClubFactory()
+        season = self._season_q1(club)
+        p1, p2 = PlayerFactory(club=club), PlayerFactory(club=club)
+        _finish([p1], [p2], club=club, when=datetime(2026, 2, 1, tzinfo=dt_timezone.utc))
+        after_first = PlayerRating.all_objects.get(player=p1, season=season).rating
+
+        second = _finish([p1], [p2], club=club, when=datetime(2026, 2, 2, tzinfo=dt_timezone.utc))
+
+        assert RatingChange.objects.get(match=second, player=p1, rating__season=season).old_rating == after_first
+        assert PlayerRating.all_objects.get(player=p1, season=season).matches == 2
+
+    def test_a_match_outside_every_season_counts_all_time_only(self):
+        club = ClubFactory()
+        self._season_q1(club)
+        p1, p2 = PlayerFactory(club=club), PlayerFactory(club=club)
+
+        match = _finish([p1], [p2], club=club, when=datetime(2026, 4, 1, tzinfo=dt_timezone.utc))
+
+        assert not PlayerRating.all_objects.filter(season__isnull=False).exists()
+        assert RatingChange.objects.filter(match=match).count() == 2
+
+    def test_another_clubs_season_does_not_apply(self):
+        self._season_q1(ClubFactory())
+        club = ClubFactory()
+        p1, p2 = PlayerFactory(club=club), PlayerFactory(club=club)
+
+        _finish([p1], [p2], club=club, when=datetime(2026, 2, 1, tzinfo=dt_timezone.utc))
+
+        assert not PlayerRating.all_objects.filter(season__isnull=False).exists()
+
+
+@pytest.mark.django_db
+class TestRatingWritesAreRaceSafe:
+    def test_a_confirmer_that_loses_the_race_writes_nothing_and_does_not_raise(self):
+        """Both confirmers pass the 'already applied?' guard; the second one's
+        inserts hit the unique constraints, the whole block rolls back, and it
+        treats that as already applied."""
+        p1, p2 = PlayerFactory(), PlayerFactory()
+        match = _finish([p1], [p2])
+        p1.refresh_from_db()
+        before = (p1.elo_rating, _all_time(p1, "singles").rating,
+                  EloHistory.objects.count(), RatingChange.objects.count())
+
+        # Guard says "not yet" (we raced), the post-failure re-check says "done".
+        with mock.patch.object(elo, "_already_applied", side_effect=[False, True]):
+            update_player_elo(match)
+
+        p1.refresh_from_db()
+        assert (p1.elo_rating, _all_time(p1, "singles").rating,
+                EloHistory.objects.count(), RatingChange.objects.count()) == before
+
+    def test_a_conflict_that_is_not_this_match_is_retried(self):
+        """Two *different* matches creating the same new rating row: the loser
+        must retry, not mistake it for having already applied."""
+        p1, p2 = _verified_pair()
+        match = _finish([p1], [p2])  # verified players: not confirmed, no Elo yet
+        confirm_match_silent(match)  # confirmed without firing the pipeline
+        match.invalidate_confirmation_state()
+        real_apply = elo._apply_match
+        calls = []
+
+        def flaky(m):
+            calls.append(m.pk)
+            if len(calls) == 1:
+                raise IntegrityError("unique constraint on a fresh all-time row")
+            return real_apply(m)
+
+        with mock.patch.object(elo, "_apply_match", side_effect=flaky):
+            update_player_elo(match)
+
+        assert len(calls) == 2
+        assert EloHistory.objects.filter(match=match).count() == 2
+        assert RatingChange.objects.filter(match=match).count() == 2
+
+    def test_calling_twice_writes_ratings_once(self):
+        p1, p2 = PlayerFactory(), PlayerFactory()
+        match = _finish([p1], [p2])
+
+        update_player_elo(match)
+        update_player_elo(match)
+
+        assert RatingChange.objects.filter(match=match).count() == 2
+        assert _all_time(p1, "singles").matches == 1
+
+
+def _pending_confirmed(rating1=1500, rating2=1500):
+    """A won, confirmed match whose Elo has NOT been applied yet."""
+    p1, p2 = _verified_pair()
+    Player.objects.filter(pk=p1.pk).update(elo_rating=rating1)
+    Player.objects.filter(pk=p2.pk).update(elo_rating=rating2)
+    match = _finish([p1], [p2])  # verified players: unconfirmed, no Elo
+    confirm_match_silent(match)  # confirmed without firing the pipeline
+    match.invalidate_confirmation_state()
+    return match, p1, p2
+
+
+def _fresh_preview(match):
+    return projected_elo_changes(Match.all_objects.get(pk=match.pk))
+
+
+@pytest.mark.django_db
+class TestRetriedEloWriteAppliesOnce:
+    """A retry after a rolled-back attempt must start from the database, not
+    from Player objects the failed attempt already mutated in memory."""
+
+    def test_a_flush_conflict_on_the_first_attempt_applies_the_match_once(self):
+        match, p1, p2 = _pending_confirmed(rating1=1560, rating2=1480)
+        preview = _fresh_preview(match)
+        match.sides()  # the memo a real signal path would already hold
+        real_flush = elo.LiveBook.flush
+        attempts = []
+
+        def conflict_once(self, m, changes):
+            attempts.append(m.pk)
+            if len(attempts) == 1:
+                raise IntegrityError("another match created the same new rating row")
+            return real_flush(self, m, changes)
+
+        with mock.patch.object(elo.LiveBook, "flush", conflict_once):
+            update_player_elo(match)
+
+        assert len(attempts) == 2
+        p1.refresh_from_db()
+        p2.refresh_from_db()
+        assert p1.elo_rating == 1560 + preview.side1_change
+        assert p2.elo_rating == 1480 + preview.side2_change
+        assert (p1.matches_for_elo, p2.matches_for_elo) == (1, 1)
+        h1 = EloHistory.objects.get(match=match, player=p1)
+        assert (h1.old_rating, h1.rating_change, h1.k_factor) == (1560, preview.side1_change, preview.side1_k)
+        assert EloHistory.objects.filter(match=match).count() == 2
+        assert RatingChange.objects.filter(match=match).count() == 2
+        assert _all_time(p1, "singles").matches == 1
+
+    def test_a_lost_race_leaves_the_match_memo_matching_the_database(self):
+        match, p1, _ = _pending_confirmed()
+        update_player_elo(match)
+        stored = Player.objects.get(pk=p1.pk).elo_rating
+
+        with mock.patch.object(elo, "_already_applied", side_effect=[False, True]):
+            update_player_elo(match)
+
+        assert match.sides()[0][0].elo_rating == stored
+
+
+@pytest.mark.django_db
+class TestEloReadsLockedFreshPlayers:
+    def test_a_stale_sides_memo_is_not_what_gets_written(self):
+        """Another match for P committed after this match's memo was loaded:
+        the write must build on P's current row, not overwrite it."""
+        match, p1, p2 = _pending_confirmed()
+        match.sides()  # memo loaded at 1500 / 0 matches
+        Player.objects.filter(pk=p1.pk).update(elo_rating=1700, elo_peak=1700, matches_for_elo=30)
+        preview = _fresh_preview(match)
+
+        update_player_elo(match)
+
+        p1.refresh_from_db()
+        h1 = EloHistory.objects.get(match=match, player=p1)
+        assert h1.old_rating == 1700
+        assert h1.rating_change == preview.side1_change
+        assert h1.k_factor == preview.side1_k == 32  # 30 matches: not provisional
+        assert p1.elo_rating == 1700 + preview.side1_change
+        assert p1.matches_for_elo == 31

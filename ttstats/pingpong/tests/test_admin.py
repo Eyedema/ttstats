@@ -9,6 +9,7 @@ from django.urls import reverse
 
 from .conftest import (
     GameFactory,
+    JobRunFactory,
     MatchFactory,
     PlayerFactory,
     ScheduledMatchFactory,
@@ -92,12 +93,14 @@ class TestOtherAdminChangelists:
             "admin:pingpong_location_changelist",
             "admin:pingpong_championship_changelist",
             "admin:pingpong_achievement_changelist",
+            "admin:pingpong_jobrun_changelist",
         ],
     )
     def test_changelist_renders(self, url_name):
         m = MatchFactory()
         GameFactory(match=m, game_number=1, team1_score=11, team2_score=5)
         ScheduledMatchFactory()
+        JobRunFactory()
 
         resp = _admin_client().get(reverse(url_name))
         assert resp.status_code == 200

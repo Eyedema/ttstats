@@ -1,0 +1,34 @@
+{% load icon_tags %}
+{% comment %}
+What "provisional" and "unrated" mean, and why singles and doubles are rated
+apart (KAN-50 / S4.4). A <details> that renders CLOSED with no JavaScript, so
+it cannot fail open and it never pushes the table below the fold.
+
+The numbers come from context (`provisional_matches` is
+elo.PROVISIONAL_MATCHES), never typed here.
+{% endcomment %}
+<details id="rating-help" class="surface mt-4">
+  <summary class="flex min-h-[44px] cursor-pointer list-none items-center gap-2 px-3 py-2 text-[13px] font-extrabold">
+    {% icon "info" size="sm" css="text-muted-foreground" %}
+    <span>Provisional and unrated, explained</span>
+  </summary>
+  <div class="space-y-2 border-t border-court-line p-3 text-[12.5px] font-semibold leading-relaxed text-muted-foreground">
+    <p>
+      <span class="label-cap inline-block border border-court-line px-1 leading-snug">Provisional</span>
+      means the player has fewer than {{ provisional_matches }} rated matches in that format, ever.
+      Until then each result moves their rating further than usual, so it finds their level quickly.
+      The marker disappears at {{ provisional_matches }}; nothing else about the rating changes when it does.
+    </p>
+    <p>
+      <span class="label-cap inline-block border border-dashed border-court-line px-1 leading-snug">Unrated</span>
+      means no rated match in that format yet (this season, on a season table). It is not the starting
+      rating of a new player -- there is simply no number yet.
+    </p>
+    <p>
+      Singles and doubles are rated separately: winning with a strong partner says little about your
+      singles game. That is why someone settled in one format can be provisional, or unrated, in the
+      other. A new season starts from your all-time rating in that format, pulled part of the way back
+      toward the middle, and does not make you provisional again.
+    </p>
+  </div>
+</details>

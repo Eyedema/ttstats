@@ -1,0 +1,12 @@
+# TTStats scheduled jobs (KAN-37 / T3.6). Installed on the VPS host, not in the
+# image; see deploy/cron/README.md. Edit this file, then re-install it.
+#
+# The schedule is UTC: the app's TIME_ZONE is UTC and so is the VPS. CRON_TZ
+# makes that explicit for crons that honour it (cronie does; Debian's cron
+# ignores it, so check `timedatectl` on the host if this ever moves).
+CRON_TZ=UTC
+SHELL=/bin/sh
+PATH=/usr/local/bin:/usr/bin:/bin
+
+# m  h  dom mon dow  command
+15   3  *   *   *    cd /opt/ttstats && docker compose -f compose.prod.yml exec -T web python manage.py run_scheduled_jobs 2>&1 | logger -t ttstats-jobs
