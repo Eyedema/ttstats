@@ -96,6 +96,13 @@ The contract is `docs/decisions/kan-9-seasons.md`; these are the rules it implie
   migration 0040 runs it against the historical 0039 model.
 - `DEFAULT_PARAMS` are PLACEHOLDERS until KAN-68 fits them.
 - Only `recalculate_elo` rebuilds the shadow; `elo_parity` does not.
+- **Deploying 0044 must be followed by `recalculate_elo --format singles`**:
+  existing rows have NULL shadow fields and would otherwise start from
+  1500/RD 350 at their next confirmation. It rebuilds the singles rows
+  including the shadow, leaves `Player.elo_*` and `EloHistory` alone, and is
+  idempotent (pinned in `test_glicko_shadow.py`).
+- A season row with NULL shadow fields is seeded like a missing one (decision
+  3), so one failed projection costs only that match's update.
 
 ## The seasons UI (S4.3 / S4.4)
 

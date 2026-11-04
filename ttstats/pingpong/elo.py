@@ -316,10 +316,12 @@ def _plan_glicko(match, scope, book, params):
     The only guarded step of the pipeline: a failure here is logged and costs
     the shadow for this scope, never the Elo write.
     """
+    if book is None:
+        # Outside the guard on purpose: building a book queries the database,
+        # and a swallowed query error would poison the surrounding atomic block.
+        raise ValueError("_plan_glicko needs a book; the guarded region must be pure")
     try:
-        projection = glicko_adapter.projected_glicko_changes(
-            match, scope, book=book, params=params
-        )
+        projection = glicko_adapter.project(match, scope, book, params)
         if projection is not None and not projection.is_finite():
             raise ValueError(f"non-finite Glicko result: {projection!r}")
         return projection

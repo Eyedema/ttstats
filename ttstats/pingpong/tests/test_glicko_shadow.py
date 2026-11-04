@@ -72,6 +72,14 @@ def _pending(club=None, when=None):
     return match, players[0], players[1]
 
 
+def _finish_pending(p1, p2, club, when):
+    """Another won, confirmed-but-unapplied match between two verified players."""
+    match = _finish([p1], [p2], club=club, when=when)
+    confirm_match_silent(match)
+    match.invalidate_confirmation_state()
+    return match
+
+
 def _row(player, season=None, fmt="singles"):
     return PlayerRating.all_objects.get(player=player, season=season, format=fmt)
 
@@ -207,6 +215,65 @@ class TestIdleInflation:
         )
 
         assert reading == Rating(1500.0, 350.0, 0.06)
+
+    def test_a_season_row_with_null_glicko_fields_is_seeded_from_the_all_time_row(self):
+        club = ClubFactory()
+        season = _season(club)
+        match, p1, _p2 = _pending(club=club, when=_at(2026, 2, 1))
+        PlayerRatingFactory(
+            player=p1,
+            rating=1700,
+            matches=40,
+            glicko_rating=1800.0,
+            rd=60.0,
+            volatility=0.05,
+            last_rated_on=date(2026, 2, 1),
+        )
+        PlayerRatingFactory(player=p1, season=season, club=club, rating=1600, matches=1)
+
+        seed = glicko_adapter.glicko_reading(
+            LiveBook(match, season),
+            p1.pk,
+            RatingScope(season, "singles"),
+            date(2026, 2, 1),
+            DEFAULT_PARAMS,
+        )
+
+        assert seed.rating == 1650.0
+        assert seed.rd == DEFAULT_PARAMS.season_rd_floor
+        assert seed.volatility == 0.05
+
+    def test_a_failed_first_season_projection_is_seeded_on_the_next_match(self):
+        club = ClubFactory()
+        season = _season(club)
+        first, p1, p2 = _pending(club=club, when=_at(2026, 2, 1))
+        real_rate, calls = glicko2.rate, []
+
+        def fail_for_the_season_scope(*args, **kwargs):
+            calls.append(1)
+            if len(calls) > 2:  # all-time scope rates both players first
+                raise glicko2.VolatilityConvergenceError("season scope only")
+            return real_rate(*args, **kwargs)
+
+        with mock.patch.object(glicko2, "rate", fail_for_the_season_scope):
+            update_player_elo(first)
+
+        assert _row(p1).glicko_rating is not None
+        assert _state(_row(p1, season)) == (None, None, None, None)
+        assert _row(p1, season).matches == 1  # Elo still wrote the season row
+
+        second = _finish_pending(p1, p2, club, _at(2026, 2, 2))
+        projection = glicko_adapter.projected_glicko_changes(
+            Match.all_objects.get(pk=second.pk), RatingScope(season, "singles")
+        )
+        all_time = _row(p1)
+        assert projection.updates[0].old.rating == pytest.approx(
+            1500 + 0.5 * (all_time.glicko_rating - 1500)
+        )
+        update_player_elo(second)
+        assert _row(p1, season).glicko_rating == pytest.approx(
+            projection.updates[0].new.rating
+        )
 
 
 @pytest.mark.django_db
@@ -536,13 +603,16 @@ class TestMigration:
 class TestNothingReadsTheShadow:
     """The shadow is inert: no view, template, cache or serializer touches it."""
 
-    ALLOWED = frozenset({
-        "elo.py",
-        "elo_replay.py",
-        "glicko_adapter.py",
-        "glicko2.py",
-        "models.py",
-    })
+    ALLOWED = frozenset(
+        {
+            "elo.py",
+            "elo_replay.py",
+            "glicko_adapter.py",
+            "glicko2.py",
+            "models.py",
+            "rating_divergence.py",  # KAN-66: the offline harness is a deliberate reader
+        }
+    )
 
     def test_no_application_code_reads_it(self):
         root = Path(__file__).resolve().parent.parent
@@ -560,3 +630,132 @@ class TestNothingReadsTheShadow:
             if pattern.search(path.read_text(errors="ignore")):
                 offenders.append(str(rel))
         assert offenders == []
+
+
+@pytest.mark.django_db
+class TestTheGuardedRegionIsPure:
+    def test_plan_glicko_refuses_to_build_its_own_book(self):
+        match, _, _ = _pending()
+
+        with pytest.raises(ValueError, match="needs a book"):
+            elo._plan_glicko(match, SINGLES, None, DEFAULT_PARAMS)
+
+    def test_the_guarded_projection_runs_no_queries(self, django_assert_num_queries):
+        club = ClubFactory()
+        season = _season(club)
+        match, _p1, _p2 = _pending(club=club, when=_at(2026, 2, 1))
+        book = LiveBook(match, season)
+        match.sides()  # memoised, as _lock_sides leaves it
+
+        with django_assert_num_queries(0):
+            for scope in elo.format_scopes(match, season):
+                assert elo._plan_glicko(match, scope, book, DEFAULT_PARAMS) is not None
+
+    def test_the_guard_wraps_the_pure_function_only(self):
+        match, _, _ = _pending()
+        book = LiveBook(match)
+        with mock.patch.object(
+            glicko_adapter,
+            "projected_glicko_changes",
+            side_effect=AssertionError("queries"),
+        ):
+            assert elo._plan_glicko(match, SINGLES, book, DEFAULT_PARAMS) is not None
+
+
+@pytest.mark.django_db
+class TestARealRetryAppliesTheShadowOnce:
+    def test_a_flush_that_fails_after_the_rows_mutated_is_a_single_application(self):
+        plain, a1, a2 = _pending(when=_at(2026, 2, 1))
+        update_player_elo(plain)
+        baseline = (_state(_row(a1)), _state(_row(a2)))
+
+        retried, b1, b2 = _pending(when=_at(2026, 2, 1))
+        real_flush, calls = LiveBook.flush, []
+
+        def flaky_flush(self, match, changes):
+            calls.append(1)
+            if len(calls) == 1:
+                # apply_format_scopes has already mutated the in-memory rows.
+                assert changes[0].row.glicko_rating is not None
+                raise elo.IntegrityError("conflict after the rows were mutated")
+            return real_flush(self, match, changes)
+
+        with mock.patch.object(LiveBook, "flush", flaky_flush):
+            update_player_elo(retried)
+
+        assert len(calls) == 2
+        assert (_state(_row(b1)), _state(_row(b2))) == baseline
+        assert _row(b1).matches == 1
+        assert EloHistory.objects.filter(match=retried).count() == 2
+
+
+@pytest.mark.django_db
+class TestOutOfOrderPreview:
+    def test_preview_equals_persisted_for_a_match_older_than_last_rated_on(self):
+        match, p1, p2 = _pending(when=_at(2026, 3, 1))
+        for p in (p1, p2):
+            PlayerRatingFactory(
+                player=p,
+                matches=5,
+                glicko_rating=1550.0,
+                rd=80.0,
+                volatility=0.06,
+                last_rated_on=date(2026, 3, 10),
+            )
+        projection = glicko_adapter.projected_glicko_changes(
+            Match.all_objects.get(pk=match.pk), SINGLES
+        )
+
+        update_player_elo(match)
+
+        for update in projection.updates:
+            row = _row(Player.objects.get(pk=update.player_id))
+            assert (row.glicko_rating, row.rd, row.volatility) == tuple(update.new)
+            assert row.last_rated_on == date(2026, 3, 10)
+        assert (
+            projection.updates[0].inflated.rd == projection.updates[0].old.rd
+        )  # clamped
+
+
+@pytest.mark.django_db
+class TestBackfillWithRecalculateElo:
+    """After migration 0044 existing rows have NULL shadow fields; the deploy
+    runs `recalculate_elo --format singles`."""
+
+    def _history(self):
+        p1, p2 = PlayerFactory(), PlayerFactory()
+        for day in (3, 3, 20):
+            _finish([p1], [p2], when=_at(2026, 1, day))
+        return p1, p2
+
+    def _shadow(self):
+        return {
+            (r.player_id, r.season_id): _state(r)
+            for r in PlayerRating.all_objects.all()
+        }
+
+    def test_it_rebuilds_the_shadow_without_touching_legacy_elo_and_is_idempotent(self):
+        _p1, _p2 = self._history()
+        live = self._shadow()
+        PlayerRating.all_objects.update(
+            glicko_rating=None, rd=None, volatility=None, last_rated_on=None
+        )
+        legacy = {p.pk: p.elo_rating for p in Player.objects.all()}
+        history = list(EloHistory.objects.order_by("pk").values_list("pk", flat=True))
+
+        call_command("recalculate_elo", format="singles")
+        first = self._shadow()
+        changes_after_first = RatingChange.objects.count()
+        call_command("recalculate_elo", format="singles")
+
+        assert first.keys() == live.keys()
+        for key, expected in live.items():
+            assert first[key][:3] == pytest.approx(expected[:3])
+            assert first[key][3] == expected[3]
+        assert self._shadow() == first  # idempotent
+        assert RatingChange.objects.count() == changes_after_first
+        assert {p.pk: p.elo_rating for p in Player.objects.all()} == legacy
+        assert (
+            list(EloHistory.objects.order_by("pk").values_list("pk", flat=True))
+            == history
+        )

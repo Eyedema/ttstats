@@ -113,11 +113,9 @@ def _reading(book, player_id, scope, match_day, params):
     stored = _stored(row)
     if stored is not None:
         return stored, _inflated(row, stored, match_day, params)
-    if row is not None:
-        # The row exists but has no Glicko state (it predates the shadow).
-        base = _unrated(params)
-        return base, base
-
+    # No Glicko state in the season scope, whether the row is missing or exists
+    # with NULL fields (it predates the shadow, or its first projection
+    # failed): seed it, decision 3.
     # First season row: carry over from the all-time state as it stood before
     # this match; RD is the all-time RD inflated to the match day, with a floor.
     all_stored = _stored(all_time)
@@ -156,6 +154,19 @@ def projected_glicko_changes(match, scope, *, book=None, params=DEFAULT_PARAMS):
     player is rated against the opponent's *inflated* rating and RD as one game.
     """
     from .elo import LiveBook
+
+    if book is None:
+        book = LiveBook(match, scope.season)
+    return project(match, scope, book, params)
+
+
+def project(match, scope, book, params):
+    """The arithmetic of `projected_glicko_changes`, **pure**: no database access.
+
+    Everything it reads is in `book` and the match's memoized sides.
+    `elo._plan_glicko` wraps exactly this in a swallow-all guard, which is
+    only safe inside an atomic block while nothing here can run a query.
+    """
     from .models import Side
 
     if not match.winner_side or match.is_double:
@@ -164,8 +175,6 @@ def projected_glicko_changes(match, scope, *, book=None, params=DEFAULT_PARAMS):
     if len(side1) != 1 or len(side2) != 1:
         return None
 
-    if book is None:
-        book = LiveBook(match, scope.season)
     match_day = match.date_played
     match_day = match_day.date() if hasattr(match_day, "hour") else match_day
     p1, p2 = side1[0], side2[0]
