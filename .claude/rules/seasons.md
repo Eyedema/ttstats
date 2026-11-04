@@ -6,6 +6,7 @@ paths:
   - "ttstats/pingpong/templates/pingpong/seasons/**"
   - "ttstats/pingpong/elo.py"
   - "ttstats/pingpong/glicko2.py"
+  - "ttstats/pingpong/glicko_adapter.py"
   - "ttstats/pingpong/elo_*.py"
   - "ttstats/pingpong/ratings.py"
   - "ttstats/pingpong/management/commands/recalculate_elo.py"
@@ -15,9 +16,11 @@ paths:
   - "ttstats/pingpong/migrations/0039_player_rating.py"
   - "ttstats/pingpong/migrations/0040_backfill_player_ratings.py"
   - "ttstats/pingpong/migrations/0043_season_standing.py"
+  - "ttstats/pingpong/migrations/0044_playerrating_glicko_shadow.py"
   - "ttstats/pingpong/templates/pingpong/_leaderboard_season_results.html"
   - "ttstats/pingpong/tests/test_season*.py"
   - "ttstats/pingpong/tests/test_ratings.py"
+  - "ttstats/pingpong/tests/test_glicko_shadow.py"
   - "ttstats/pingpong/tests/test_rating_backfill.py"
 ---
 
@@ -74,6 +77,25 @@ The contract is `docs/decisions/kan-9-seasons.md`; these are the rules it implie
   confirmations. `--season`/`--format` rewrite only those PlayerRating rows;
   legacy fields and `EloHistory` are rewritten only by a full run. `--dry-run`
   diffs stored vs replayed per player and scope and writes nothing.
+
+## Glicko-2 shadow (KAN-67)
+
+- **`glicko_rating`, `rd`, `volatility`, `last_rated_on` on `PlayerRating` are
+  an inert shadow: written, never read** (a test greps for readers). They
+  replace Elo only at the cutover (`docs/decisions/kan-63-glicko2.md`).
+- **One book, one traversal.** The shadow rides `apply_format_scopes`
+  (`glicko=params`) on the same rows, so it adds no queries; the live path
+  passes `glicko_adapter.DEFAULT_PARAMS`, the replay passes what it is given.
+- **`glicko_adapter.projected_glicko_changes` is the only Glicko arithmetic**
+  (preview == written value). Policy lives there; `glicko2.py` stays pure.
+  Always pass `rd_max=params.rd_max` explicitly.
+- **A Glicko failure must never abort the Elo write**: only the pure
+  projection is wrapped in try/except (logged, scope skipped); non-finite
+  results are rejected. Doubles project to `None` until KAN-70.
+- `RatingWriter` writes the shadow only if the model has the fields, because
+  migration 0040 runs it against the historical 0039 model.
+- `DEFAULT_PARAMS` are PLACEHOLDERS until KAN-68 fits them.
+- Only `recalculate_elo` rebuilds the shadow; `elo_parity` does not.
 
 ## The seasons UI (S4.3 / S4.4)
 

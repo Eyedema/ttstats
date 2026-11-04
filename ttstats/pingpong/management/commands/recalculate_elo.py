@@ -39,6 +39,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
 from pingpong import cache_utils
+from pingpong.glicko_adapter import DEFAULT_PARAMS
 from pingpong.elo_replay import (
     DEFAULT_CHUNK_SIZE,
     confirmed_history,
@@ -146,7 +147,9 @@ class Command(BaseCommand):
 
             # Replay matches in chronological order
             self.stdout.write('Recalculating Elo ratings...')
-            result = rebuild_player_ratings(keep=keep, chunk_size=chunk_size, on_match=on_match)
+            result = rebuild_player_ratings(
+                keep=keep, chunk_size=chunk_size, on_match=on_match, glicko=DEFAULT_PARAMS
+            )
 
             if not scoped:
                 flush_history()

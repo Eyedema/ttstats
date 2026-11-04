@@ -2129,6 +2129,11 @@ class PlayerRating(models.Model):
     stay lifetime and combined (decision 3). **A mirror for now: nothing
     outside elo.py, elo_replay.py, elo_parity.py and recalculate_elo reads it.**
 
+    `glicko_rating`, `rd`, `volatility` and `last_rated_on` (KAN-67) are an
+    **inert shadow** of the Glicko-2 rating (docs/decisions/kan-63-glicko2.md),
+    written beside the Elo fields by `glicko_adapter` and read by nothing.
+    NULL means "no Glicko state yet"; they replace Elo only at the cutover.
+
     `peak` is per row: per format all-time, and per format per season.
     A player with no row in a format is *unrated* in it, which is not the same
     as 1500-with-history.
@@ -2149,6 +2154,10 @@ class PlayerRating(models.Model):
     rating = models.IntegerField(default=1500)
     peak = models.IntegerField(default=1500)
     matches = models.IntegerField(default=0)
+    glicko_rating = models.FloatField(null=True, blank=True)
+    rd = models.FloatField(null=True, blank=True)
+    volatility = models.FloatField(null=True, blank=True)
+    last_rated_on = models.DateField(null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     all_objects = models.Manager()
