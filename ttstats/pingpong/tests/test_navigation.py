@@ -242,6 +242,39 @@ class TestRenderedNavigation:
         assert reverse("pingpong:play") not in drawer
 
 
+@pytest.mark.django_db
+class TestScriptLoading:
+    """Nothing in <head> may block the parser (KAN-122).
+
+    htmx used to be a plain `<script>`: on a slow phone the whole page waited
+    for it before painting. Both frameworks are now `defer`, and defer keeps
+    document order, so htmx still runs before Alpine.
+    """
+
+    @staticmethod
+    def _script_tags(body):
+        return re.findall(r"<script\b[^>]*\bsrc=\"[^\"]*\"[^>]*>", body)
+
+    def test_htmx_and_alpine_are_deferred_with_htmx_first(self):
+        user, _ = _verified_user_with_player()
+        body = _login_client(user).get(reverse("pingpong:dashboard")).content.decode()
+        tags = self._script_tags(body)
+
+        htmx = [i for i, t in enumerate(tags) if "vendor/htmx" in t]
+        alpine = [i for i, t in enumerate(tags) if "vendor/alpine" in t]
+        assert len(htmx) == 1 and len(alpine) == 1
+        assert re.search(r"\bdefer\b", tags[htmx[0]])
+        assert re.search(r"\bdefer\b", tags[alpine[0]])
+        assert htmx[0] < alpine[0]
+
+    def test_no_external_script_in_head_blocks_the_parser(self):
+        user, _ = _verified_user_with_player()
+        body = _login_client(user).get(reverse("pingpong:dashboard")).content.decode()
+        head = body.split("</head>")[0]
+        for tag in self._script_tags(head):
+            assert re.search(r"\b(defer|async)\b", tag), tag
+
+
 # ---------------------------------------------------------------------------
 # The icon sprite
 # ---------------------------------------------------------------------------

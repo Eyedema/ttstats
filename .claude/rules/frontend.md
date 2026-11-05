@@ -103,7 +103,7 @@ Four tabs -- **Today, Play, Table, Cups** -- plus a tiered drawer.
 - Use `hx-push-url="true"` where a full submit used to be.
 - Tom Select hides the real `<select>`; re-dispatch a bubbling `change` from its
   `onChange`.
-- `<body>` carries `hx-headers` with the CSRF token. htmx loads before Alpine.
+- `<body>` carries `hx-headers` with the CSRF token.
 - **`from:` in `hx-trigger` takes a CSS selector.** `[value!='custom']` threw and
   killed the leaderboard's Period control. Event filters need `new Function()`,
   which the e2e `PROD_CSP` withholds.
@@ -190,3 +190,12 @@ tap that never registered.
   `perf-report.md`; baseline and after-numbers go in
   `docs/decisions/kan-119-performance.md`. The key-page list is shared:
   `tests/e2e/perf-pages.js`.
+- **No parser-blocking script in `<head>`.** htmx and Alpine are both `defer`,
+  htmx first (defer keeps document order; Alpine's init must see htmx).
+  Nothing may touch `window.htmx` at parse time: wrap it in
+  `DOMContentLoaded` or listen for `htmx:*` events on `document`/`body`.
+  Guarded by `test_navigation.py::TestScriptLoading` and
+  `tests/e2e/script-loading.spec.js`.
+- **Static is pre-compressed as `.br` and `.gz`** (`brotli` installed, so
+  WhiteNoise writes both); HTML stays on `GZipMiddleware` (Brotli measured
+  ~9% smaller on the dashboard, ~1 KB: not worth a custom middleware).

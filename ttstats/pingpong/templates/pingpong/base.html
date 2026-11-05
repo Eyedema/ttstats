@@ -58,9 +58,13 @@
 
     <link rel="stylesheet" href="{% static 'pingpong/css/app.css' %}">
 
-    <!-- htmx must load before Alpine: Alpine's defer'd init should see any
-         markup htmx has already swapped in. -->
-    <script src="{% static 'pingpong/js/vendor/htmx.min.js' %}"></script>
+    {% comment %}
+    Both deferred, so neither blocks the parser (KAN-122). Deferred scripts run
+    in document order: htmx stays BEFORE Alpine, so Alpine's init sees any
+    markup htmx has already swapped in. Nothing may touch window.htmx at parse
+    time; use DOMContentLoaded or document-level htmx:* listeners.
+    {% endcomment %}
+    <script defer src="{% static 'pingpong/js/vendor/htmx.min.js' %}"></script>
 
     <!-- Alpine.js -->
     <script defer src="{% static 'pingpong/js/vendor/alpine.min.js' %}"></script>
