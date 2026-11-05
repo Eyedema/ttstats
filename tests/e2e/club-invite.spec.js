@@ -71,7 +71,13 @@ test.describe('club invites', () => {
       .innerText();
     const path = new URL(href.trim()).pathname;
 
+    // Wait for the revoke POST to land: navigating away straight after the
+    // click can abort it, and the link then still works (a CI-only flake).
+    const revoked = page.waitForResponse(
+      (r) => r.request().method() === 'POST' && r.status() < 400,
+    );
     await page.click('button:has-text("Revoke")');
+    await revoked;
     await page.goto(path);
 
     await expect(
