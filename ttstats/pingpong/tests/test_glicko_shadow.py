@@ -790,3 +790,30 @@ class TestBackfillWithRecalculateElo:
             list(EloHistory.objects.order_by("pk").values_list("pk", flat=True))
             == history
         )
+
+
+@pytest.mark.django_db
+class TestRebuiltHistoryKeepsMatchDates:
+    """A rebuild must not stamp every RatingChange with the rebuild's time.
+
+    The leaderboard's weekly movement sums RatingChange by `created_at`, and the
+    rating chart labels by it: rows stamped "now" made every player's whole
+    history read as this week's movement, and squashed the chart onto one day
+    (seen in prod right after the 2026-11-05 backfill).
+    """
+
+    @pytest.mark.parametrize("options", [{"format": "singles"}, {}])
+    def test_rebuilt_rows_carry_the_match_date(self, options):
+        older = _finish([PlayerFactory()], [PlayerFactory()], when=_at(2026, 3, 2))
+        newer = _finish(list(older.side1_players), list(older.side2_players), when=_at(2026, 4, 9))
+
+        call_command("recalculate_elo", **options)
+
+        stamps = {
+            (rc.match_id, rc.created_at) for rc in RatingChange.objects.all()
+        }
+        assert stamps == {
+            (older.pk, older.date_played),
+            (newer.pk, newer.date_played),
+        }
+        assert RatingChange.objects.count() == 4

@@ -124,6 +124,9 @@ The contract is `docs/decisions/kan-9-seasons.md`; these are the rules it implie
   application order) are listed as explained; any unexplained diff is a bug.
   Seeding is a cold-start replay (`--format singles`), not a formula.
 - Only `recalculate_elo` rebuilds the shadow; `elo_parity` does not.
+- **Rebuilt `RatingChange` rows are dated by their match** (`RatingWriter`
+  sets `created_at` to `date_played`): weekly movement and the rating chart
+  read `created_at`, so rows stamped "now" would make all history this week's.
 - **Deploying 0044 must be followed by `recalculate_elo --format singles`,
   and KAN-70 by `recalculate_elo --format doubles`**:
   existing rows have NULL shadow fields and would otherwise start from

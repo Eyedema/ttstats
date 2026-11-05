@@ -23,6 +23,8 @@ copy of it.
 from dataclasses import dataclass, field
 from typing import NamedTuple
 
+from django.db.models import OuterRef, Subquery
+
 from . import elo, glicko_adapter, seasons
 
 REPLAY_ORDER = ("date_played", "created_at", "pk")
@@ -322,7 +324,7 @@ class RatingWriter:
             for key, obj in zip(new, created):
                 self.pks[key] = obj.pk
                 self.states[key] = new[key]
-        self.change_model._base_manager.bulk_create([
+        written = self.change_model._base_manager.bulk_create([
             self.change_model(
                 match_id=match_id, player_id=c.player_id, rating_id=self.pks[c.row.key],
                 old_rating=c.old, new_rating=c.new, rating_change=c.change, k_factor=c.k,
@@ -330,8 +332,25 @@ class RatingWriter:
             )
             for match_id, c in self.buffer
         ])
+        self._stamp_match_dates([row.pk for row in written])
         self.changes_written += len(self.buffer)
         self.buffer = []
+
+    def _stamp_match_dates(self, pks):
+        """Date rebuilt audit rows by their match, not by the rebuild.
+
+        `created_at` is `auto_now_add`, so bulk_create stamps "now"; the weekly
+        movement and the rating chart read it, and a rebuild would otherwise
+        make the whole history look like this week. One UPDATE per batch.
+        """
+        if not pks:
+            return
+        match_model = self.change_model._meta.get_field("match").related_model
+        self.change_model._base_manager.filter(pk__in=pks).update(
+            created_at=Subquery(
+                match_model._base_manager.filter(pk=OuterRef("match_id")).values("date_played")[:1]
+            )
+        )
 
     def finish(self):
         """Flush and write every touched row's final rating, peak and count."""
