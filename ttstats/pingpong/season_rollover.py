@@ -37,7 +37,7 @@ from django.db.models import Count, Exists, Max, OuterRef
 from django.urls import reverse
 from django.utils import timezone
 
-from . import emails, flags, notifications, ratings, seasons
+from . import emails, notifications, ratings, seasons
 from .models import (
     MatchParticipant,
     Player,
@@ -197,38 +197,33 @@ def _wins_and_played(season, fmt):
 def _freeze(season):
     """Write the season's final table, every format. Returns rows written.
 
-    The system is `ratings.system(None)` (the settings flags): under Glicko the
-    table is ranked by `glicko_rating`, rows with no Glicko state are left out,
-    and each standing is stamped with `rating_system` and its display `rd`
-    (inflated to the freeze day). The stamp is what lets the archive keep
-    labelling a past table correctly after a rollback.
+    Ranked by `glicko_rating`; rows with no Glicko state are left out. Each
+    standing is stamped with `rating_system` and its display `rd` (inflated to
+    the season's last day), so the archive labels it correctly forever.
     """
-    system = ratings.system(None)
-    glicko = system == ratings.GLICKO
-    sort_field = "glicko_rating" if glicko else "rating"
     # Inflated to the season's last day, not the day the job ran: a cron
     # backlog must not change a frozen +/-.
     today = season.ends_on
     written = 0
     for fmt in FORMAT_ORDER:
         results = _wins_and_played(season, fmt)
-        rows = PlayerRating.all_objects.filter(season=season, format=fmt)
-        if glicko:
-            rows = rows.filter(glicko_rating__isnull=False)
+        rows = PlayerRating.all_objects.filter(
+            season=season, format=fmt, glicko_rating__isnull=False
+        )
         rows = (
-            rows.select_related("player").order_by(f"-{sort_field}", "pk")
+            rows.select_related("player").order_by("-glicko_rating", "pk")
             .iterator(chunk_size=STANDINGS_BATCH_SIZE)
         )
         batch = []
-        for rank, row in seasons.ranked(rows, key=lambda r: getattr(r, sort_field)):
+        for rank, row in seasons.ranked(rows, key=lambda r: r.glicko_rating):
             wins, played = results.get(row.pk, (0, 0))
-            shown = ratings.display_rd(row, today) if glicko else None
+            shown = ratings.display_rd(row, today)
             batch.append(SeasonStanding(
                 season=season, format=fmt, player=row.player,
                 player_name=str(row.player)[:100], rank=rank,
-                rating=round(row.glicko_rating) if glicko else row.rating,
+                rating=round(row.glicko_rating),
                 matches=row.matches, wins=wins, losses=played - wins,
-                rating_system=system,
+                rating_system=ratings.GLICKO,
                 rd=shown,
             ))
             if len(batch) >= STANDINGS_BATCH_SIZE:
@@ -268,8 +263,7 @@ def notify_pending():
     """Tell every not-yet-claimed ranked player where they finished.
 
     Returns how many players were sent a push or an email. Claimed rows whose
-    player cannot be told (deleted, no account, `seasons` flag off for them)
-    stay claimed: turning the flag on later must not dig up an old season.
+    player cannot be told (deleted, no account) stay claimed.
     """
     now = timezone.now()
     SeasonStanding.all_objects.filter(notified_at__isnull=True, player__isnull=True).update(notified_at=now)
@@ -303,7 +297,7 @@ def _tell(season, player_id):
     # who has since moved club must still be reached (transitively scoped).
     player = Player._base_manager.select_related("user__profile").get(pk=player_id)
     user = player.user
-    if user is None or not flags.is_enabled("seasons", user):
+    if user is None:
         return False
 
     rows = dict(

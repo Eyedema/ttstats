@@ -1,4 +1,6 @@
-"""The season archive views (KAN-51): frozen tables, read-only, flag-gated, club-scoped."""
+"""The season archive views (KAN-51): frozen tables, read-only, club-scoped.
+
+Seasons are always on (the `seasons` flag was retired by KAN-73)."""
 
 import pytest
 from django.test import Client
@@ -19,18 +21,12 @@ from .conftest import (
 )
 
 # override_settings cannot decorate a plain pytest class; fixtures can.
-SEASONS_ON = pytest.mark.usefixtures("seasons_on")
-CLUBS_AND_SEASONS_ON = pytest.mark.usefixtures("clubs_and_seasons_on")
+CLUBS_ON = pytest.mark.usefixtures("clubs_on")
 
 
 @pytest.fixture
-def seasons_on(settings):
-    settings.FEATURE_FLAGS = {**settings.FEATURE_FLAGS, "seasons": True}
-
-
-@pytest.fixture
-def clubs_and_seasons_on(settings):
-    settings.FEATURE_FLAGS = {**settings.FEATURE_FLAGS, "clubs": True, "seasons": True}
+def clubs_on(settings):
+    settings.FEATURE_FLAGS = {**settings.FEATURE_FLAGS, "clubs": True}
 
 
 @pytest.fixture(autouse=True)
@@ -69,17 +65,7 @@ def _detail(season, **params):
 
 
 @pytest.mark.django_db
-class TestFlagGate:
-    def test_list_is_404_with_the_flag_off(self):
-        client, _ = _member(ClubFactory())
-        assert client.get(reverse("pingpong:season_archive")).status_code == 404
-
-    def test_detail_is_404_with_the_flag_off(self):
-        club = ClubFactory()
-        client, _ = _member(club)
-        assert client.get(_detail(_archived(club))).status_code == 404
-
-    @SEASONS_ON
+class TestLoginGate:
     def test_anonymous_is_sent_to_login(self):
         response = Client().get(reverse("pingpong:season_archive"))
         assert response.status_code == 302
@@ -87,7 +73,6 @@ class TestFlagGate:
 
 
 @pytest.mark.django_db
-@SEASONS_ON
 class TestArchiveList:
     def test_lists_archived_seasons_with_their_champions(self):
         club = ClubFactory()
@@ -109,7 +94,6 @@ class TestArchiveList:
 
 
 @pytest.mark.django_db
-@SEASONS_ON
 class TestArchiveDetail:
     def test_renders_the_frozen_rows_in_rank_order_with_shared_ranks(self):
         club = ClubFactory()
@@ -132,7 +116,10 @@ class TestArchiveDetail:
         client, me = _member(club)
         season = _archived(club)
         _standing(season, me, rank=1, rating=1612)
-        PlayerRatingFactory(player=me, club=club, season=season, format="singles", rating=1300)
+        PlayerRatingFactory(
+            player=me, club=club, season=season, format="singles",
+            glicko_rating=1300, rd=60, volatility=0.06, last_rated_on=season.ends_on,
+        )
 
         def table():
             body = client.get(_detail(season)).content.decode()
@@ -196,7 +183,7 @@ class TestArchiveDetail:
 
 
 @pytest.mark.django_db
-@CLUBS_AND_SEASONS_ON
+@CLUBS_ON
 class TestTenancy:
     def test_another_clubs_season_is_404(self):
         mine, theirs = ClubFactory(), ClubFactory()
@@ -227,7 +214,6 @@ class TestTenancy:
 
 @pytest.mark.django_db
 class TestArchiveIsOutsideTheLeaderboardCache:
-    @SEASONS_ON
     def test_viewing_the_archive_writes_no_cache_entries(self):
         from django.core.cache import cache
 

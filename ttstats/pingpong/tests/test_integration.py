@@ -24,11 +24,11 @@ from django.urls import reverse
 
 from pingpong import season_rollover
 from pingpong.models import (
-    EloHistory,
     JobRun,
     Match,
     Player,
     PlayerRating,
+    RatingChange,
     Season,
     SeasonStanding,
     Side,
@@ -55,7 +55,12 @@ def _player(name, **kwargs):
     """A verified user with a linked player, ready to log in."""
     user = UserFactory(**kwargs)
     _verified(user)
-    return PlayerFactory(user=user, name=name, elo_rating=1500, matches_for_elo=25)
+    return PlayerFactory(user=user, name=name)
+
+
+def _all_time(player, fmt):
+    """The player's all-time Glicko rating in a format."""
+    return PlayerRating.all_objects.get(player=player, season=None, format=fmt).glicko_rating
 
 
 def _login(user):
@@ -158,7 +163,7 @@ class TestRegistrationToLogin:
 
 
 # ---------------------------------------------------------------------------
-# Flow 2: singles match lifecycle, with Elo
+# Flow 2: singles match lifecycle, with ratings
 # ---------------------------------------------------------------------------
 
 
@@ -206,22 +211,27 @@ class TestSinglesMatchLifecycle:
         # 3. Both players are verified, so confirmation emails go out.
         assert len(mail.outbox) >= 1
 
-        # 4. Elo holds until every verified player has confirmed.
-        assert EloHistory.objects.filter(match=match).count() == 0
+        # 4. Ratings hold until every verified player has confirmed.
+        assert RatingChange.objects.filter(match=match).count() == 0
         client.post(reverse("pingpong:match_confirm", args=[match.pk]))
         match.refresh_from_db()
         assert match.is_confirmed is False, "one confirmation is not enough"
+        assert RatingChange.objects.filter(match=match).count() == 0
 
         _login(loser.user).post(reverse("pingpong:match_confirm", args=[match.pk]))
         match.refresh_from_db()
         assert match.is_confirmed is True
 
-        # 5. Elo moved, in the right direction, for both players.
-        winner.refresh_from_db()
-        loser.refresh_from_db()
-        assert winner.elo_rating > 1500
-        assert loser.elo_rating < 1500
-        assert EloHistory.objects.filter(match=match).count() == 2
+        # 5. The all-time singles Glicko rating moved, in the right
+        # direction, for both players, with one audit row each.
+        assert _all_time(winner, "singles") > 1500
+        assert _all_time(loser, "singles") < 1500
+        changes = RatingChange.objects.filter(match=match)
+        assert {c.player_id for c in changes} == {winner.pk, loser.pk}
+        assert all(c.rating.season_id is None for c in changes)
+        by_player = {c.player_id: c for c in changes}
+        assert by_player[winner.pk].glicko_change > 0
+        assert by_player[loser.pk].glicko_change < 0
 
         # 6. And the result surfaces on the leaderboard.
         body = client.get(reverse("pingpong:leaderboard")).content.decode()
@@ -236,7 +246,7 @@ class TestSinglesMatchLifecycle:
 
 @pytest.mark.django_db
 class TestDoublesMatchLifecycle:
-    def test_four_players_all_confirm_and_all_four_elos_move(self):
+    def test_four_players_all_confirm_and_all_four_ratings_move(self):
         p1 = _player("Aurelio Home", username="aurelio")
         p2 = _player("Beatrix Home", username="beatrix")
         p3 = _player("Casimir Away", username="casimir")
@@ -285,11 +295,12 @@ class TestDoublesMatchLifecycle:
         match.refresh_from_db()
         assert match.is_confirmed is True
 
-        for player in (p1, p2, p3, p4):
-            player.refresh_from_db()
-        assert p1.elo_rating > 1500 and p2.elo_rating > 1500
-        assert p3.elo_rating < 1500 and p4.elo_rating < 1500
-        assert EloHistory.objects.filter(match=match).count() == 4
+        assert _all_time(p1, "doubles") > 1500 and _all_time(p2, "doubles") > 1500
+        assert _all_time(p3, "doubles") < 1500 and _all_time(p4, "doubles") < 1500
+        assert not PlayerRating.all_objects.filter(format="singles").exists()
+        changes = RatingChange.objects.filter(match=match)
+        assert {c.player_id for c in changes} == {p1.pk, p2.pk, p3.pk, p4.pk}
+        assert changes.count() == 4
 
     def test_match_detail_names_all_four_players(self):
         """The doubles layout is where the removed Team fields were read
@@ -428,7 +439,7 @@ class TestSeasonLifecycleIntegration:
 
     @pytest.fixture(autouse=True)
     def _flags(self, settings):
-        settings.FEATURE_FLAGS = {**settings.FEATURE_FLAGS, "clubs": True, "seasons": True}
+        settings.FEATURE_FLAGS = {**settings.FEATURE_FLAGS, "clubs": True}
 
     def _member(self, club, name):
         player = _player(name, username=name.split()[0].lower())
@@ -478,7 +489,7 @@ class TestSeasonLifecycleIntegration:
             for r in PlayerRating.all_objects.filter(season=season, format="singles")
         }
         assert set(rows) == {ann.pk, bob.pk, cat.pk}
-        assert rows[ann.pk].rating > rows[cat.pk].rating > rows[bob.pk].rating
+        assert rows[ann.pk].glicko_rating > rows[cat.pk].glicko_rating > rows[bob.pk].glicko_rating
         assert {r.matches for r in rows.values()} == {2}
 
         # 3. The seasons leaderboard ranks them.
@@ -497,7 +508,14 @@ class TestSeasonLifecycleIntegration:
         assert JobRun.objects.get(name="season_rollover").status == JobRun.Status.SUCCESS
         season.refresh_from_db()
         assert season.archived_at is not None
-        assert SeasonStanding.all_objects.filter(season=season).count() == 3
+        standings = SeasonStanding.all_objects.filter(season=season)
+        assert standings.count() == 3
+        # Frozen from the season's Glicko rows; the RD shown is the stored one
+        # grown by the idle days up to the freeze, so never smaller.
+        for standing in standings:
+            assert standing.rating_system == "glicko2"
+            assert standing.rating == round(rows[standing.player_id].glicko_rating)
+            assert standing.rd >= rows[standing.player_id].rd
         nxt = Season.all_objects.get(club=club, starts_on=date(2026, 4, 1))
         assert nxt.ends_on == date(2026, 6, 30) and nxt.archived_at is None
 

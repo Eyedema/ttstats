@@ -3,9 +3,9 @@ const { test, expect } = require('@playwright/test');
 const { applyProdCSP } = require('./helpers');
 
 /**
- * The Glicko-2 cutover (KAN-71 / KAN-72), as the `e2e-glicko` user, who has
- * `seasons` AND `glicko2` on by override (`seed_e2e`). Every other spec runs
- * with Glicko off; the no-mixing promise is asserted both ways here.
+ * The Glicko-2 rating UI (KAN-71 / KAN-72), as the `e2e-glicko` user, who is
+ * rated and has a result awaiting their confirmation (`seed_e2e`). Since
+ * KAN-73 Glicko-2 is the only system; "no Elo anywhere" is asserted here.
  *
  * pytest proves the markup of every surface. It cannot prove the htmx switch
  * stays Glicko, that the chart canvas actually paints, or that the page works

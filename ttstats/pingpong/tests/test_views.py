@@ -7,7 +7,15 @@ from django.test import Client
 from django.urls import reverse
 from django.utils import timezone
 
-from pingpong.models import EloHistory, Game, Match, Player, ScheduledMatch
+from pingpong import ratings
+from pingpong.models import (
+    Game,
+    Match,
+    Player,
+    PlayerRating,
+    RatingChange,
+    ScheduledMatch,
+)
 from .conftest import (
     GameFactory,
     LocationFactory,
@@ -189,8 +197,8 @@ class TestPlayerDetailView:
         assert resp.context["current_streak"] == 2
         assert resp.context["streak_type"] == "win"
 
-    def test_elo_chart_data_in_context(self):
-        """Player detail includes elo chart data when history exists."""
+    def test_rating_chart_data_in_context(self):
+        """Player detail includes the rating chart when history exists."""
         u, p = _verified_user_with_player()
         other = PlayerFactory(with_user=True)
         m = MatchFactory(player1=p, player2=other)
@@ -203,18 +211,24 @@ class TestPlayerDetailView:
         c = _login_client(u)
         resp = c.get(reverse("pingpong:player_detail", args=[p.pk]))
         assert resp.status_code == 200
-        assert 'elo_chart_labels' in resp.context
-        assert 'elo_chart_data' in resp.context
-        data = resp.context['elo_chart_data']
-        assert len(data) >= 2  # Start + at least 1 match
-        assert data[0] == 1500  # First point is starting rating
+        assert 'rating_chart_labels' in resp.context
+        data = resp.context['rating_chart_data']
+        assert len(data) == 2  # Start + the one match
+        assert data[0] == 1500  # First point is the starting rating
+        written = RatingChange.objects.get(
+            player=p, rating__season=None, rating__format="singles"
+        )
+        assert data[1] == round(written.glicko_new_rating)
+        assert data[1] > 1500
+        lower, upper = resp.context['rating_chart_lower'], resp.context['rating_chart_upper']
+        assert lower[1] < data[1] < upper[1]
 
-    def test_elo_chart_empty_for_new_player(self):
-        """Player with no matches has empty elo chart data."""
+    def test_rating_chart_empty_for_new_player(self):
+        """Player with no matches has empty rating chart data."""
         u, p = _verified_user_with_player()
         c = _login_client(u)
         resp = c.get(reverse("pingpong:player_detail", args=[p.pk]))
-        assert resp.context['elo_chart_data'] == []
+        assert resp.context['rating_chart_data'] == []
 
 
 # ===========================================================================
@@ -562,13 +576,20 @@ class TestLeaderboardHtmxFragment:
         assert b"Aurelio Ranked" in resp.content
 
     def test_filters_apply_to_the_fragment(self):
+        """The seeded match is singles: the doubles table rates nobody, and the
+        players are listed as unrated."""
         resp = self._seeded_client().get(
             reverse("pingpong:leaderboard"),
-            {"match_type": "doubles"},
+            {"format": "doubles"},
             HTTP_HX_REQUEST="true",
         )
         assert resp.status_code == 200
-        assert b"Aurelio Ranked" not in resp.content
+        body = resp.content.decode()
+        assert 'id="leaderboard-results"' in body
+        assert 'data-scope="all-doubles"' in body
+        assert "data-rated-row" not in body
+        unrated = body[body.index("data-unrated-list"):]
+        assert "Aurelio Ranked" in unrated
 
 
 @pytest.mark.django_db
@@ -1005,6 +1026,33 @@ class TestHeadToHeadStatsView:
         c = _login_client(u)
         resp = c.get(reverse("pingpong:head_to_head"), {"player1": p1.pk, "player2": p2.pk})
         assert resp.context["has_data"] is False
+
+    def test_the_prediction_comes_from_the_glicko_ratings(self):
+        u, p1 = _verified_user_with_player()
+        p2 = PlayerFactory(with_user=True)
+        m = MatchFactory(player1=p1, player2=p2)
+        for n in (1, 2, 3):
+            GameFactory(match=m, game_number=n, team1_score=11, team2_score=5)
+        m.refresh_from_db()
+        confirm_match(m)
+
+        resp = _login_client(u).get(
+            reverse("pingpong:head_to_head"), {"player1": p1.pk, "player2": p2.pk}
+        )
+
+        scope = ratings.scope_for(p1.club_id, timezone.now(), False)
+        expected = ratings.win_probability([p1], [p2], scope=scope)
+        assert (resp.context["player1_win_pct"], resp.context["player2_win_pct"]) == expected
+        assert resp.context["player1_win_pct"] > resp.context["player2_win_pct"]
+        assert resp.context["player1_rating"] > 1500
+
+
+@pytest.mark.django_db
+class TestHowRatingsWork:
+    def test_any_logged_in_user_gets_the_explainer(self):
+        u, _ = _verified_user_with_player()
+        resp = _login_client(u).get(reverse("pingpong:how_ratings_work"))
+        assert resp.status_code == 200
 
 
 # ===========================================================================
@@ -1475,80 +1523,76 @@ class TestCalendarView:
 
 
 # ===========================================================================
-# Match Confirmation Elo Update
+# Match confirmation writes the ratings
 # ===========================================================================
 
 
 @pytest.mark.django_db
-class TestMatchConfirmEloUpdate:
-    """Test that Elo updates when matches are confirmed via the UI"""
+class TestMatchConfirmRatingUpdate:
+    """Ratings are written when the match is confirmed via the UI, not before."""
 
-    def test_elo_updates_on_second_confirmation(self):
-        """Elo should update when second player confirms via match_confirm view"""
-        # Setup: Create verified users with players
+    def test_ratings_update_on_second_confirmation(self):
         user1 = UserFactory(username='player1', email='p1@test.com')
         user1.profile.email_verified = True
         user1.profile.save()
-        player1 = PlayerFactory(user=user1, elo_rating=1500, matches_for_elo=25)
+        player1 = PlayerFactory(user=user1)
 
         user2 = UserFactory(username='player2', email='p2@test.com')
         user2.profile.email_verified = True
         user2.profile.save()
-        player2 = PlayerFactory(user=user2, elo_rating=1500, matches_for_elo=25)
+        player2 = PlayerFactory(user=user2)
 
-        # Create match with winner
         match = MatchFactory(player1=player1, player2=player2, best_of=5)
         GameFactory(match=match, game_number=1, team1_score=11, team2_score=5)
         GameFactory(match=match, game_number=2, team1_score=11, team2_score=7)
         GameFactory(match=match, game_number=3, team1_score=11, team2_score=9)
         match.refresh_from_db()
 
-        # Verify winner is set but not confirmed
         assert match.winner_side == 1
         assert player1 in match.players_on(1)
         assert not match.team1_confirmed
         assert not match.team2_confirmed
-        assert EloHistory.objects.count() == 0
+        assert RatingChange.objects.count() == 0
 
-        # Player 1 confirms via UI
+        # Player 1 confirms via UI: nothing is written yet.
         c = Client()
         c.force_login(user1)
         response = c.post(reverse('pingpong:match_confirm', args=[match.pk]))
         assert response.status_code == 302
 
         match.refresh_from_db()
-        player1.refresh_from_db()
         assert match.team1_confirmed
         assert not match.team2_confirmed
-        # Elo should NOT update yet (only one confirmation)
-        assert player1.elo_rating == 1500
-        assert EloHistory.objects.count() == 0
+        assert RatingChange.objects.count() == 0
+        assert not PlayerRating.all_objects.filter(player=player1).exists()
 
-        # Player 2 confirms via UI (second confirmation - should trigger Elo)
+        # Player 2 confirms via UI: the second confirmation writes.
         c.force_login(user2)
         response = c.post(reverse('pingpong:match_confirm', args=[match.pk]))
         assert response.status_code == 302
 
         match.refresh_from_db()
-        player1.refresh_from_db()
-        player2.refresh_from_db()
-
-        # NOW: Both confirmed, Elo should update
         assert match.team1_confirmed
         assert match.team2_confirmed
         assert match.match_confirmed
 
-        # CRITICAL: Elo should be updated
-        assert player1.elo_rating > 1500, f"Winner Elo should increase, got {player1.elo_rating}"
-        assert player2.elo_rating < 1500, f"Loser Elo should decrease, got {player2.elo_rating}"
+        def all_time(player):
+            return PlayerRating.all_objects.get(
+                player=player, season=None, format="singles"
+            )
 
-        # CRITICAL: Elo history should exist
-        assert EloHistory.objects.count() == 2, "Should have 2 Elo history entries"
+        assert all_time(player1).glicko_rating > 1500
+        assert all_time(player2).glicko_rating < 1500
+        assert all_time(player1).matches == 1
 
-        history_p1 = EloHistory.objects.get(match=match, player=player1)
-        assert history_p1.old_rating == 1500
-        assert history_p1.new_rating == player1.elo_rating
-        assert history_p1.rating_change > 0
+        history_p1 = RatingChange.objects.get(
+            match=match, player=player1, rating__season=None
+        )
+        assert history_p1.glicko_old_rating == 1500
+        assert history_p1.glicko_new_rating == pytest.approx(all_time(player1).glicko_rating)
+        assert history_p1.glicko_change > 0
+        # Frozen pre-KAN-73 columns are never written.
+        assert history_p1.elo_new_rating is None
 
 
 @pytest.mark.django_db

@@ -22,6 +22,6 @@
 | `season_rollover` (KAN-51) | `Season`/`PlayerRating`/`SeasonStanding.all_objects`, `Player._base_manager` | **Left club-wide** — a scheduled job, no viewer; every read is bounded by a season or a club id |
 | `Season.clean` overlap check (KAN-46) | `Season.all_objects` for the clash query and the stored dates | **Left club-wide** — filtered by the season's own `club_id` / pk; the check must see seasons the viewer's club cannot |
 | `SeasonAdmin.save_model` warning (KAN-9) | `Match.all_objects` count of unrated confirmed matches | **Scoped** — filtered by the saved season's `club_id` explicitly; the admin has no active club |
-| `elo_replay`, `elo_parity`, `recalculate_elo`, migration 0040 | `_base_manager` replay of the whole history | **Left club-wide** — commands and migrations, no viewer |
+| `rating_replay`, `recalculate_ratings` (formerly `elo_replay`, `elo_parity`, `recalculate_elo`, migration 0040) | `_base_manager` replay of the whole history | **Left club-wide** — commands and migrations, no viewer |
 | `seed_demo`, `seed_e2e`, `award_achievements`, `backfill_clubs` | Management commands | **Left club-wide** — same |
 

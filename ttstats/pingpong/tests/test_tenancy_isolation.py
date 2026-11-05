@@ -52,20 +52,15 @@ CLUBS_OFF = pytest.mark.usefixtures("clubs_off")
 
 @pytest.fixture
 def clubs_on(settings):
-    # Exactly the production configuration: `seasons` stays off.
+    # Exactly the production configuration. Seasons and Glicko-2 are always
+    # on (their flags were retired by KAN-73).
     settings.FEATURE_FLAGS = {"clubs": True}
 
 
-@pytest.fixture
-def clubs_and_seasons_on(settings):
-    # The seasons rollout: flag-gated season screens are swept, not 404ed.
-    settings.FEATURE_FLAGS = {"clubs": True, "seasons": True}
-
-
-# The sweep runs once per configuration. A screen that changes shape with the
-# `seasons` flag (the leaderboard, its cache key, the profile) is proven
-# isolated in both shapes.
-FLAG_CONFIGS = ("clubs_on", "clubs_and_seasons_on")
+# The sweep runs once per configuration. Since KAN-73 retired the `seasons`
+# flag there is one shape of every screen, so one configuration; add one here
+# if a flag ever changes a screen's shape again.
+FLAG_CONFIGS = ("clubs_on",)
 
 
 @pytest.fixture(params=FLAG_CONFIGS)
@@ -391,11 +386,6 @@ def _fetch(client, name, url):
     return client.get(url)
 
 
-# Routes that exist only with the `seasons` flag on (404 otherwise), so they
-# are swept only in that configuration.
-SEASONS_ONLY = {"season_archive", "season_archive_detail"}
-
-
 def _sweep(kind):
     """(config, url name) pairs for every route of `kind`, in every config."""
     names = sorted(n for n, (k, _) in URL_EXPECTATIONS.items() if k == kind)
@@ -403,7 +393,6 @@ def _sweep(kind):
         pytest.param(config, name, id=f"{config}-{name}")
         for config in FLAG_CONFIGS
         for name in names
-        if config == "clubs_and_seasons_on" or name not in SEASONS_ONLY
     ]
 
 
@@ -530,10 +519,8 @@ class TestLeaderboardCacheIsNotShared:
     club is still a leak -- and one every test running against a cold cache
     passes.
 
-    Runs in both configurations: the legacy key
-    (`leaderboard_{gen}_{match_type}_{date_filter}_...`) with `seasons` off,
-    the season key (`leaderboard_{gen}_season{id|all}_{format}_...`) with it
-    on. The all-time season key names no club, so only the prefix keeps it
+    The key is the season key (`leaderboard_{gen}_g2_season{id|all}_{format}_...`).
+    The all-time season key names no club, so only the prefix keeps it
     apart."""
 
     URL = None
@@ -541,17 +528,13 @@ class TestLeaderboardCacheIsNotShared:
     def _leaderboard(self, tenant, **params):
         return tenant.client().get(reverse("pingpong:leaderboard"), params)
 
-    def test_the_configuration_exercises_its_own_key_shape(self, tenancy_flags, bravo):
-        """Without this, both runs could be testing the same key."""
+    def test_the_cached_key_is_the_club_prefixed_season_key(self, bravo):
+        """Without this, the leak checks below could be exercising no key."""
         self._leaderboard(bravo)
         keys = [k for k in cache._cache if "leaderboard_" in k and "generation" not in k]
         assert keys, "the leaderboard was not cached at all"
         assert all(f"club{bravo.club.pk}:" in k for k in keys)
-        seasonal = [k for k in keys if "_season" in k]
-        if tenancy_flags == "clubs_and_seasons_on":
-            assert seasonal == keys
-        else:
-            assert not seasonal
+        assert all("_g2_season" in k for k in keys)
 
     def test_the_owner_sees_their_own_rows(self, bravo):
         """The control: the leak checks below are vacuous if nothing renders."""

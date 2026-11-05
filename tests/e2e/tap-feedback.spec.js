@@ -130,27 +130,26 @@ test('interactive elements suppress the iOS tap delay and grey flash', async ({ 
   await expect(tab).toHaveCSS('touch-action', 'manipulation');
 });
 
-test('the leaderboard Period filter is actually wired up', async ({ page }) => {
+test('the leaderboard format filter is actually wired up', async ({ page }) => {
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
 
   await page.goto('/pingpong/leaderboard/');
 
-  // The trigger selector used to be jQuery syntax, which throws when htmx
-  // resolves it and leaves this dropdown inert. Nothing on the page should
-  // raise at all.
+  // The legacy Period filter's trigger selector used to be jQuery syntax,
+  // which throws when htmx resolves it and leaves the control inert. Its
+  // replacement (the season/format form, KAN-73) must not regress: nothing
+  // on the page should raise at all.
   expect(errors).toEqual([]);
-
-  // The filters live behind a collapsed <details>.
-  await page.getByText('Filters', { exact: true }).click();
 
   const responded = page.waitForResponse(
     (r) => r.url().includes('/pingpong/leaderboard/') && r.request().method() === 'GET'
   );
-  await page.locator('#date_filter').selectOption('month');
+  await page.locator('#id_format').selectOption('doubles');
   await responded;
 
   // htmx pushes the chosen filter into the URL, so the choice is shareable and
   // survives back.
-  await expect(page).toHaveURL(/date_filter=month/);
+  await expect(page).toHaveURL(/format=doubles/);
+  expect(errors).toEqual([]);
 });

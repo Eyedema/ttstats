@@ -71,17 +71,17 @@ ACHIEVEMENT_DEFINITIONS = [
     # --- Tiered: Giant Slayer ---
     {
         'slug': 'giant_slayer_bronze', 'name': 'Giant Slayer', 'group': 'giant_slayer',
-        'description': 'Beat someone rated 100+ Elo above you',
+        'description': 'Beat someone rated 100+ points above you',
         'tier': 'bronze', 'icon': 'sword', 'threshold': 100, 'sort_order': 1,
     },
     {
         'slug': 'giant_slayer_silver', 'name': 'Giant Slayer', 'group': 'giant_slayer',
-        'description': 'Beat someone rated 200+ Elo above you',
+        'description': 'Beat someone rated 200+ points above you',
         'tier': 'silver', 'icon': 'sword', 'threshold': 200, 'sort_order': 2,
     },
     {
         'slug': 'giant_slayer_gold', 'name': 'Giant Slayer', 'group': 'giant_slayer',
-        'description': 'Beat someone rated 300+ Elo above you',
+        'description': 'Beat someone rated 300+ points above you',
         'tier': 'gold', 'icon': 'sword', 'threshold': 300, 'sort_order': 3,
     },
     # --- Tiered: Rivalry ---
@@ -128,7 +128,7 @@ ACHIEVEMENT_DEFINITIONS = [
     },
     {
         'slug': 'peak_performer', 'name': 'Peak Performer', 'group': 'peak_performer',
-        'description': 'Reach a new personal Elo peak',
+        'description': 'Reach a new personal rating peak',
         'tier': 'none', 'icon': 'trending-up', 'threshold': 1, 'sort_order': 0,
     },
 ]

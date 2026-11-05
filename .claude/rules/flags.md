@@ -2,7 +2,6 @@
 paths:
   - "ttstats/pingpong/flags.py"
   - "ttstats/pingpong/templatetags/feature_tags.py"
-  - "ttstats/pingpong/ratings.py"
   - "ttstats/ttstats/settings/base.py"
 ---
 
@@ -28,14 +27,11 @@ Deliberately not django-waffle.
 - Templates: `{% load feature_tags %}{% feature_enabled "x" as on %}` then
   `{% if on %}`, so a guarded block is **absent** from the response, not hidden.
 
-## `glicko2` (KAN-72)
+## Retired flags
 
-- Declared in `FEATURE_FLAGS` (default off). It only takes effect with `seasons`
-  also on: `ratings.system()` returns Glicko-2 for both, Elo otherwise. A system
-  check (`pingpong.W001`) warns when `glicko2` is on and `seasons` is off.
+- `seasons` (KAN-9) and `glicko2` (KAN-72) were retired by KAN-73: seasons and
+  Glicko-2 are always on. Migration 0046 deleted their overrides; a stale name
+  in `TTSTATS_FLAGS_ON` is ignored (only declared names are read).
 - Override lookups load **all** of a user's overrides in one query
   (`prefetch_overrides` does it for several users), so extra flags cost no extra
-  queries on a cold cache.
-- `glicko_may_be_shown()` is the cheap gate (settings on, else a cached
-  "any enabled glicko2 override" lookup, invalidated by override save/delete).
-  Call `prefetch_overrides(users)` before resolving a flag per recipient in a loop.
+  queries on a cold cache. Call it before resolving a flag per recipient in a loop.

@@ -8,7 +8,7 @@ can group by club and a future targeted flush is possible.
 
 The generation-counter pattern is kept, because it is the right design: it
 *versions* keys rather than deleting every filter variant, which would otherwise
-mean enumerating the cross-product of match_type x date_filter x top_x. It is
+mean enumerating the cross-product of season x format x top_x. It is
 now per club, so a match in Club A no longer invalidates Club B's leaderboard.
 
 With the `clubs` flag off, `club_prefix()` returns the empty string and every
@@ -57,54 +57,39 @@ def leaderboard_generation_key(club=None):
     return f"{prefix}leaderboard_generation" if prefix else "leaderboard_generation"
 
 
-# The rating-system names, repeated from ratings.py (which imports models, so
-# cache_utils cannot import it). `ratings.ELO` / `ratings.GLICKO` are asserted
-# equal to these in the tests.
-ELO = "elo"
-GLICKO = "glicko2"
+# Every rating key carries this infix. It dates from when Elo and Glicko-2
+# entries coexisted; kept after KAN-73 so an Elo-shaped entry left in a cache
+# from before the retirement (an int nav rank, say) can never be read as a
+# Glicko payload.
+RATING_INFIX = "g2_"
 
 # The leaderboard's `season` parameter for the all-time table (ratings.ALL_TIME).
 ALL_TIME_SEASON = "all"
 
 
-def _system_infix(system):
-    """'' for Elo, so Elo keys keep their exact pre-Glicko shape; 'g2_' for Glicko."""
-    return "g2_" if system == GLICKO else ""
-
-
-def leaderboard_key(scope, top_x, system):
-    """The seasons table for one scope: `{club}leaderboard_{gen}_{g2_}season{id|all}_{fmt}_{top}`.
+def leaderboard_key(scope, top_x):
+    """The table for one scope: `{club}leaderboard_{gen}_g2_season{id|all}_{fmt}_{top}`.
 
     `scope` is a RatingScope. The generation is read here, so a bump of the
-    club's counter retires both systems' entries at once.
+    club's counter retires every entry at once.
     """
     prefix = club_prefix()
     generation = cache.get(leaderboard_generation_key(), 0)
     season = scope.season_id or ALL_TIME_SEASON
     return (
-        f'{prefix}leaderboard_{generation}_{_system_infix(system)}season{season}'
+        f'{prefix}leaderboard_{generation}_{RATING_INFIX}season{season}'
         f'_{scope.format}_{top_x}'
     )
 
 
-def legacy_leaderboard_key(match_type, date_filter, start_date, end_date, top_x):
-    """The pre-seasons leaderboard (Elo only, `seasons` flag off)."""
-    prefix = club_prefix()
-    generation = cache.get(leaderboard_generation_key(), 0)
-    return (
-        f'{prefix}leaderboard_{generation}_{match_type}_{date_filter}'
-        f'_{start_date}_{end_date}_{top_x}'
-    )
+def player_rank_key(player):
+    """A player's nav reading (rating, RD, rank). Namespaced by the player's club."""
+    return f'{club_prefix(player.club)}{RATING_INFIX}player_rank_{player.pk}'
 
 
-def player_rank_key(player, system):
-    """A player's nav rank (Elo) or nav reading (Glicko). Namespaced by the player's club."""
-    return f'{club_prefix(player.club)}{_system_infix(system)}player_rank_{player.pk}'
-
-
-def rating_history_key(player, system):
-    """A player's rating-history chart series, one entry per system."""
-    return f'{club_prefix(player.club)}{_system_infix(system)}rating_history_{player.pk}'
+def rating_history_key(player):
+    """A player's rating-history chart series."""
+    return f'{club_prefix(player.club)}{RATING_INFIX}rating_history_{player.pk}'
 
 
 def player_point_stats_key(player):
@@ -185,12 +170,8 @@ def invalidate_match_caches(match):
 
 
 def _rating_keys(player):
-    """Every per-system rating key of a player: both variants, always."""
-    return [
-        key(player, system)
-        for key in (player_rank_key, rating_history_key)
-        for system in (ELO, GLICKO)
-    ]
+    """Every per-player rating key."""
+    return [player_rank_key(player), rating_history_key(player)]
 
 
 def _clubs_touched_by(match, players):

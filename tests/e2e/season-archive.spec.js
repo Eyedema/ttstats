@@ -5,7 +5,7 @@ const { applyProdCSP, expectDrawerClosed } = require('./helpers');
 /**
  * The season archive (KAN-51 / S4.6): a past season's frozen final table.
  *
- * Runs as the `e2e-seasons` user (the one with the `seasons` flag on).
+ * Runs as the `e2e-seasons` user (the one with season results).
  * seed_e2e seeds an archived season,
  * "E2E Spring 2025", whose singles table has a shared first place and a
  * deleted player. The page has no JS of its own, so what matters here is that

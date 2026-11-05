@@ -4,11 +4,10 @@
 one game per rating period, RD grown by the idle days since the player's last
 rated match in that scope, and a season row seeded from the all-time one.
 
-It is a **shadow**: the numbers are computed and stored beside the Elo ones by
-`elo.apply_format_scopes`, and nothing reads them yet. Like
-`elo.projected_elo_changes`, `projected_glicko_changes` is the only arithmetic,
-for the live write and the replay alike, and it reads only stored state plus
-`match.date_played.date()`, never "now".
+Since KAN-73 it is the only rating system. `rating_pipeline.apply_format_scopes`
+applies it, and `projected_glicko_changes` / `project` is the only arithmetic,
+for the live write, the preview and the replay alike. It reads only stored
+state plus `match.date_played.date()`, never "now".
 
 Doubles (KAN-70): each player is rated in a one-game period against a composite
 opponent built from the other side (`composite_opponent`), with their own RD.
@@ -201,7 +200,7 @@ def _reading(book, player_id, scope, match_day, params):
 
 
 def glicko_reading(book, player_id, scope, match_day, params):
-    """The inflated pre-match Rating of a player in `scope` (mirrors `scope_reading`)."""
+    """The inflated pre-match Rating of a player in `scope`."""
     return _reading(book, player_id, scope, match_day, params)[1]
 
 
@@ -219,7 +218,7 @@ def projected_glicko_changes(match, scope, *, book=None, params=DEFAULT_PARAMS):
     (logged). Each player is rated against the other side's composite opponent
     (inflated ratings and RDs) as one game.
     """
-    from .elo import LiveBook
+    from .rating_pipeline import LiveBook
 
     if book is None:
         book = LiveBook(match, scope.season)
@@ -230,7 +229,7 @@ def project(match, scope, book, params):
     """The arithmetic of `projected_glicko_changes`, **pure**: no database access.
 
     Everything it reads is in `book` and the match's memoized sides.
-    `elo._plan_glicko` wraps exactly this in a swallow-all guard, which is
+    `rating_pipeline.guarded_projection` wraps exactly this in a swallow-all guard, which is
     only safe inside an atomic block while nothing here can run a query.
     """
     from .models import Side

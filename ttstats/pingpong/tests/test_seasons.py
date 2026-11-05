@@ -1,5 +1,4 @@
 """seasons.py is pure: no Django, no database. These run without django_db."""
-import math
 from dataclasses import dataclass
 from datetime import date
 
@@ -9,7 +8,6 @@ from ..seasons import (
     SEASON_CARRY_FACTOR,
     ROLLOVER_GRACE_DAYS,
     SUCCESSOR_LEAD_DAYS,
-    carry_over_seed,
     carry_over_seed_float,
     competition_ranks,
     first_season_bounds,
@@ -107,21 +105,10 @@ class TestFirstSeasonBounds:
 
 
 class TestCarryOverSeed:
+    # The integer Elo seed (and its round-half-up cases) went with Elo in
+    # KAN-73; the float seed Glicko uses is pinned in TestCarryOverSeedFloat.
     def test_factor_is_one_half(self):
         assert SEASON_CARRY_FACTOR == 0.5
-
-    @pytest.mark.parametrize("all_time, seed", [
-        (1500, 1500),
-        (1700, 1600),
-        (1300, 1400),
-        (1601, 1551),  # 1550.5 rounds half up
-        (1399, 1450),  # 1449.5 rounds half up
-    ])
-    def test_soft_reset_toward_the_mean(self, all_time, seed):
-        assert carry_over_seed(all_time) == seed
-
-    def test_an_unrated_player_starts_at_the_mean(self):
-        assert carry_over_seed(None) == 1500
 
 
 class TestCompetitionRanks:
@@ -196,7 +183,3 @@ class TestCarryOverSeedFloat:
 
     def test_unrated_starts_at_the_mean(self):
         assert carry_over_seed_float(None) == 1500.0
-
-    @pytest.mark.parametrize("all_time", [1301, 1500, 1623, 1701.7, None])
-    def test_the_integer_seed_is_this_one_rounded_half_up(self, all_time):
-        assert carry_over_seed(all_time) == math.floor(carry_over_seed_float(all_time) + 0.5)

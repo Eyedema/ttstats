@@ -40,7 +40,7 @@ from django.utils import timezone
 
 from pingpong import live_scoring as ls
 from pingpong.models import (
-    Championship, Game, Location, Match, MatchConfirmation, Player,
+    Championship, Game, Location, Match, MatchConfirmation, Player, PlayerRating,
     ScheduledMatch, Side,
 )
 from pingpong.services import set_match_sides, set_scheduled_match_sides
@@ -203,11 +203,11 @@ class Command(BaseCommand):
             game_number += 1
 
     def _confirm(self, match):
-        """Confirm one player at a time so the Elo signals actually fire.
+        """Confirm one player at a time so the rating signals actually fire.
 
         bulk_create bypasses post_save, which is what maintains is_confirmed
-        and triggers update_player_elo -- a bulk-created confirmation leaves
-        the match looking played but rated 1500 forever.
+        and triggers apply_match_ratings -- a bulk-created confirmation leaves
+        the match looking played but unrated forever.
         """
         for player in match.all_players:
             MatchConfirmation.objects.get_or_create(match=match, player=player)
@@ -242,13 +242,22 @@ class Command(BaseCommand):
 
                 # Bias toward whichever side is currently rated higher, so
                 # ratings reinforce rather than random-walk back to the mean.
-                r1 = sum(p.elo_rating for p in side1) / len(side1)
-                r2 = sum(p.elo_rating for p in side2) / len(side2)
+                r1 = self._mean_rating(side1, is_double)
+                r2 = self._mean_rating(side2, is_double)
                 self._play(match, Side.ONE if r1 >= r2 else Side.TWO)
                 self._confirm(match)
 
-            for p in side1 + side2:
-                p.refresh_from_db()
+    @staticmethod
+    def _mean_rating(players, is_double):
+        """The side's mean all-time Glicko rating in the format (1500 if unrated)."""
+        fmt = "doubles" if is_double else "singles"
+        stored = dict(
+            PlayerRating.all_objects.filter(
+                player__in=players, season__isnull=True, format=fmt,
+                glicko_rating__isnull=False,
+            ).values_list("player_id", "glicko_rating")
+        )
+        return sum(stored.get(p.pk, 1500.0) for p in players) / len(players)
 
     def _create_championship(self, players, locations):
         """A championship mid-season: some rounds played, some still to come."""
@@ -388,14 +397,16 @@ class Command(BaseCommand):
     # -- output -----------------------------------------------------------
 
     def _report(self, players):
-        # Refresh BEFORE sorting: these objects were loaded before any match
-        # was played, so their in-memory elo_rating is still 1500 and sorting
-        # on it produces a table that is ordered by nothing at all while
-        # printing the correct (refreshed) numbers -- which reads as a bug in
-        # the Elo system rather than in this method.
-        for p in players:
-            p.refresh_from_db()
-        ranked = sorted(players, key=lambda p: -p.elo_rating)
+        # All-time singles, read fresh from PlayerRating: the Player objects
+        # carry no rating.
+        rows = {
+            r.player_id: r
+            for r in PlayerRating.all_objects.filter(
+                player__in=players, season__isnull=True, format="singles",
+                glicko_rating__isnull=False,
+            )
+        }
+        ranked = sorted(players, key=lambda p: -(rows[p.pk].glicko_rating if p.pk in rows else 0))
 
         # Scoped to the demo roster. Counting every row in the database
         # reports whatever else happens to be in your dev file and makes it
@@ -413,9 +424,10 @@ class Command(BaseCommand):
         self.stdout.write("  championship: Demo Winter League (in progress)\n")
         self.stdout.write("  leaderboard:")
         for i, p in enumerate(ranked, start=1):
-            self.stdout.write(
-                f"    {i}. {p.name:<20} {p.elo_rating}  ({p.matches_for_elo} rated)"
-            )
+            row = rows.get(p.pk)
+            shown = f"{round(row.glicko_rating)} ±{round(row.rd)}" if row else "unrated"
+            played = row.matches if row else 0
+            self.stdout.write(f"    {i}. {p.name:<20} {shown}  ({played} rated)")
         self.stdout.write(
             f"\n  log in as any of: "
             f"{', '.join(u for _, u, _ in DEMO_PLAYERS)}"
