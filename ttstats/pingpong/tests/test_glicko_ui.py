@@ -2,8 +2,9 @@
 
 The promise pinned here is the no-mixing rule, on the RENDERED page: a Glicko
 viewer never sees the word "Elo" and every rating component says which system
-it is in; an Elo viewer never sees a "±". It is swept over every surface that
-shows a rating, so a template that forgets the switch fails here, not in prod.
+it is in; an Elo viewer never sees a "±". It is swept over every HTML surface
+that shows a rating, so a template that forgets the switch fails here, not in
+prod. The push text is not a page; it is covered in test_glicko_read.
 """
 
 import re
@@ -15,7 +16,13 @@ from django.urls import reverse
 from pingpong import ratings
 from pingpong.models import RatingChange
 
-from .conftest import ScheduledMatchFactory, confirm_match
+from .conftest import (
+    GameFactory,
+    MatchFactory,
+    ScheduledMatchFactory,
+    SeasonStandingFactory,
+    confirm_match,
+)
 from .test_glicko_read import (
     _club_with_current_season,
     _finished,
@@ -25,7 +32,7 @@ from .test_glicko_read import (
 )
 from .test_views import _login_client
 
-ELO_WORD = re.compile(r"\bElo\b")
+ELO_WORD = re.compile(r"\belo\b", re.I)
 HTMX = {"HTTP_HX_REQUEST": "true"}
 
 
@@ -46,10 +53,68 @@ def _world():
     confirm_match(confirmed)
     pending = _finished(them, me, club=club)
     scheduled = ScheduledMatchFactory(player1=me, player2=them, club=club)
+    doubles_pending, doubles_confirmed = _doubles(club, season, me, them)
+    archived_glicko, archived_elo = _archives(club, me, them)
     return SimpleNamespace(
         club=club, season=season, user=user, me=me, them=them, newbie=newbie,
         confirmed=confirmed, pending=pending, scheduled=scheduled,
+        doubles_pending=doubles_pending, doubles_confirmed=doubles_confirmed,
+        archived_glicko=archived_glicko, archived_elo=archived_elo,
     )
+
+
+def _doubles(club, season, me, them):
+    """A pending and a confirmed doubles match between four rated players."""
+    others = [_member(club)[1] for _ in range(2)]
+    for p, rating, rd in zip(
+        (me, them, *others), (1560, 1490, 1420, 1510), (60, 90, 140, 75)
+    ):
+        _glicko_row(p, rating, rd, club=club, season=season, fmt="doubles", matches=20)
+    out = []
+    # Confirmed first: the pending match is the later one, so confirming it
+    # later writes from the very state the preview read (no out-of-order replay).
+    for confirm in (True, False):
+        match = MatchFactory(
+            team1_players=[me, others[0]], team2_players=[them, others[1]],
+            is_double=True, best_of=5, club=club,
+        )
+        for n in (1, 2, 3):
+            GameFactory(match=match, game_number=n, team1_score=11, team2_score=5)
+        match.refresh_from_db()
+        if confirm:
+            confirm_match(match)
+        out.append(match)
+    confirmed, pending = out
+    return pending, confirmed
+
+
+def _archives(club, me, them):
+    """One archived season frozen under Glicko-2 (with a +/-), one under Elo."""
+    import datetime
+
+    from django.utils import timezone
+
+    from .conftest import SeasonFactory
+
+    today = timezone.now().date()
+    made = []
+    for offset, system, rd in ((400, "glicko2", 61.4), (300, "elo", None)):
+        archived = SeasonFactory(
+            club=club, name="Winter" if system == "glicko2" else "Spring",
+            starts_on=today - datetime.timedelta(days=offset),
+            ends_on=today - datetime.timedelta(days=offset - 50),
+            archived_at=timezone.now(),
+        )
+        SeasonStandingFactory(
+            season=archived, player=me, rank=1, rating=1555,
+            rating_system=system, rd=rd,
+        )
+        SeasonStandingFactory(
+            season=archived, player=them, rank=2, rating=1480,
+            rating_system=system, rd=rd,
+        )
+        made.append(archived)
+    return made
 
 
 # surface name -> (url builder, extra GET kwargs)
@@ -72,6 +137,14 @@ SURFACES = {
     "calendar": lambda w: (reverse("pingpong:calendar"), {}),
     "scheduled_detail": lambda w: (
         reverse("pingpong:scheduled_match_detail", args=[w.scheduled.pk]), {}),
+    "match_doubles_pending": lambda w: (
+        reverse("pingpong:match_detail", args=[w.doubles_pending.pk]), {}),
+    "match_doubles_confirmed": lambda w: (
+        reverse("pingpong:match_detail", args=[w.doubles_confirmed.pk]), {}),
+    "archive_glicko_frozen": lambda w: (
+        reverse("pingpong:season_archive_detail", args=[w.archived_glicko.pk]), {}),
+    "archive_elo_frozen": lambda w: (
+        reverse("pingpong:season_archive_detail", args=[w.archived_elo.pk]), {}),
     "nav": lambda w: (reverse("pingpong:player_list"), {}),
     "how_ratings_work": lambda w: (reverse("pingpong:how_ratings_work"), {}),
 }
@@ -95,12 +168,17 @@ class TestNoMixingSweep:
 
         assert response.status_code == 200
         body = response.content.decode()
-        assert not ELO_WORD.search(body), ELO_WORD.search(body).group(0)
+        # A frozen Elo standing keeps its machine-readable system token; that
+        # attribute is not words on the page.
+        body = body.replace('data-rating-system="elo"', "")
+        found = ELO_WORD.search(body)
+        assert not found, body[max(found.start() - 80, 0):found.end() + 80] if found else ""
         assert 'data-rating-system="glicko2"' in body
 
     @pytest.mark.parametrize("seasons", [False, True], ids=["legacy", "seasons"])
     @pytest.mark.parametrize(
-        "surface", sorted(s for s in SURFACES if s != "how_ratings_work")
+        "surface",
+        sorted(s for s in SURFACES if s not in ("how_ratings_work", "archive_glicko_frozen")),
     )
     def test_elo_pages_never_show_an_uncertainty(self, settings, seasons, surface):
         settings.FEATURE_FLAGS = {
@@ -110,7 +188,11 @@ class TestNoMixingSweep:
 
         response = _get(world, surface)
 
-        assert response.status_code == 200
+        # The archive is a seasons page: it 404s with the flag off.
+        expected = 404 if surface.startswith("archive") and not seasons else 200
+        assert response.status_code == expected
+        if expected == 404:
+            return
         body = response.content.decode()
         assert "±" not in body
         assert "\\u00b1" not in body
@@ -132,6 +214,70 @@ class TestNoMixingSweep:
         response = Client().get(reverse("pingpong:how_ratings_work"))
 
         assert response.status_code == 302
+
+
+@pytest.mark.django_db
+class TestFrozenStandings:
+    """The archive shows what the season was frozen under, whatever the viewer has."""
+
+    def test_a_glicko_frozen_standing_shows_its_uncertainty(self, glicko_on):  # noqa: F811
+        body = _get(_world(), "archive_glicko_frozen").content.decode()
+
+        assert re.search(r"1555\s*<span[^>]*data-rating-rd[^>]*>±61", body)
+        assert "give or take 61" in body
+
+    def test_an_elo_frozen_standing_shows_none(self, glicko_on):  # noqa: F811
+        body = _get(_world(), "archive_elo_frozen").content.decode()
+
+        # Only the standings: the nav shows the VIEWER's own (Glicko) reading.
+        cells = re.findall(r'data-testid="standing-rating".*?</span>\s*</span>|data-testid="standing-rating".*?</span>', body, re.S)
+        assert cells and all("1555" in c or "1480" in c for c in cells)
+        assert not any("±" in c or "give or take" in c for c in cells)
+
+
+@pytest.mark.django_db
+class TestDoublesMatchPage:
+    def _players_deltas(self, body):
+        return re.findall(
+            r"data-player-delta>([^<]+)</span>\s*<span[^>]*data-rating-delta[^>]*>\s*([+-]\d+)", body
+        )
+
+    @pytest.mark.parametrize("surface", ["match_doubles_pending", "match_doubles_confirmed"])
+    def test_each_player_gets_their_own_figure(self, glicko_on, surface):  # noqa: F811
+        body = _get(_world(), surface).content.decode()
+
+        shown = self._players_deltas(body)
+        assert len(shown) == 4
+        assert len({delta for _, delta in shown}) > 1  # not one side mean, repeated
+
+    def test_the_pending_figures_are_the_written_ones(self, glicko_on):  # noqa: F811
+        world = _world()
+        match = world.doubles_pending
+        client = _login_client(world.user)
+        url = reverse("pingpong:match_detail", args=[match.pk])
+
+        previewed = dict(self._players_deltas(client.get(url).content.decode()))
+        assert "if agreed" in client.get(url).content.decode()
+        confirm_match(match)
+        confirmed = dict(self._players_deltas(client.get(url).content.decode()))
+
+        written = {
+            rc.player.name: rc.glicko_change
+            for rc in RatingChange.objects.filter(
+                match=match, rating__season=world.season
+            ).select_related("player")
+        }
+        assert {k: int(v) for k, v in previewed.items()} == written
+        assert {k: int(v) for k, v in confirmed.items()} == written
+
+    def test_the_context_has_no_elo_named_keys(self, glicko_on):  # noqa: F811
+        world = _world()
+        context = _login_client(world.user).get(
+            reverse("pingpong:match_detail", args=[world.doubles_pending.pk])
+        ).context
+
+        for key in ("side1_elo_delta", "side2_elo_delta", "elo_is_pending"):
+            assert key not in context
 
 
 @pytest.mark.django_db
@@ -191,7 +337,7 @@ class TestComponents:
     def test_dashboard_wording_is_neutral(self, glicko_on):  # noqa: F811
         body = _get(_world(), "dashboard").content.decode()
 
-        assert re.search(r"[+-]\d+</span> if true", body)
+        assert re.search(r"[+-]\d+</span> if agreed", body)
 
     def test_the_help_links_to_the_explainer(self, glicko_on):  # noqa: F811
         body = _get(_world(), "leaderboard").content.decode()
@@ -221,7 +367,9 @@ class TestComponents:
         settings.FEATURE_FLAGS = {**settings.FEATURE_FLAGS, "glicko2": False}
         elo = _get(world, "player_detail").content.decode()
 
-        assert "points above you" in glicko
+        assert "well above you" in glicko
+        assert "points above you" not in glicko
+        assert not re.search(r"\d+\+ (Elo|points)", glicko)
         assert "Elo above you" in elo
 
 
@@ -243,7 +391,7 @@ class TestPreviewConfirmWrittenIntegration:
         ).content.decode()
         on_dashboard = client.get(reverse("pingpong:dashboard")).context[
             "pending_confirmations"
-        ][0]["elo_if_true"]
+        ][0]["delta_if_true"]
         confirm_match(match)
         confirmed_page = client.get(
             reverse("pingpong:match_detail", args=[match.pk])

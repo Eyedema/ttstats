@@ -55,19 +55,15 @@ test.describe('glicko-2 cutover', () => {
     await page.goto('/pingpong/leaderboard/');
     const results = page.locator('#leaderboard-results');
 
-    let responded = page.waitForResponse(
-      (r) => r.url().includes('/pingpong/leaderboard/') && r.url().includes('season=all'),
-    );
+    // Wait for the htmx swap itself (the partial carries its scope), not just
+    // the response, then assert the system and the +/- on the NEW content.
     await page.locator('#id_season').selectOption('all');
-    await responded;
+    await expect(results).toHaveAttribute('data-scope', /^all-singles$/);
     await expect(results).toHaveAttribute('data-rating-system', 'glicko2');
-    await expect(results.locator('[data-rating-rd]').first()).toBeVisible();
+    await expect(results.locator('[data-rating-rd]').first()).toHaveText(/^±\d+$/);
 
-    responded = page.waitForResponse(
-      (r) => r.url().includes('/pingpong/leaderboard/') && r.url().includes('format=doubles'),
-    );
     await page.locator('#id_format').selectOption('doubles');
-    await responded;
+    await expect(results).toHaveAttribute('data-scope', /^all-doubles$/);
     await expect(results).toHaveAttribute('data-rating-system', 'glicko2');
     expect(await page.locator('main').innerText()).not.toMatch(ELO);
   });
@@ -132,7 +128,11 @@ test.describe('glicko-2 cutover', () => {
 
   test('the help link opens the explainer', async ({ page }) => {
     await page.goto('/pingpong/leaderboard/');
-    await page.locator('#leaderboard-results [data-how-ratings-link]').last().tap();
+    // One link, inside the help details: open them first.
+    await page.locator('#rating-help > summary').tap();
+    const link = page.locator('#leaderboard-results [data-how-ratings-link]');
+    await expect(link).toHaveCount(1);
+    await link.tap();
     await expect(page).toHaveURL(/\/pingpong\/ratings\/$/);
     await expect(page.getByRole('heading', { name: 'How ratings work' })).toBeVisible();
     await expect(page.locator('main')).toContainText('give or take');

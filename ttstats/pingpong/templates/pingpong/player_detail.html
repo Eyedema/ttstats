@@ -98,7 +98,7 @@
             <a href="#rating-help">{% include 'pingpong/_rating_status.html' with status=cell.status %}</a>
           {% else %}
             <span class="n text-[20px]">{% include 'pingpong/_rating_value.html' with rating=cell.rating rd=cell.rd %}</span>
-            {% if cell.status == 'provisional' %}<a href="#rating-help">{% include 'pingpong/_rating_status.html' with status=cell.status reason=cell.reason %}</a>{% endif %}
+            {% if cell.status == 'provisional' %}<a href="#rating-help">{% include 'pingpong/_rating_status.html' with status=cell.status reason=cell.reason last_played=cell.last_played %}</a>{% endif %}
           {% endif %}
         </span>
         {% endfor %}

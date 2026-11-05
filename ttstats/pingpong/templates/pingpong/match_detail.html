@@ -55,7 +55,14 @@ no winner yet) is stated in words instead.
         <span class="min-w-0">
           {% player_link match.side1_players.0 css="block truncate text-heading" label=match.side1_label %}
           {% if match.winner_side == 1 %}<span class="{{ match.side1_players.0|hue }} hue-text block text-[10px] font-extrabold uppercase tracking-[0.12em]">WINNER</span>{% endif %}
+          {% if side1_player_deltas %}
+          {% for p, player_delta in side1_player_deltas %}
+          <span class="block truncate text-[11.5px] font-semibold text-muted-foreground" data-player-delta>{{ p.name }}</span>
+          {% include 'pingpong/_elo_delta.html' with delta=player_delta pending=delta_is_pending %}
+          {% endfor %}
+          {% else %}
           {% include 'pingpong/_elo_delta.html' with delta=side1_delta pending=delta_is_pending %}
+          {% endif %}
         </span>
       </div>
 
@@ -70,7 +77,14 @@ no winner yet) is stated in words instead.
         <span class="min-w-0">
           {% player_link match.side2_players.0 css="block truncate text-heading" label=match.side2_label %}
           {% if match.winner_side == 2 %}<span class="{{ match.side2_players.0|hue }} hue-text block text-[10px] font-extrabold uppercase tracking-[0.12em]">WINNER</span>{% endif %}
+          {% if side2_player_deltas %}
+          {% for p, player_delta in side2_player_deltas %}
+          <span class="block truncate text-[11.5px] font-semibold text-muted-foreground" data-player-delta>{{ p.name }}</span>
+          {% include 'pingpong/_elo_delta.html' with delta=player_delta pending=delta_is_pending %}
+          {% endfor %}
+          {% else %}
           {% include 'pingpong/_elo_delta.html' with delta=side2_delta pending=delta_is_pending %}
+          {% endif %}
         </span>
         <span class="{{ match.side2_players.0|hue }} hue-bar w-1.5 h-12"></span>
       </div>

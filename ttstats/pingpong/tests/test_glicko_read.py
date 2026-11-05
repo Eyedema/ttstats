@@ -605,7 +605,7 @@ class TestGlickoLeaderboard:
             r for r in ctx["player_stats"] if r["status"] == ratings.PROVISIONAL
         ]
         assert [r["player"] for r in provisional] == [them]
-        assert provisional[0]["status_reason"] in {"new", "returning"}
+        assert provisional[0]["reason"] in {"new", "returning"}
 
     def test_day_one_falls_back_to_all_time(self, glicko_on):
         club, season = _club_with_current_season()
@@ -741,7 +741,7 @@ class TestViewsPassTheSystem:
         assert before["delta_is_pending"] is True
         assert after["delta_is_pending"] is False
         assert before["side1_delta"] == after["side1_delta"] > 0
-        assert before["side1_elo_delta"] == before["side1_delta"]
+        assert "side1_elo_delta" not in before
 
     def test_dashboard_pending_delta_is_glicko(self, glicko_on):
         club, season = _club_with_current_season()
@@ -755,7 +755,7 @@ class TestViewsPassTheSystem:
             .get(reverse("pingpong:dashboard"))
             .context["pending_confirmations"]
         )
-        previewed = rows[0]["elo_if_true"]
+        previewed = rows[0]["delta_if_true"]
         confirm_match(match)
 
         assert (

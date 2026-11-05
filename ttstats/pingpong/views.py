@@ -276,7 +276,7 @@ class MatchDetailView(LoginRequiredMixin, DetailView):
         context['team2_win_pct'] = t2_pct
 
         context.update(self._viewer_context(match))
-        context.update(self._elo_deltas(match, context, system))
+        context.update(self._elo_deltas(match, context, system=system))
         context.update(self._point_context(match))
         game_rows = self._game_rows(match)
         context['game_rows'] = game_rows
@@ -285,7 +285,7 @@ class MatchDetailView(LoginRequiredMixin, DetailView):
         return context
 
     @staticmethod
-    def _elo_deltas(match, context, system=ratings.ELO):
+    def _elo_deltas(match, context, *, system):
         """What each side's rating did, or will do once both sides agree.
 
         A match awaiting confirmation has no EloHistory yet, and showing
@@ -315,16 +315,30 @@ class MatchDetailView(LoginRequiredMixin, DetailView):
                 projection = projected_elo_changes(match)
                 side1_delta, side2_delta = projection.side1_change, projection.side2_change
                 pending = True
-        # The `*_elo_*` names are the pre-Glicko template contract and carry
-        # the shown system's numbers; the neutral names are what new markup reads.
-        return {
-            'side1_elo_delta': side1_delta,
-            'side2_elo_delta': side2_delta,
-            'elo_is_pending': pending,
+        # The neutral names are always emitted. The `*_elo_*` names are the
+        # pre-Glicko template contract: Elo only, so they can never carry a
+        # Glicko number.
+        deltas = {
             'side1_delta': side1_delta,
             'side2_delta': side2_delta,
             'delta_is_pending': pending,
         }
+        if system == ratings.ELO:
+            deltas.update({
+                'side1_elo_delta': side1_delta,
+                'side2_elo_delta': side2_delta,
+                'elo_is_pending': pending,
+            })
+        elif scope is not None and match.is_double:
+            # Doubles are rated per player: show each player's own figure,
+            # not the side mean, so every number equals what is written.
+            by_player, _ = ratings.projected_changes_by_player(
+                match, scope, system=system
+            )
+            side1, side2 = match.sides()
+            deltas['side1_player_deltas'] = [(p, by_player.get(p.pk, 0)) for p in side1]
+            deltas['side2_player_deltas'] = [(p, by_player.get(p.pk, 0)) for p in side2]
+        return deltas
 
     def _viewer_context(self, match):
         """Where the person reading this page stands in it.
@@ -631,28 +645,28 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
             'matches': confirmed_matches_page.object_list,
             'page_obj': confirmed_matches_page,
             'is_paginated': paginator.num_pages > 1,
-            'elo_chart_labels': elo_labels,
-            'elo_chart_data': elo_data,
             'achievement_progress': achievement_progress,
             **cached_stats,
         })
+        # The `elo_chart_*` names are the pre-Glicko template contract: Elo
+        # only, so they can never carry a Glicko series (nor, under Glicko,
+        # an Elo one the page must not show). The neutral names always exist.
+        for key in ('elo_chart_labels', 'elo_chart_data'):
+            context.pop(key, None)
         if system == ratings.GLICKO:
-            # The chart reads the Glicko history instead of EloHistory. The
-            # `elo_chart_*` names are the pre-Glicko template contract and
-            # carry the Glicko series here; `rating_chart_*` are the neutral ones.
             history = ratings.rating_history(player, system=system)
             context.update({
                 'rating_chart_labels': history['labels'],
                 'rating_chart_data': history['data'],
                 'rating_chart_lower': history['lower'],
                 'rating_chart_upper': history['upper'],
-                'elo_chart_labels': history['labels'],
-                'elo_chart_data': history['data'],
             })
         else:
             context.update({
-                'rating_chart_labels': context['elo_chart_labels'],
-                'rating_chart_data': context['elo_chart_data'],
+                'elo_chart_labels': elo_labels,
+                'elo_chart_data': elo_data,
+                'rating_chart_labels': elo_labels,
+                'rating_chart_data': elo_data,
                 'rating_chart_lower': [],
                 'rating_chart_upper': [],
             })
@@ -860,11 +874,12 @@ class DashboardView(LoginRequiredMixin, TemplateView):
                     # yes costs. It is the same arithmetic that will be
                     # written when both of you have confirmed.
                     "delta_if_true": delta_if_true,
-                    # Pre-Glicko name, kept until the alias cleanup; templates read delta_if_true.
-                    "elo_if_true": delta_if_true,
                     "waiting_since": match.date_played,
                 }
             )
+            if system == ratings.ELO:
+                # Pre-Glicko name: Elo only, never a Glicko number.
+                rows[-1]["elo_if_true"] = delta_if_true
         return rows
 
     # --- Live rivalries -----------------------------------------------------
@@ -1339,7 +1354,7 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
 
     def _leaderboard_cache_key(
         self, match_type, date_filter, start_date, end_date, top_x, rating_scope=None,
-        system=ratings.ELO,
+        *, system,
     ):
         """Cache key: club namespace, then generation, then the filter params.
 
@@ -1365,7 +1380,7 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
         context["rating_scope"] = None
 
         if ratings.enabled(self.request.user):
-            context.update(self._season_context(ratings.system(self.request.user)))
+            context.update(self._season_context(system=ratings.system(self.request.user)))
             return context
 
         # Get filter parameters
@@ -1376,13 +1391,16 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
         top_x = self.request.GET.get('top_x', '10')
 
         # Try cache first (10 minute TTL)
-        cache_key = self._leaderboard_cache_key(match_type, date_filter, start_date, end_date, top_x)
+        cache_key = self._leaderboard_cache_key(
+            match_type, date_filter, start_date, end_date, top_x, system=ratings.ELO
+        )
         cached_data = cache.get(cache_key)
 
         if cached_data is not None:
             context.update(
                 self._presentation_context(
-                    cached_data, top_x, match_type, date_filter, start_date, end_date
+                    cached_data, top_x, match_type, date_filter, start_date, end_date,
+                    system=ratings.ELO,
                 )
             )
             return context
@@ -1519,12 +1537,13 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
 
         context.update(
             self._presentation_context(
-                player_stats, top_x, match_type, date_filter, start_date, end_date
+                player_stats, top_x, match_type, date_filter, start_date, end_date,
+                system=ratings.ELO,
             )
         )
         return context
 
-    def _season_context(self, system=ratings.ELO):
+    def _season_context(self, *, system):
         """The seasons table (flag on): one club, one season or all-time, one format.
 
         Resolves the scope from GET through `LeaderboardScopeForm`, so a bad or
@@ -1595,7 +1614,7 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
     @staticmethod
     def _presentation_context(
         player_stats, top_x, match_type, date_filter, start_date, end_date,
-        *, rating_scope=None, unrated=(), system=ratings.ELO,
+        *, rating_scope=None, unrated=(), system,
     ):
         """Everything the template reads, derived once for both cache paths.
 
@@ -1626,13 +1645,21 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
         if rating_scope is not None:
             today = timezone.now().date()
             for row in player_stats:
+                # A cache entry written before the neutral keys existed (the
+                # Elo seasons key is unchanged across the deploy) lacks them.
+                if "rating" not in row and "elo_rating" in row:
+                    row["rating"] = row["elo_rating"]
+                if "peak" not in row and "elo_peak" in row:
+                    row["peak"] = row["elo_peak"]
                 shown = ratings.display_rd(row, today) if system == ratings.GLICKO else None
-                row["status"] = ratings.rating_status(
-                    True, experience=row["experience"], rd=shown, system=system
-                )
-                row["status_reason"] = row["status"].reason
                 if shown is not None:
+                    # The verdict uses the rounded RD: the figure shown as the ±.
                     row["rd"] = round(shown)
+                row["status"] = ratings.rating_status(
+                    True, experience=row["experience"],
+                    rd=row["rd"] if shown is not None else None, system=system,
+                )
+                row["reason"] = row["status"].reason
             context.update({
                 "rating_system": system,
                 "rating_scope": rating_scope,
@@ -1969,11 +1996,17 @@ class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
         else:
             p1_pct = round(calculate_expected_score(player1.elo_rating, player2.elo_rating) * 100)
             p2_pct = 100 - p1_pct
-        return {
+        prediction = {
             "player1_win_pct": p1_pct,
             "player2_win_pct": p2_pct,
             "rating_system": system,
         }
+        if system == ratings.GLICKO:
+            # The two readings the bar was computed from, for display.
+            readings = ratings.glicko_readings([player1, player2], scope=scope)
+            prediction["player1_rating"], prediction["player1_rd"] = readings[player1.pk]
+            prediction["player2_rating"], prediction["player2_rd"] = readings[player2.pk]
+        return prediction
 
     @staticmethod
     def _point_comparison(player1, player2, shared_matches):

@@ -18,7 +18,14 @@ test('the leaderboard still carries the uncertainty as text', async ({ page }) =
 
 test('the explainer opens from the help link without JavaScript', async ({ page }) => {
   await page.goto('/pingpong/leaderboard/');
-  const link = page.locator('#leaderboard-results [data-how-ratings-link]').last();
+  // With the help showing there is one link, inside the (closed) details:
+  // open it with a plain summary tap, which needs no JavaScript.
+  const summary = page.locator('#rating-help > summary');
+  // Centre it first: the minimal scroll Playwright does parks it under the fixed tab bar.
+  await summary.evaluate((el) => el.scrollIntoView({ block: 'center' }));
+  await summary.tap();
+  const link = page.locator('#leaderboard-results [data-how-ratings-link]');
+  await expect(link).toHaveCount(1);
   // Centre it first: the minimal scroll Playwright does parks it under the fixed tab bar.
   await link.evaluate((el) => el.scrollIntoView({ block: 'center' }));
   await Promise.all([page.waitForURL(/\/pingpong\/ratings\/$/), link.tap()]);

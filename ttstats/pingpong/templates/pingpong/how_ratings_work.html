@@ -37,7 +37,8 @@ rating_tags at call time.
       <h2 class="text-heading">Every confirmed match is rated on its own</h2>
       <p class="text-muted-foreground">
         When a result is waiting for you, the "if agreed" figure is exactly what will be
-        written once everyone agrees. Nothing moves until then.
+        written once everyone agrees, unless another of your matches is confirmed first. Nothing
+        moves until then.
       </p>
     </li>
     <li>
@@ -71,7 +72,12 @@ rating_tags at call time.
       <h2 class="text-heading">Singles, doubles and seasons</h2>
       <p class="text-muted-foreground">
         Singles and doubles are rated separately. A new season starts from your all-time rating
-        in that format, pulled part of the way back toward 1500.
+        in that format, pulled part of the way back toward {% rating_mean %}. A season's ±
+        starts at least {% season_rd_floor %} wide, so early results in a new season count for more.
+      </p>
+      <p class="mt-2 text-muted-foreground">
+        In doubles each player is rated against a composite of the two opponents, and keeps their
+        own ±, so partners can move by different amounts after the same match.
       </p>
     </li>
     <li>

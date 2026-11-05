@@ -202,7 +202,7 @@ class TestReadSideIsGuardedLikeTheWrite:
             detail = client.get(reverse("pingpong:match_detail", args=[match.pk]))
 
         assert dash.status_code == detail.status_code == 200
-        assert dash.context["pending_confirmations"][0]["elo_if_true"] == 0
+        assert dash.context["pending_confirmations"][0]["delta_if_true"] == 0
 
 
 @pytest.mark.django_db
@@ -344,3 +344,271 @@ class TestFrozenRdIsDeterministic:
         assert sorted(soon.values()) == sorted(late.values())
         row = PlayerRating.all_objects.get(player=a, season=season, format="singles")
         assert soon[a.pk] == pytest.approx(ratings.display_rd(row, season.ends_on))
+
+
+# ---------------------------------------------------------------------------
+# Final fix round (KAN-71/72): no Elo aliases under Glicko, old cache shape,
+# required `system`, honest doubles preview, copy and rounding nits.
+# ---------------------------------------------------------------------------
+
+import datetime as _dt
+
+from django.utils import timezone as _tz
+
+from pingpong import elo, views
+from pingpong.templatetags import rating_tags
+
+ELO_ALIASES = ("side1_elo_delta", "side2_elo_delta", "elo_is_pending")
+
+
+@pytest.fixture
+def elo_seasons(settings):
+    settings.FEATURE_FLAGS = {
+        **settings.FEATURE_FLAGS, "seasons": True, "glicko2": False,
+    }
+
+
+@pytest.mark.django_db
+class TestNoEloAliasesUnderGlicko:
+    def _world(self):
+        club, season = _club_with_current_season()
+        user, me = _member(club)
+        _, them = _member(club)
+        _glicko_row(me, 1450, 80, club=club, season=season)
+        _glicko_row(them, 1500, 80, club=club, season=season)
+        return club, user, me, them, _finished(them, me, club=club)
+
+    def test_match_detail_has_the_neutral_keys_only(self, glicko_on):
+        _, user, _, _, match = self._world()
+
+        context = _login_client(user).get(
+            reverse("pingpong:match_detail", args=[match.pk])
+        ).context
+
+        for key in ELO_ALIASES:
+            assert key not in context
+        for key in ("side1_delta", "side2_delta", "delta_is_pending"):
+            assert key in context
+
+    def test_dashboard_rows_have_no_elo_if_true(self, glicko_on):
+        _, user, _, _, _ = self._world()
+
+        row = _login_client(user).get(reverse("pingpong:dashboard")).context[
+            "pending_confirmations"
+        ][0]
+
+        assert "elo_if_true" not in row
+        assert "delta_if_true" in row
+
+    def test_player_detail_has_no_elo_chart_keys(self, glicko_on):
+        _, user, me, _, _ = self._world()
+
+        context = _login_client(user).get(
+            reverse("pingpong:player_detail", args=[me.pk])
+        ).context
+
+        assert "elo_chart_labels" not in context
+        assert "elo_chart_data" not in context
+        assert "rating_chart_data" in context
+
+    def test_elo_keeps_every_alias(self, elo_seasons):
+        _, user, me, _, match = self._world()
+        client = _login_client(user)
+
+        detail = client.get(reverse("pingpong:match_detail", args=[match.pk])).context
+        dash = client.get(reverse("pingpong:dashboard")).context
+        profile = client.get(reverse("pingpong:player_detail", args=[me.pk])).context
+
+        for key in ELO_ALIASES:
+            assert key in detail
+        assert "elo_if_true" in dash["pending_confirmations"][0]
+        assert "elo_chart_data" in profile
+
+
+@pytest.mark.django_db
+class TestOldShapeLeaderboardCache:
+    def test_a_pre_deploy_entry_without_rating_and_peak_still_renders(self, elo_seasons):
+        from .conftest import PlayerRatingFactory
+
+        club, season = _club_with_current_season()
+        user, me = _member(club)
+        PlayerRatingFactory(
+            player=me, club=club, season=season, format="singles", matches=12,
+            rating=1612, peak=1650,
+        )
+        client = _login_client(user)
+        scope = elo.RatingScope(season, elo.SINGLES)
+        key = cache_utils.leaderboard_key(scope, str(views.DEFAULT_TOP_X), ratings.ELO)
+        client.get(reverse("pingpong:leaderboard"))
+        payload = cache.get(key)
+        assert payload is not None
+        for row in payload["rows"]:  # the shape written before the deploy
+            for neutral in ("rating", "peak", "rd", "last_rated_on"):
+                row.pop(neutral, None)
+            assert "elo_rating" in row
+        cache.set(key, payload, 600)
+
+        response = client.get(reverse("pingpong:leaderboard"))
+
+        row = response.context["player_stats"][0]
+        assert (row["rating"], row["peak"]) == (1612, 1650)
+        assert "1612" in response.content.decode()
+
+
+class TestSystemIsRequired:
+    @pytest.mark.parametrize(
+        "call",
+        [
+            lambda: views.LeaderboardView()._leaderboard_cache_key(
+                "all", "all", "", "", "10"
+            ),
+            lambda: views.LeaderboardView()._season_context(),
+            lambda: views.LeaderboardView._presentation_context(
+                [], "10", "all", "all", "", ""
+            ),
+            lambda: views.MatchDetailView._elo_deltas(None, {}),
+        ],
+        ids=["cache_key", "season_context", "presentation", "elo_deltas"],
+    )
+    def test_a_forgotten_system_raises(self, call):
+        with pytest.raises(TypeError, match="system"):
+            call()
+
+    def test_it_cannot_be_passed_positionally(self):
+        with pytest.raises(TypeError):
+            views.MatchDetailView._elo_deltas(None, {}, ratings.ELO)
+
+
+@pytest.mark.django_db
+class TestProjectedChangesByPlayer:
+    def test_each_figure_equals_the_players_written_glicko_change(self, glicko_on):
+        from .conftest import GameFactory, MatchFactory
+
+        club, season = _club_with_current_season()
+        members = [_member(club)[1] for _ in range(4)]
+        for p, (r, rd) in zip(members, ((1600, 60), (1450, 120), (1500, 90), (1380, 200))):
+            _glicko_row(p, r, rd, club=club, season=season, fmt="doubles")
+        match = MatchFactory(
+            team1_players=members[:2], team2_players=members[2:], is_double=True,
+            best_of=5, club=club,
+        )
+        for n in (1, 2, 3):
+            GameFactory(match=match, game_number=n, team1_score=11, team2_score=5)
+        match.refresh_from_db()
+        scope = ratings.display_scope(match)
+
+        previewed, pending = ratings.projected_changes_by_player(
+            match, scope, system=ratings.GLICKO
+        )
+        confirm_match(match)
+        applied, applied_pending = ratings.projected_changes_by_player(
+            match, scope, system=ratings.GLICKO
+        )
+
+        written = {
+            rc.player_id: rc.glicko_change
+            for rc in RatingChange.objects.filter(match=match, rating__season=season)
+        }
+        assert pending is True and applied_pending is False
+        assert previewed == written == applied
+        assert len(set(written.values())) > 1
+
+    def test_elo_has_no_per_player_split(self):
+        assert ratings.projected_changes_by_player(None, None, system=ratings.ELO) == (
+            {}, False,
+        )
+
+
+class TestAchievementCopy:
+    def test_the_number_goes_with_the_system_name(self):
+        text = "Beat someone rated 200+ Elo above you"
+
+        assert rating_tags.neutral_rating_copy(text, "glicko2") == (
+            "Beat someone rated well above you"
+        )
+        assert rating_tags.neutral_rating_copy(text, "elo") == text
+
+
+class TestExplainerTags:
+    def test_constants_come_from_their_owners(self):
+        from pingpong import glicko_adapter, seasons
+
+        assert rating_tags.rating_mean() == seasons.RATING_MEAN
+        assert rating_tags.season_rd_floor() == round(
+            glicko_adapter.DEFAULT_PARAMS.season_rd_floor
+        )
+
+
+@pytest.mark.django_db
+class TestExplainerCopy:
+    def test_the_additions_and_the_qualified_promise(self, glicko_on):
+        club, _ = _club_with_current_season()
+        user, _ = _member(club)
+
+        body = _login_client(user).get(reverse("pingpong:how_ratings_work")).content.decode()
+
+        assert "composite of the two opponents" in body
+        assert f"starts at least {rating_tags.season_rd_floor()} wide" in body
+        assert f"toward {rating_tags.rating_mean()}" in body
+        assert "unless another of your matches is confirmed first" in body
+
+
+@pytest.mark.django_db
+class TestNitFixes:
+    def test_the_verdict_uses_the_displayed_rounded_rd(self, glicko_on):
+        from pingpong import glicko_adapter
+
+        club, season = _club_with_current_season()
+        user, me = _member(club)
+        edge = glicko_adapter.PROVISIONAL_RD  # 110.0
+        # Just over the line unrounded, shown as the line: not provisional.
+        _glicko_row(me, 1500, edge + 0.4, club=club, season=season, matches=30)
+        _glicko_row(me, 1500, edge + 0.4, club=club, matches=30)
+
+        row = _login_client(user).get(reverse("pingpong:leaderboard")).context[
+            "player_stats"
+        ][0]
+
+        assert row["rd"] == round(edge)
+        assert row["status"] == ratings.ESTABLISHED
+
+    def test_returning_says_since_when(self, glicko_on):
+        club, season = _club_with_current_season()
+        user, me = _member(club)
+        then = _tz.now().date() - _dt.timedelta(days=200)
+        _glicko_row(me, 1500, 300, club=club, season=season, matches=30, last=then)
+        _glicko_row(me, 1500, 300, club=club, matches=30, last=then)
+        client = _login_client(user)
+
+        board = client.get(reverse("pingpong:leaderboard")).content.decode()
+        profile = client.get(reverse("pingpong:player_detail", args=[me.pk])).content.decode()
+
+        expected = f"Not played since {then.day} {then:%b %Y}"
+        assert expected in board
+        assert expected in profile
+
+    def test_one_explainer_link_when_the_help_is_open_on_the_page(self, glicko_on):
+        club, season = _club_with_current_season()
+        user, me = _member(club)
+        _glicko_row(me, 1500, 300, club=club, season=season, matches=1)
+        _glicko_row(me, 1500, 300, club=club, matches=1)
+
+        body = _login_client(user).get(reverse("pingpong:leaderboard")).content.decode()
+
+        assert 'id="rating-help"' in body
+        assert body.count("data-how-ratings-link") == 1
+
+    def test_head_to_head_shows_both_players_rating_and_uncertainty(self, glicko_on):
+        club = ClubFactory()
+        user, me = _member(club)
+        _, them = _member(club)
+        _glicko_row(me, 1700, 50, club=club)
+        _glicko_row(them, 1400, 70, club=club)
+
+        body = _login_client(user).get(
+            reverse("pingpong:head_to_head"), {"player1": me.pk, "player2": them.pk}
+        ).content.decode()
+
+        prediction = body[body.index("data-prediction"):]
+        assert prediction.count("data-rating-value") == 2
+        assert "±50" in prediction and "±70" in prediction

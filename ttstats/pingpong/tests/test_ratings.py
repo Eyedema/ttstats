@@ -106,7 +106,9 @@ class TestFlagOffIsUnchanged:
         from pingpong.views import LeaderboardView
 
         view = LeaderboardView()
-        assert view._leaderboard_cache_key("all", "all", "", "", "10") == (
+        assert view._leaderboard_cache_key(
+            "all", "all", "", "", "10", system=ratings.ELO
+        ) == (
             "leaderboard_0_all_all___10"
         )
 
@@ -312,14 +314,16 @@ class TestSeasonLeaderboardCache:
         view = LeaderboardView()
         keys = {
             view._leaderboard_cache_key(
-                "all", "all", "", "", "10", rating_scope=elo.RatingScope(s, f)
+                "all", "all", "", "", "10", rating_scope=elo.RatingScope(s, f),
+                system=ratings.ELO,
             )
             for s in (season, None)
             for f in (elo.SINGLES, elo.DOUBLES)
         }
         assert len(keys) == 4
         assert view._leaderboard_cache_key(
-            "all", "all", "", "", "10", rating_scope=elo.RatingScope(season, elo.SINGLES)
+            "all", "all", "", "", "10", rating_scope=elo.RatingScope(season, elo.SINGLES),
+            system=ratings.ELO,
         ) == f"leaderboard_0_season{season.pk}_singles_10"
 
     def test_hit_and_miss_produce_identical_context(self):

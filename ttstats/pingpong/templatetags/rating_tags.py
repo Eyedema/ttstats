@@ -8,7 +8,7 @@ import re
 
 from django import template
 
-from .. import elo, glicko_adapter
+from .. import elo, glicko_adapter, seasons
 
 register = template.Library()
 
@@ -25,7 +25,19 @@ def provisional_matches():
     return elo.PROVISIONAL_MATCHES
 
 
-_RATED_ABOVE = re.compile(r"(\d+\+) Elo above you")
+@register.simple_tag
+def rating_mean():
+    """The rating a season's carry-over is pulled toward."""
+    return seasons.RATING_MEAN
+
+
+@register.simple_tag
+def season_rd_floor():
+    """The least ± a season rating starts with."""
+    return round(glicko_adapter.DEFAULT_PARAMS.season_rd_floor)
+
+
+_RATED_ABOVE = re.compile(r"\d+\+ Elo above you")
 
 
 @register.filter
@@ -37,5 +49,5 @@ def neutral_rating_copy(text, rating_system=""):
     """
     if rating_system != "glicko2" or not text:
         return text
-    text = _RATED_ABOVE.sub(r"\1 points above you", str(text))
+    text = _RATED_ABOVE.sub("well above you", str(text))
     return text.replace("personal Elo peak", "personal rating peak")

@@ -162,7 +162,7 @@ The plan is `docs/decisions/kan-63-cutover-plan.md`.
   and `RatingWriter` write them via `glicko_adapter.history_values` (the writer
   checks the model has the fields: 0040 runs on a historical model).
   `SeasonStanding` carries `rating_system` and `rd`.
-- **Views emit neutral keys** (`rating`, `rd`, `peak`, `status`, `status_reason`,
+- **Views emit neutral keys** (`rating`, `rd`, `peak`, `status`, `reason`,
   `side1_delta`, `delta_is_pending`, `nav_rating`, `nav_rd`, `rating_chart_*`);
   the Elo-named keys stay for the Elo path and carry the shown system's value.
 - **Display RD is inflated to today** (`ratings.display_rd`, the only reader of

@@ -263,6 +263,32 @@ def projected_change_for(match, player, scope, *, system):
     return 0
 
 
+def projected_changes_by_player(match, scope, *, system):
+    """({player_id: signed change}, is_pending) for a Glicko match; ({}, True) if none.
+
+    Doubles are rated per player, so the honest preview is one figure per
+    player, not the side mean. Applied: each player's stored `glicko_change`
+    (NULL reads 0). Pending: the same guarded projection confirmation writes,
+    through `history_values`, so each figure equals what will be stored.
+    Elo has no per-player split: it returns ({}, False).
+    """
+    if system != GLICKO:
+        return {}, False
+    applied = applied_changes(match, scope, system=system)
+    if applied:
+        return applied, False
+    projection = _guarded_projection(match, scope)
+    if projection is None:
+        return {}, True
+    return (
+        {
+            update.player_id: glicko_adapter.history_values(update)["glicko_change"]
+            for update in projection.updates
+        },
+        True,
+    )
+
+
 def match_deltas(match, scope, *, system):
     """(side1_delta, side2_delta, is_pending) for a match in `scope`.
 
@@ -308,6 +334,20 @@ def match_deltas(match, scope, *, system):
     if projection is None:
         return 0, 0, True
     return projection.side1_change, projection.side2_change, True
+
+
+def glicko_readings(players, *, scope, day=None):
+    """{player_id: (rating, rd)} rounded, as `win_probability` reads them today."""
+    players = list(players)
+    day = day or timezone.now().date()
+    book = elo.LiveBook.for_players([p.pk for p in players], scope.season, scope.format)
+    out = {}
+    for p in players:
+        reading = glicko_adapter.glicko_reading(
+            book, p.pk, scope, day, glicko_adapter.DEFAULT_PARAMS
+        )
+        out[p.pk] = (round(reading.rating), round(reading.rd))
+    return out
 
 
 def win_probability(side1, side2, *, system, scope, match=None, day=None):
@@ -448,6 +488,7 @@ def leaderboard(scope, top_x, *, system):
                         else r.glicko_rating
                     ),
                     "last_rated_on": r.last_rated_on,
+                    "last_played": r.last_rated_on,
                     "_sort": r.glicko_rating,
                 }
             )
@@ -559,12 +600,15 @@ def player_format_ratings(player, *, system):
 def _cell(row, experience, system, peaks, today):
     if system == GLICKO:
         has = row is not None and row.glicko_rating is not None
-        rd = display_rd(row, today) if has else None
+        shown = display_rd(row, today) if has else None
+        # The verdict uses the rounded RD: the same figure the page shows as the ±.
+        rd = round(shown) if shown is not None else None
         status = rating_status(has, experience=experience, rd=rd, system=system)
         top = peaks.get(row.pk) if row is not None else None
         return {
             "rating": round(row.glicko_rating) if has else None,
-            "rd": round(rd) if rd is not None else None,
+            "rd": rd,
+            "last_played": row.last_rated_on if has else None,
             "peak": round(max(top, row.glicko_rating))
             if has and top is not None
             else (round(row.glicko_rating) if has else None),

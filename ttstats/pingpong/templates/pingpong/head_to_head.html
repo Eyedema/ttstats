@@ -78,6 +78,10 @@
                 <div class="bg-destructive transition-all" style="width: {{ player2_win_pct }}%"></div>
             </div>
             {% if rating_system == 'glicko2' %}
+            <div class="flex justify-between text-xs text-muted-foreground mt-2">
+                <span class="n">{% include 'pingpong/_rating_value.html' with rating=player1_rating rd=player1_rd %}</span>
+                <span class="n">{% include 'pingpong/_rating_value.html' with rating=player2_rating rd=player2_rd %}</span>
+            </div>
             <p class="text-xs text-muted-foreground mt-2">Singles ratings, and how sure we are of each. <a href="{% url 'pingpong:how_ratings_work' %}" class="underline" data-how-ratings-link>How ratings work</a></p>
             {% else %}
             <div class="flex justify-between text-xs text-muted-foreground mt-2">
