@@ -8,10 +8,11 @@
 #   2. DATABASE_URL is cleared, so an exported Supabase URL can never point the
 #      suite at the clone of production.
 #   3. Static files are served the way prod serves them (settings/e2e.py):
-#      collectstatic through the hashing + gzip manifest storage, served by
-#      WhiteNoise. The byte budgets and `npm run perf` measure what a phone
-#      actually downloads, and a template referencing a file missing from the
-#      manifest 500s here exactly as it would in production.
+#      collectstatic through the hashing + compressing (Brotli and gzip)
+#      manifest storage, served by WhiteNoise. The byte budgets and
+#      `npm run perf` measure what a phone actually downloads, and a template
+#      referencing a file missing from the manifest 500s here exactly as it
+#      would in production.
 #
 # Env: E2E_DB / E2E_STATIC_ROOT let a second server (npm run perf, port 8126)
 # run beside the suite without sharing its database or STATIC_ROOT.

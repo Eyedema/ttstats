@@ -97,7 +97,8 @@ document crosses the network.
 - **DCL trails FCP by ~1 s cold**: scripts still downloading after first paint.
 - Warm, every page paints in ~620 ms: one 400 ms RTT plus the HTML. Only
   fewer round trips or less HTML moves that number.
-- Only gzip: `brotli` is not installed, so WhiteNoise writes no `.br` files.
+- Only gzip: `brotli` is not installed, so WhiteNoise writes no `.br` files
+  (fixed by S10.2).
 
 ## Budgets (CI)
 
@@ -122,6 +123,79 @@ the dashboard row at JS 106.7 > 40 and total 169.9 > 106; reverted.
 
 One subsection per story: revision, the perf table (or the rows that moved),
 and the budget rows tightened.
+
+### After S10.2 (KAN-122): Brotli, deferred htmx, no vendored maps
+
+Revision: `feature/kan-122` on top of `0010354`, 2026-11-06, same Chromium,
+profile and method as the baseline. Median of 5.
+
+**What changed.** `brotli==1.2.1` in `requirements.txt`, so WhiteNoise writes
+a `.br` beside every `.gz` at collectstatic and serves it to
+`Accept-Encoding: br`. htmx in `<head>` became `defer` (still before Alpine).
+`npm run vendor` no longer copies `.map` files and strips the
+`sourceMappingURL` comments (and deletes stale maps); browsers never fetched
+them, so this saves image size and collectstatic time, not page bytes.
+
+**Cold cache** (Δ vs. baseline):
+
+| Page | Reqs | JS KB | CSS KB | Total KB | FCP ms | LCP ms | DCL ms | Load ms |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| dashboard | 8 | 33.7 (−3.6) | 7.5 (−1.1) | 94.9 (−4.7) | 1504 (−564) | 1504 (−564) | 2795 (−276) | 2822 (−304) |
+| play | 8 | 33.7 (−3.6) | 7.5 (−1.1) | 94.3 (−4.8) | 1496 (−564) | 1496 (−564) | 2797 (−303) | 2823 (−302) |
+| leaderboard | 8 | 33.7 (−3.6) | 7.5 (−1.1) | 95.9 (−4.8) | 1484 (−588) | 1484 (−588) | 2776 (−297) | 2796 (−328) |
+| match list | 8 | 33.7 (−3.6) | 7.5 (−1.1) | 96.8 (−4.7) | 1500 (−564) | 1500 (−564) | 2792 (−309) | 2819 (−306) |
+| match detail (momentum) | 9 | 93.7 (−13.0) | 7.5 (−1.1) | 156.9 (−14.0) | 1524 (−840) | 1524 (−840) | 4025 (−246) | 4027 (−244) |
+| player detail | 9 | 93.7 (−13.0) | 7.5 (−1.1) | 160.9 (−14.0) | 1536 (−836) | 1536 (−836) | 4020 (−244) | 4021 (−243) |
+| head-to-head | 9 | 93.7 (−13.0) | 7.5 (−1.1) | 159.2 (−14.0) | 1528 (−840) | 1528 (−840) | 4017 (−239) | 4019 (−238) |
+
+HTML, fonts, TTFB and server ms did not move (HTML is still gzip; woff2 is
+already compressed). **Warm cache** did not move either (FCP 612–620 ms):
+only the document crosses the network there.
+
+**Which change did what.** One extra run (dashboard and match detail only)
+with Brotli on but htmx still blocking:
+
+| Page | FCP: baseline → Brotli only → + defer | DCL: baseline → Brotli only → + defer |
+|---|---|---|
+| dashboard | 2068 → 2028 → 1504 | 3071 → 3066 → 2795 |
+| match detail | 2364 → 2300 → 1524 | 4271 → 4023 → 4025 |
+
+- **Deferring htmx is the paint win** (−520 to −780 ms FCP): the parser no
+  longer stops to fetch 15 KB before rendering the body.
+- **Brotli is the byte win** (−4.7 KB on every page, −14 KB on chart pages;
+  Chart.js 69 → 60 KB) and, on the chart pages, the DCL win (−250 ms), since
+  DCL there waits on Chart.js's bytes.
+- **Dynamic Brotli for HTML: skipped.** Dashboard HTML is 10.0 KB gzip-6 vs.
+  9.1 KB Brotli q5 (8.2 KB q11): ~1 KB, ~20 ms at this profile, for a custom
+  middleware on every response. Not worth it.
+
+**WebKit and Brotli over HTTP.** WebKit (like Safari) only sends
+`Accept-Encoding: br` over HTTPS, and the e2e server is plain HTTP, so the
+suite's WebKit kept getting gzip. Prod is HTTPS, so iPhones get `.br`.
+`budgets.spec.js` therefore sends `Accept-Encoding: br, gzip, deflate`
+explicitly (WebKit decodes it fine) so the budgets weigh what a phone gets.
+
+**Budgets tightened** (WebKit, cold, Brotli; budget ≈ measured + 5 %):
+
+| Page | Measured (JS / CSS / total KB, reqs) | Budget (JS / CSS / total KB, reqs) |
+|---|---|---|
+| dashboard | 33.7 / 7.5 / 95.7, 9 | 36 / 8 / 101, 10 |
+| play | 33.7 / 7.5 / 95.3, 9 | 36 / 8 / 100, 10 |
+| leaderboard | 33.7 / 7.5 / 96.8, 9 | 36 / 8 / 102, 10 |
+| match list | 33.7 / 7.5 / 97.6, 9 | 36 / 8 / 103, 10 |
+| match detail | 93.7 / 7.5 / 157.8, 10 | 99 / 8 / 166, 11 |
+| player detail | 93.7 / 7.5 / 161.7, 10 | 99 / 8 / 170, 11 |
+| head-to-head | 93.7 / 7.5 / 160.1, 10 | 99 / 8 / 169, 11 |
+
+**Prod check pending deploy.** Before this story,
+`curl -sI -H 'Accept-Encoding: br, gzip' https://pingpong.ubaldopuocci.org/static/pingpong/css/app.d453d2f8b455.css`
+answered `content-encoding: gzip` (HTTP/2, gunicorn, 8312 B,
+`max-age=315360000, public, immutable`); with `br` alone, identity (41803 B).
+The proxy passes gzip through untouched; after deploy the same request should
+show `content-encoding: br` (7234 B).
+
+_Pending: CONN_MAX_AGE / cached sessions / Server-Timing, prefetch, view
+transitions, pull-to-refresh._
 
 ### After S10.3 (KAN-123): Server-Timing, persistent connections, cached sessions
 

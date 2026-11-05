@@ -5,7 +5,9 @@
 // The copies are gitignored and rebuilt by `npm run vendor` -- same contract as
 // the compiled CSS. Pinning happens in package-lock.json rather than in a URL.
 
-import { mkdirSync, copyFileSync, statSync } from 'node:fs';
+import {
+  mkdirSync, copyFileSync, statSync, readFileSync, writeFileSync, readdirSync, rmSync,
+} from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -14,29 +16,20 @@ const vendorJs = join(root, 'ttstats/pingpong/static/pingpong/js/vendor');
 const vendorCss = join(root, 'ttstats/pingpong/static/pingpong/css/vendor');
 const vendorFonts = join(root, 'ttstats/pingpong/static/pingpong/fonts');
 
-// Source maps are not optional extras here. WhiteNoise's manifest storage
-// resolves every sourceMappingURL a vendored file declares, and hard-fails
-// collectstatic -- and therefore the deploy -- if the target is missing.
+// No source maps (KAN-122). Nothing reads them -- Sentry is server-side only
+// and no map is uploaded anywhere -- and they were the bulk of the vendored
+// bytes. But WhiteNoise's manifest storage resolves every sourceMappingURL a
+// file declares and hard-fails collectstatic (and so the deploy) if the target
+// is missing, so the comment is stripped from each .js/.css as it is copied.
 const assets = [
   ['htmx.org/dist/htmx.min.js', vendorJs, 'htmx.min.js'],
   ['alpinejs/dist/cdn.min.js', vendorJs, 'alpine.min.js'],
   ['chart.js/dist/chart.umd.js', vendorJs, 'chart.umd.js'],
-  ['chart.js/dist/chart.umd.js.map', vendorJs, 'chart.umd.js.map'],
   ['tom-select/dist/js/tom-select.complete.min.js', vendorJs, 'tom-select.complete.min.js'],
-  [
-    'tom-select/dist/js/tom-select.complete.min.js.map',
-    vendorJs,
-    'tom-select.complete.min.js.map',
-  ],
   [
     'tom-select/dist/css/tom-select.bootstrap5.min.css',
     vendorCss,
     'tom-select.bootstrap5.min.css',
-  ],
-  [
-    'tom-select/dist/css/tom-select.bootstrap5.min.css.map',
-    vendorCss,
-    'tom-select.bootstrap5.min.css.map',
   ],
   // Archivo (OFL), the app's only typeface. Self-hosted because prod's CSP
   // allows no external hosts at all -- a Google Fonts link would silently not
@@ -48,14 +41,29 @@ const assets = [
   ['@fontsource/archivo/files/archivo-latin-800-normal.woff2', vendorFonts, 'archivo-800.woff2'],
 ];
 
+// `//# sourceMappingURL=...` (JS) or `/*# sourceMappingURL=... */` (CSS).
+const SOURCE_MAP_COMMENT = /^[ \t]*(?:\/\/[#@] sourceMappingURL=\S*|\/\*[#@] sourceMappingURL=\S*\s*\*\/)[ \t]*$/gm;
+
 mkdirSync(vendorJs, { recursive: true });
 mkdirSync(vendorCss, { recursive: true });
 mkdirSync(vendorFonts, { recursive: true });
 
+// The vendor dirs are build output; a .map from an older build must not
+// linger and get collected (and served) forever.
+for (const dir of [vendorJs, vendorCss]) {
+  for (const name of readdirSync(dir)) {
+    if (name.endsWith('.map')) rmSync(join(dir, name));
+  }
+}
+
 for (const [source, destDir, name] of assets) {
   const from = join(root, 'node_modules', source);
   const to = join(destDir, name);
-  copyFileSync(from, to);
+  if (/\.(js|css)$/.test(name)) {
+    writeFileSync(to, readFileSync(from, 'utf8').replace(SOURCE_MAP_COMMENT, ''));
+  } else {
+    copyFileSync(from, to);
+  }
   console.log(`  ${name} (${statSync(to).size} bytes)`);
 }
 

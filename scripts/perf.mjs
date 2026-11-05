@@ -334,7 +334,7 @@ async function main() {
       '',
       `- Revision: \`${gitRevision()}\`, ${new Date().toISOString().slice(0, 10)}`,
       `- Chromium ${browserVersion}, iPhone 13 viewport, CDP network emulation: ${PROFILE.label}`,
-      '- Server: `scripts/e2e_server.sh` (dev settings + prod static pipeline: hashed, gzip, WhiteNoise), `runserver` over HTTP/1.1, seeded SQLite, server cache warmed',
+      '- Server: `scripts/e2e_server.sh` (dev settings + prod static pipeline: hashed, Brotli + gzip, WhiteNoise), `runserver` over HTTP/1.1, seeded SQLite, server cache warmed',
       '- Bytes are transferred (compressed body + headers); KB = 1024 B. Cold = empty HTTP cache; warm = same page loaded once before.',
       '- Server ms = request sent → first header byte, without the emulated latency (the server\'s own time). TTFB includes the emulated RTT.',
       '- LCP spread = (max − min) / median across the runs.',
