@@ -94,14 +94,21 @@ The contract is `docs/decisions/kan-9-seasons.md`; these are the rules it implie
   Always pass `rd_max=params.rd_max` explicitly.
 - **A Glicko failure must never abort the Elo write**: only the pure
   projection is wrapped in try/except (logged, scope skipped); non-finite
-  results are rejected. Doubles project to `None` until KAN-70.
+  results are rejected.
+- **Doubles (KAN-70) are rated per player against a composite opponent**
+  (`glicko_adapter.composite_opponent`: mean rating, RMS of the RDs), each with
+  their own RD; only the doubles-format rows change. Sides may be any size. An
+  empty side projects to `None`; a player on both sides (or twice on one) is
+  logged and skipped. `side1_change`/`side2_change` are the mean delta of the
+  side's players; `updates` is per player.
 - `RatingWriter` writes the shadow only if the model has the fields, because
   migration 0040 runs it against the historical 0039 model.
 - `DEFAULT_PARAMS` are PLACEHOLDERS until KAN-68 fits them.
 - Only `recalculate_elo` rebuilds the shadow; `elo_parity` does not.
-- **Deploying 0044 must be followed by `recalculate_elo --format singles`**:
+- **Deploying 0044 must be followed by `recalculate_elo --format singles`,
+  and KAN-70 by `recalculate_elo --format doubles`**:
   existing rows have NULL shadow fields and would otherwise start from
-  1500/RD 350 at their next confirmation. It rebuilds the singles rows
+  1500/RD 350 at their next confirmation. It rebuilds that format's rows
   including the shadow, leaves `Player.elo_*` and `EloHistory` alone, and is
   idempotent (pinned in `test_glicko_shadow.py`).
 - A season row with NULL shadow fields is seeded like a missing one (decision

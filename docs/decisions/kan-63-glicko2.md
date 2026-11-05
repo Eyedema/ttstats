@@ -97,3 +97,40 @@ growth over the long idle gaps.
   `last_rated_on` (date, null).
 - **S6.5:** fit τ, `RATING_PERIOD_DAYS` and `SEASON_RD_FLOOR`, and record
   them here.
+
+## Doubles (KAN-70, answers Open Question 4)
+
+**Each player is rated per player, in a one-game period, against a composite
+opponent made from the other side.** For a player `i` on one side:
+
+- The opponent is one virtual player with
+  `r_opp = mean(inflated r of the opposing players)` and
+  `RD_opp = sqrt(mean(inflated RD^2 of the opposing players))` (the RMS, not the
+  plain mean of RDs). Two well-known players form a predictable pair; one RD-350
+  partner raises the pair's uncertainty.
+- Player `i` is then updated exactly as in singles (decision 1): their own
+  inflated rating, RD and volatility against `(r_opp, RD_opp)`, with the team
+  result as the score. Their own partner does not enter the update, so a new
+  player (high RD) learns much more than an established partner from the same
+  result. That asymmetry is the point.
+- Only the doubles-format `PlayerRating` rows change (all-time, and the season
+  row if any). Singles rows are untouched, and vice versa. Seeding, idle
+  inflation and the season floor are the singles rules, per format.
+- A side can have any number of players; nothing assumes 2. An empty side
+  keeps the existing guard (no projection). A player on both sides (or twice
+  on one side) is a data error: it is logged and Glicko is skipped for that
+  match, while Elo is unaffected.
+- Preview equals written: `projected_glicko_changes` returns one `GlickoUpdate`
+  per player in `updates`; those per-player values are what the UI shows.
+  `side1_change` / `side2_change` are per-side summaries: the rounded **mean
+  delta of that side's players** (for singles, the player's own delta).
+- The side-combination policy is the pure helper
+  `glicko_adapter.composite_opponent(readings)`; `glicko2.py` is unchanged.
+- `rating_divergence` reports doubles in their own section. Its pre-match
+  prediction treats each side as one composite player (mean rating, RMS RD).
+
+**Rejected: a pair as one composite entity with its own phi, or "weighted
+per-player attribution".** Pairs are fluid, so a pair entity would need its own
+persisted state (and a policy for pair identity, partial overlap and
+dissolution). Weighted attribution needs an invented weighting. The per-player
+update needs neither and keeps the stored state exactly what singles stores.

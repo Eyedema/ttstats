@@ -128,7 +128,8 @@ class TestConfirmationWritesTheShadow:
         assert p1.elo_rating == 1500 + round(k * 0.5)  # 50/50: the Elo arithmetic
         assert _row(p1).rating == p1.elo_rating
 
-    def test_a_doubles_match_confirms_and_leaves_the_shadow_null(self):
+    def test_a_doubles_match_writes_the_shadow_on_the_doubles_rows(self):
+        # Changed deliberately by KAN-70: doubles used to leave the shadow NULL.
         players = [PlayerFactory() for _ in range(4)]
 
         match = _finish(players[:2], players[2:])
@@ -136,16 +137,18 @@ class TestConfirmationWritesTheShadow:
         assert EloHistory.objects.filter(match=match).count() == 4
         rows = PlayerRating.all_objects.filter(format="doubles")
         assert rows.count() == 4
-        assert all(_state(r) == (None, None, None, None) for r in rows)
+        assert all(all(v is not None for v in _state(r)) for r in rows)
 
-    def test_doubles_project_to_none(self):
+    def test_a_doubles_match_projects_one_update_per_player(self):
+        # Changed deliberately by KAN-70: doubles used to project to None.
         players = [PlayerFactory() for _ in range(4)]
         match = _finish(players[:2], players[2:])
 
-        assert (
-            glicko_adapter.projected_glicko_changes(match, RatingScope(None, "doubles"))
-            is None
+        projection = glicko_adapter.projected_glicko_changes(
+            match, RatingScope(None, "doubles")
         )
+
+        assert {u.player_id for u in projection.updates} == {p.pk for p in players}
 
     def test_a_match_with_no_winner_projects_to_none(self):
         match = MatchFactory(

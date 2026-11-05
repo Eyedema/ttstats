@@ -10,14 +10,18 @@ It is a **shadow**: the numbers are computed and stored beside the Elo ones by
 for the live write and the replay alike, and it reads only stored state plus
 `match.date_played.date()`, never "now".
 
-Doubles are out of scope until KAN-70 and project to `None`.
+Doubles (KAN-70): each player is rated in a one-game period against a composite
+opponent built from the other side (`composite_opponent`), with their own RD.
 """
 
+import logging
 import math
 from typing import NamedTuple
 
 from . import glicko2, seasons
 from .glicko2 import Rating
+
+logger = logging.getLogger(__name__)
 
 
 class GlickoParams(NamedTuple):
@@ -40,6 +44,23 @@ DEFAULT_PARAMS = GlickoParams(
 SHADOW_FIELDS = ("glicko_rating", "rd", "volatility", "last_rated_on")
 
 
+def composite_opponent(readings):
+    """One virtual opponent for a side: (mean rating, RMS of the RDs).
+
+    `readings` are the side's inflated pre-match `Rating`s (anything with
+    `.rating` and `.rd`), any number of them. The rating is the plain mean; the
+    RD is sqrt(mean(RD^2)), so two well-known players form a predictable pair
+    while one RD-350 partner raises the pair's uncertainty. Pure, no database.
+    """
+    readings = list(readings)
+    if not readings:
+        raise ValueError("a composite opponent needs at least one player")
+    n = len(readings)
+    rating = sum(r.rating for r in readings) / n
+    rd = math.sqrt(sum(r.rd**2 for r in readings) / n)
+    return rating, rd
+
+
 class GlickoUpdate(NamedTuple):
     """One player's Glicko movement: stored state, inflated to the match day, result."""
 
@@ -50,6 +71,12 @@ class GlickoUpdate(NamedTuple):
 
 
 class GlickoProjection(NamedTuple):
+    """`updates` holds one GlickoUpdate per player (what the UI shows per player).
+
+    `side1_change` / `side2_change` are per-side summaries: the rounded mean
+    rating delta of that side's players (the player's own delta in singles).
+    """
+
     side1_change: int
     side2_change: int
     updates: tuple
@@ -150,8 +177,9 @@ def _rounded_change(new, old):
 def projected_glicko_changes(match, scope, *, book=None, params=DEFAULT_PARAMS):
     """A `GlickoProjection` for a match, calculated but not applied; None if not rated.
 
-    None for a match with no winner, an empty side, or doubles (KAN-70). Each
-    player is rated against the opponent's *inflated* rating and RD as one game.
+    None for a match with no winner, an empty side, or a player on both sides
+    (logged). Each player is rated against the other side's composite opponent
+    (inflated ratings and RDs) as one game.
     """
     from .elo import LiveBook
 
@@ -169,33 +197,58 @@ def project(match, scope, book, params):
     """
     from .models import Side
 
-    if not match.winner_side or match.is_double:
+    if not match.winner_side:
         return None
     side1, side2 = match.sides()
-    if len(side1) != 1 or len(side2) != 1:
+    if not side1 or not side2:
+        return None
+    ids1, ids2 = [p.pk for p in side1], [p.pk for p in side2]
+    if (
+        len(set(ids1)) != len(ids1)
+        or len(set(ids2)) != len(ids2)
+        or set(ids1) & set(ids2)
+    ):
+        logger.warning(
+            f"Glicko-2 skipped for match {getattr(match, 'pk', None)}: "
+            "a player appears more than once across the sides"
+        )
         return None
 
     match_day = match.date_played
     match_day = match_day.date() if hasattr(match_day, "hour") else match_day
-    p1, p2 = side1[0], side2[0]
 
-    old1, pre1 = _reading(book, p1.pk, scope, match_day, params)
-    old2, pre2 = _reading(book, p2.pk, scope, match_day, params)
-    s1 = 1.0 if match.winner_side == Side.ONE else 0.0
+    readings = {
+        side: [_reading(book, p.pk, scope, match_day, params) for p in players]
+        for side, players in ((Side.ONE, side1), (Side.TWO, side2))
+    }
+    opponent = {
+        Side.ONE: composite_opponent(pre for _, pre in readings[Side.TWO]),
+        Side.TWO: composite_opponent(pre for _, pre in readings[Side.ONE]),
+    }
+    updates = {Side.ONE: [], Side.TWO: []}
+    for side, players in ((Side.ONE, side1), (Side.TWO, side2)):
+        score = 1.0 if match.winner_side == side else 0.0
+        opp_rating, opp_rd = opponent[side]
+        for p, (old, pre) in zip(players, readings[side]):
+            new = glicko2.rate(
+                pre,
+                [glicko2.Game(opp_rating, opp_rd, score)],
+                params.tau,
+                rd_max=params.rd_max,
+            )
+            updates[side].append(GlickoUpdate(p.pk, old, pre, new))
 
-    new1 = glicko2.rate(
-        pre1, [glicko2.Game(pre2.rating, pre2.rd, s1)], params.tau, rd_max=params.rd_max
-    )
-    new2 = glicko2.rate(
-        pre2,
-        [glicko2.Game(pre1.rating, pre1.rd, 1.0 - s1)],
-        params.tau,
-        rd_max=params.rd_max,
-    )
+    def side_change(side_updates):
+        n = len(side_updates)
+        return _rounded_change(
+            sum(u.new.rating for u in side_updates) / n,
+            sum(u.old.rating for u in side_updates) / n,
+        )
+
     return GlickoProjection(
-        _rounded_change(new1.rating, old1.rating),
-        _rounded_change(new2.rating, old2.rating),
-        (GlickoUpdate(p1.pk, old1, pre1, new1), GlickoUpdate(p2.pk, old2, pre2, new2)),
+        side_change(updates[Side.ONE]),
+        side_change(updates[Side.TWO]),
+        tuple(updates[Side.ONE] + updates[Side.TWO]),
     )
 
 

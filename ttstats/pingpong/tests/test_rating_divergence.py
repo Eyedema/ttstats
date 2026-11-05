@@ -244,17 +244,55 @@ class TestReportContent:
             == max(Match.objects.values_list("date_played", flat=True)).date()
         )
 
-    def test_doubles_have_their_own_section_and_do_not_crash(self):
+    def test_doubles_have_their_own_glicko_section_and_do_not_crash(self):
+        # Changed deliberately by KAN-70: doubles used to be "not rated yet".
         _history()
-        report = run_divergence()
-        doubles = _doubles(report)
+        report = run_divergence(tiny_rd=1000)
+        singles, doubles = _singles(report), _doubles(report)
         assert doubles.matches == 1
-        assert doubles.glicko_rated is False
+        assert doubles.glicko_rated is True
         assert doubles.prediction["elo"]["all"].n == 1
+        assert doubles.prediction["glicko"]["all"].n == 1
+        assert doubles.skipped_shadow == 0 and singles.skipped_shadow == 0
+        assert len(doubles.players) == 4  # Ada, Bob, Cy, Di
+        assert all(p.glicko is not None and p.rd is not None for p in doubles.players)
         text = report.render()
         assert "DOUBLES" in text
-        assert "not rated under Glicko-2 yet" in text
-        assert doubles.as_dict()["kendall_tau_b"] is None
+        assert "not rated under Glicko-2" not in text
+        doubles_text = text[text.index("DOUBLES") :]
+        assert "Kendall tau-b" in doubles_text
+        assert "Glicko projections skipped in doubles: 0" in text
+        assert doubles.as_dict()["glicko_rated"] is True
+        assert doubles.as_dict()["kendall_tau_b"] is not None
+        # Singles ratings are not touched by the doubles match.
+        assert {p.name for p in singles.players} == {"Ada", "Bob", "Cy", "Di", "Eve"}
+
+    def test_a_doubles_prediction_is_the_composite_win_probability(self):
+        a, b, c, d = (PlayerFactory() for _ in range(4))
+        _play([a, b], [c, d], day=0, winner=Side.TWO)
+        report = run_divergence(tiny_rd=1000)
+        # Everyone unrated: 1500 / RD 350 on both sides, so exactly 0.5.
+        stats = _doubles(report).prediction["glicko"]["all"]
+        assert stats.n == 1
+        assert stats.brier == pytest.approx((0.5 - 0.0) ** 2)
+
+    def test_skipped_doubles_projections_are_reported_apart_from_singles(self):
+        _history()
+        real = rating_divergence.glicko_adapter.project
+
+        def doubles_fail(match, scope, book, params):
+            if match.is_double:
+                raise glicko2.Glicko2Error("doubles only")
+            return real(match, scope, book, params)
+
+        with mock.patch.object(
+            rating_divergence.glicko_adapter, "project", doubles_fail
+        ):
+            report = run_divergence(tiny_rd=1000)
+        assert _doubles(report).skipped_shadow == 1
+        assert _singles(report).skipped_shadow == 0
+        assert report.skipped_shadow == 1
+        assert "Glicko projections skipped in doubles: 1" in report.render()
 
     def test_rateable_set_is_the_confirmed_one(self):
         ada, bob = PlayerFactory(name="Ada"), PlayerFactory(name="Bob")

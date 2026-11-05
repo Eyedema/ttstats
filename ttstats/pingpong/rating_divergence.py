@@ -19,8 +19,10 @@ The harness never walks history any other way, so it cannot drift from the
 replay that `recalculate_elo` uses.
 
 RD at the end is inflated to the history's LAST match date, never `now()`, so
-two runs on the same data print the same bytes. Doubles have no Glicko shadow
-yet (KAN-70): they report Elo prediction only.
+two runs on the same data print the same bytes. Doubles (KAN-70) are rated per
+player against a composite opponent and reported in their own section; their
+pre-match Glicko prediction treats each side as one composite player (mean
+rating, RMS of the RDs, `glicko_adapter.composite_opponent`).
 
 Parameters are the PLACEHOLDER defaults unless overridden; this harness is the
 instrument KAN-68 uses to fit them.
@@ -199,6 +201,9 @@ class FormatReport:
     format: str
     glicko_rated: bool
     matches: int = 0
+    skipped_shadow: int = (
+        0  # matches of this format whose Glicko projection was skipped
+    )
     prediction: dict = field(default_factory=dict)  # model -> subset -> PredictionStats
     players: list = field(default_factory=list)  # comparable PlayerRows, by Glicko rank
     not_comparable: list = field(default_factory=list)
@@ -214,6 +219,7 @@ class FormatReport:
             "format": self.format,
             "glicko_rated": self.glicko_rated,
             "matches": self.matches,
+            "skipped_shadow": self.skipped_shadow,
             "prediction": {
                 model: {subset: stats.as_dict() for subset, stats in subsets.items()}
                 for model, subsets in self.prediction.items()
@@ -240,7 +246,7 @@ class DivergenceReport:
     history_end: object
     rated_matches: int
     formats: list = field(default_factory=list)
-    skipped_shadow: int = 0  # singles matches whose Glicko projection was skipped
+    skipped_shadow: int = 0  # matches (all formats) whose Glicko projection was skipped
     skipped_match_ids: list = field(default_factory=list)  # first few only
     warnings: list = field(default_factory=list)
 
@@ -285,11 +291,12 @@ class DivergenceReport:
         lines += [f"WARNING: {w}" for w in self.warnings]
         for fr in self.formats:
             lines += ["", "=" * 72, f"{fr.format.upper()}: {fr.matches} matches"]
+            lines.append(
+                f"Glicko projections skipped in {fr.format}: {fr.skipped_shadow}"
+            )
             lines += self._render_prediction(fr)
             if not fr.glicko_rated:
-                lines.append(
-                    "Ranking: not rated under Glicko-2 yet (KAN-70); no comparison."
-                )
+                lines.append("Ranking: not rated under Glicko-2; no comparison.")
                 continue
             lines += self._render_ranking(fr)
         return "\n".join(lines)
@@ -395,15 +402,15 @@ def _predict(replay, record, fmt, params, match_day):
     established = all(
         exp >= elo.PROVISIONAL_MATCHES for _, exp in readings1 + readings2
     )
-    p_glicko = None
-    if fmt == elo.SINGLES:
-        g1 = glicko_adapter.glicko_reading(
-            replay.book, side1[0], scope, match_day, params
-        )
-        g2 = glicko_adapter.glicko_reading(
-            replay.book, side2[0], scope, match_day, params
-        )
-        p_glicko = glicko2.win_probability(g1.rating, g1.rd, g2.rating, g2.rd)
+    g1 = glicko_adapter.composite_opponent(
+        glicko_adapter.glicko_reading(replay.book, pk, scope, match_day, params)
+        for pk in side1
+    )
+    g2 = glicko_adapter.composite_opponent(
+        glicko_adapter.glicko_reading(replay.book, pk, scope, match_day, params)
+        for pk in side2
+    )
+    p_glicko = glicko2.win_probability(g1[0], g1[1], g2[0], g2[1])
     return (p_elo, p_glicko), established
 
 
@@ -448,6 +455,7 @@ def _run(params, chunk_size, tiny_rd, top):
     history_end = None
     seen = 0
     skipped = []
+    skipped_by_format = {elo.SINGLES: 0, elo.DOUBLES: 0}
 
     for record in iter_replay_matches(chunk_size=chunk_size):
         # confirmed_history guarantees a winner; assert it so a future change
@@ -459,10 +467,6 @@ def _run(params, chunk_size, tiny_rd, top):
             history_end = day
         fmt = elo.DOUBLES if record.is_double else elo.SINGLES
         rated = bool(record.side1_ids and record.side2_ids)
-        if fmt == elo.SINGLES and not (
-            len(record.side1_ids) == 1 == len(record.side2_ids)
-        ):
-            rated = False
 
         if rated:
             (p_elo, p_glicko), established = _predict(replay, record, fmt, params, day)
@@ -479,12 +483,11 @@ def _run(params, chunk_size, tiny_rd, top):
         _, format_changes = replay.play(record)
         # The all-time change carries the GlickoUpdate unless _plan_glicko
         # swallowed an error for this match.
-        if (
-            rated
-            and fmt == elo.SINGLES
-            and not any(c.glicko for c in format_changes if c.row.season_id is None)
+        if rated and not any(
+            c.glicko for c in format_changes if c.row.season_id is None
         ):
             skipped.append(record.pk)
+            skipped_by_format[fmt] += 1
 
     warnings = []
     expected = confirmed_history(Match._base_manager).count()
@@ -508,8 +511,9 @@ def _run(params, chunk_size, tiny_rd, top):
     for fmt in (elo.SINGLES, elo.DOUBLES):
         fr = FormatReport(
             format=fmt,
-            glicko_rated=fmt == elo.SINGLES,
+            glicko_rated=True,
             matches=counts[fmt],
+            skipped_shadow=skipped_by_format[fmt],
             prediction=stats[fmt],
         )
         _fill_ranking(
