@@ -36,3 +36,6 @@ Deliberately not django-waffle.
 - Override lookups load **all** of a user's overrides in one query
   (`prefetch_overrides` does it for several users), so extra flags cost no extra
   queries on a cold cache.
+- `glicko_may_be_shown()` is the cheap gate (settings on, else a cached
+  "any enabled glicko2 override" lookup, invalidated by override save/delete).
+  Call `prefetch_overrides(users)` before resolving a flag per recipient in a loop.

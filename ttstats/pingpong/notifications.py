@@ -198,9 +198,13 @@ def notify_leaderboard_overtakes(match):
         movement = ratings.glicko_movement(match, scope, climber)
         if movement is None:
             continue
-        passed = ratings.players_between(scope, climber, *movement).exclude(
-            pk__in=participant_ids
-        ).select_related('user')
+        passed = list(
+            ratings.players_between(scope, climber, *movement)
+            .exclude(pk__in=participant_ids)
+            .select_related('user')
+        )
+        # One query for every recipient's overrides, not one each.
+        flags.prefetch_overrides([p.user for p in passed])
         for player in passed:
             if glicko_recipients is None:
                 glicko_recipients = {}

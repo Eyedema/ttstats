@@ -206,7 +206,9 @@ def _freeze(season):
     system = ratings.system(None)
     glicko = system == ratings.GLICKO
     sort_field = "glicko_rating" if glicko else "rating"
-    today = timezone.now().date()
+    # Inflated to the season's last day, not the day the job ran: a cron
+    # backlog must not change a frozen +/-.
+    today = season.ends_on
     written = 0
     for fmt in FORMAT_ORDER:
         results = _wins_and_played(season, fmt)

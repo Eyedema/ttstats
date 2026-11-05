@@ -25,6 +25,7 @@ from pingpong.elo import LiveBook, RatingScope, update_player_elo
 from pingpong.elo_replay import RatingWriter
 from pingpong.models import (
     FeatureFlagOverride,
+    NotificationKind,
     PlayerRating,
     RatingChange,
     SeasonStanding,
@@ -996,7 +997,7 @@ class TestCacheKeys:
 
 @pytest.mark.django_db
 class TestRolloverUnderGlicko:
-    def _archive(self, club, season_end=date(2026, 3, 31)):
+    def _archive(self, club, season_end=date(2026, 3, 31), today=date(2026, 4, 10)):
         from pingpong import season_rollover
 
         season = SeasonFactory(
@@ -1016,7 +1017,7 @@ class TestRolloverUnderGlicko:
             ),
             mock.patch.object(season_rollover.emails, "send_season_ended_email"),
         ):
-            season_rollover.run(today=date(2026, 4, 10))
+            season_rollover.run(today=today)
         return season, (a, b, c)
 
     def test_frozen_by_glicko_rating_and_stamped(self, glicko_on):
@@ -1075,10 +1076,15 @@ class TestPushTextPerRecipient:
     def test_overtake_push_follows_the_recipients_system(self, glicko_on):
         club, season = _club_with_current_season()
         (_, climber), (_, loser) = _member(club), _member(club)
-        _, rival = _member(club)
-        _glicko_row(climber, 1490, 60, club=club, season=season)
+        # Elo ratings are left far below the climber's so only the Glicko
+        # table can put these two "between" the climber's old and new rating.
+        glicko_user, rival = _member(club, elo_rating=1400)
+        elo_user, elo_rival = _member(club, elo_rating=1400)
+        FeatureFlagOverride.objects.create(name="glicko2", user=elo_user, enabled=False)
+        _glicko_row(climber, 1400, 200, club=club, season=season)
         _glicko_row(loser, 1500, 60, club=club, season=season)
-        _glicko_row(rival, 1505, 60, club=club, season=season)
+        _glicko_row(rival, 1450, 60, club=club, season=season)
+        _glicko_row(elo_rival, 1460, 60, club=club, season=season)
         match = _finished(climber, loser, club=club)
         confirm_match(match)
         match.refresh_from_db()
@@ -1087,10 +1093,9 @@ class TestPushTextPerRecipient:
         with mock.patch("pingpong.push.send_to_user", return_value=1) as send:
             reached = notifications.notify_leaderboard_overtakes(match)
 
-        # The climber moved from 1490 upward past someone strictly in between.
-        movement = ratings.glicko_movement(match, ratings.display_scope(match), climber)
-        passed = ratings.players_between(
-            ratings.display_scope(match), climber, *movement
-        )
-        assert reached == {p.pk for p in passed.exclude(pk__in=[climber.pk, loser.pk])}
-        assert send.call_count == len(reached)
+        old, new = ratings.glicko_movement(match, ratings.display_scope(match), climber)
+        assert old < 1450 < 1460 < new  # the climber really passes both rivals
+        assert rival.pk in reached
+        assert elo_rival.pk not in reached  # Elo system: not told about a Glicko pass
+        assert {c.args[0].pk for c in send.call_args_list} == {glicko_user.pk}
+        assert send.call_args.kwargs["kind"] == NotificationKind.LEADERBOARD_OVERTAKE

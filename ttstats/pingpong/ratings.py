@@ -238,13 +238,23 @@ def players_between(scope, climber, old_rating, new_rating):
     return Player.objects.filter(pk__in=in_between.values("player_id"))
 
 
+def _guarded_projection(match, scope):
+    """The Glicko projection through the SAME guard the write uses, or None.
+
+    `elo._plan_glicko` swallows any failure and rejects non-finite results and
+    RD <= 0, so the preview is None exactly when the write stores NULLs.
+    """
+    book = elo.LiveBook(match, scope.season)
+    return elo._plan_glicko(match, scope, book, glicko_adapter.DEFAULT_PARAMS)
+
+
 def projected_change_for(match, player, scope, *, system):
     """What `match` is worth to `player` in `scope`, signed; 0 if not in it."""
     if system != GLICKO:
         return elo.projected_elo_change_for(match, player, scope)
     if player is None or scope is elo.LEGACY:
         return 0
-    projection = glicko_adapter.projected_glicko_changes(match, scope)
+    projection = _guarded_projection(match, scope)
     if projection is None:
         return 0
     for update in projection.updates:
@@ -294,14 +304,14 @@ def match_deltas(match, scope, *, system):
             )
 
         return side_delta(side1), side_delta(side2), False
-    projection = glicko_adapter.projected_glicko_changes(match, scope)
+    projection = _guarded_projection(match, scope)
     if projection is None:
         return 0, 0, True
     return projection.side1_change, projection.side2_change, True
 
 
 def win_probability(side1, side2, *, system, scope, match=None, day=None):
-    """(side1_pct, side2_pct) as integer percentages.
+    """(side1_pct, side2_pct) as integer percentages, or (None, None) if Glicko-2 fails.
 
     Elo: `elo.get_win_probability`. Glicko: each side is a composite player
     (`composite_opponent`: mean rating, RMS RD) fed to `glicko2.win_probability`.
@@ -338,7 +348,10 @@ def win_probability(side1, side2, *, system, scope, match=None, day=None):
 
     r1, rd1 = glicko_adapter.composite_opponent(stored[p.pk] for p in side1)
     r2, rd2 = glicko_adapter.composite_opponent(stored[p.pk] for p in side2)
-    pct = round(glicko2.win_probability(r1, rd1, r2, rd2) * 100)
+    try:
+        pct = round(glicko2.win_probability(r1, rd1, r2, rd2) * 100)
+    except glicko2.Glicko2Error:
+        return (None, None)  # the bar is hidden, never a 500; callers unpack a pair
     return (pct, 100 - pct)
 
 
@@ -628,6 +641,22 @@ def rating_history(player, *, system, fmt=elo.SINGLES):
     return result
 
 
+def _player_club_rows(model, player):
+    """`model` rows of the PLAYER's club, whichever club the viewer has active.
+
+    The nav key is namespaced by the player's club, so the rank must be counted
+    there too, or a multi-club user caches club B's rank under club A's key.
+    `_base_manager` is transitively scoped by the player's `club_id`
+    (docs/decisions/kan-24-all-objects-audit.md). With `clubs` off the active-club
+    manager is a no-op and stays as before.
+    """
+    from ttstats.middleware import get_current_user
+
+    if not flags.is_enabled("clubs", get_current_user()):
+        return model.objects.all()
+    return model._base_manager.filter(club_id=player.club_id)
+
+
 def nav_reading(player, *, system):
     """The nav's rating line: `{rating, rd, rank}` for the player.
 
@@ -640,7 +669,12 @@ def nav_reading(player, *, system):
     if system != GLICKO:
         rank = cache.get(key)
         if rank is None:
-            rank = Player.objects.filter(elo_rating__gt=player.elo_rating).count() + 1
+            rank = (
+                _player_club_rows(Player, player).filter(
+                    elo_rating__gt=player.elo_rating
+                ).count()
+                + 1
+            )
             cache.set(key, rank, NAV_TIMEOUT)
         return {"rating": player.elo_rating, "rd": None, "rank": rank}
 
@@ -661,11 +695,10 @@ def nav_reading(player, *, system):
         if chosen is None:
             cached = {"rating": None}
         else:
-            # The rank is among the same club's rows in the same table.
-            # The club-scoped manager, as the leaderboard uses.
+            # The rank is among the PLAYER's club's rows in the same table.
             rank = (
                 1
-                + PlayerRating.objects.filter(
+                + _player_club_rows(PlayerRating, player).filter(
                     format=elo.SINGLES,
                     season_id=chosen.season_id,
                     glicko_rating__gt=chosen.glicko_rating,

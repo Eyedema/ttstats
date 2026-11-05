@@ -169,16 +169,22 @@ The plan is `docs/decisions/kan-63-cutover-plan.md`.
   "now"); caches store `rd`, `volatility`, `last_rated_on`, never a verdict.
   `rating_status` returns a `str` subclass with `.reason` (`new` / `returning`);
   provisional is the display RD above `glicko_adapter.PROVISIONAL_RD`, read at call time.
-- **Preview == written**: `projected_change_for` / `match_deltas` use
-  `glicko_adapter.projected_glicko_changes`; a confirmed match shows its stored
-  `RatingChange` (NULL = 0, never a re-projection). `win_probability` uses
+- **Preview == written**: `projected_change_for` / `match_deltas` go through
+  `elo._plan_glicko` (the write's own guard: errors, non-finite and RD<=0 give
+  None, shown as 0, as the write stores NULL); a confirmed match shows its stored
+  `RatingChange` (NULL = 0, never a re-projection). `win_probability` returns `(None, None)` on a `Glicko2Error` (bar hidden) and uses
   stored pre-match values, else `glicko_reading` via `LiveBook.for_players`.
 - **Day one**: under Glicko the default leaderboard scope falls back to
   all-time while the season has fewer than 2 rated players (`fell_back_to_all_time`);
   an explicit `season` is kept. A NULL Glicko row is unrated.
+- **The nav rank is counted in the PLAYER's club** (`ratings._player_club_rows`,
+  `_base_manager` filtered by `club_id`), matching `player_rank_key`; with `clubs`
+  off it is the plain manager.
 - **Push and rollover**: the system is resolved per recipient (gated by
   `flags.glicko_may_be_shown()` to keep the match-save query count flat);
-  `season_rollover` freezes under `system(None)`.
+  `season_rollover` freezes under `system(None)`, with the RD inflated to
+  `season.ends_on` (not the run day), so a cron backlog never changes a frozen +/-.
+  Overtake recipients' overrides are loaded with one `flags.prefetch_overrides`.
 - Unconverted gap: achievements stay on Elo (copy only) until KAN-73; under
   Glicko the words go neutral through `rating_tags.neutral_rating_copy`.
 - **Templates read the neutral keys only** (`rating`, `peak`, `rd`, `side1_delta`,

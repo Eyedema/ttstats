@@ -45,3 +45,9 @@ the single source of the namespace.
 - **Saving or deleting a `glicko2` or `seasons` `FeatureFlagOverride` bumps that
   user's clubs' leaderboard generation** (`signals.py`).
   `cache_control --bump-leaderboard` bumps every club; run it after an env flag flip.
+- **Deploy step for the Glicko read cutover:** run
+  `manage.py cache_control --bump-leaderboard` after deploying. Elo seasons
+  leaderboard keys are byte-identical, so entries cached before the deploy lack
+  `rating`/`peak` and would be served as-is.
+- A club-on nav key is `club{player.club_id}:[g2_]player_rank_{pk}`, and the rank
+  inside it is counted in that same club.
