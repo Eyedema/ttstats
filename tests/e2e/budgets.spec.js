@@ -9,7 +9,7 @@ const { resolvePages, bucketFor } = require('./perf-pages');
  * its byte and request budget. Bytes are what crossed the wire: the
  * *compressed* body as WebKit reports it in `request.sizes()`, against the
  * prod-like static pipeline the e2e server runs (settings/e2e.py: hashed,
- * gzipped, served by WhiteNoise). Timing is not asserted here -- WebKit has
+ * Brotli + gzip, served by WhiteNoise). Timing is not asserted here -- WebKit has
  * no network throttling and CI machines vary; `npm run perf` measures that.
  *
  * Values are the baseline in docs/decisions/kan-119-performance.md plus a
@@ -21,18 +21,25 @@ const { resolvePages, bucketFor } = require('./perf-pages');
  * page made up to network idle (service workers are blocked in this project).
  */
 const BUDGETS = {
-  // Baseline (WebKit, cold, KAN-121 @ 3437323) in the comment; budget = baseline
-  // plus ~5% (JS/CSS: a few KB). Chart.js alone is ~69 KB compressed, so it
-  // cannot land on a page budgeted without it.
-  //                  js KB      css KB      total KB      requests
-  dashboard:       { js: 40,  css: 10, total: 106, requests: 10 }, // 37.3 / 8.6 / 100.5 / 9
-  play:            { js: 40,  css: 10, total: 106, requests: 10 }, // 37.3 / 8.6 / 100.1 / 9
-  leaderboard:     { js: 40,  css: 10, total: 108, requests: 10 }, // 37.3 / 8.6 / 101.7 / 9
-  'match list':    { js: 40,  css: 10, total: 108, requests: 10 }, // 37.3 / 8.6 / 102.5 / 9
-  'match detail':  { js: 112, css: 10, total: 180, requests: 11 }, // 106.7 / 8.6 / 171.8 / 10
-  'player detail': { js: 112, css: 10, total: 184, requests: 11 }, // 106.7 / 8.6 / 175.8 / 10
-  'head-to-head':  { js: 112, css: 10, total: 182, requests: 11 }, // 106.7 / 8.6 / 174.1 / 10
+  // Measured (WebKit, cold, Brotli) after KAN-122 in the comment; budget =
+  // measured plus ~5%, rounded up. Chart.js alone is ~60 KB compressed, so it
+  // cannot land on a page budgeted without it. S10.1 baseline (gzip) is in
+  // docs/decisions/kan-119-performance.md.
+  //                  js KB      css KB     total KB      requests
+  dashboard:       { js: 36,  css: 8, total: 101, requests: 10 }, // 33.7 / 7.5 / 95.7 / 9
+  play:            { js: 36,  css: 8, total: 100, requests: 10 }, // 33.7 / 7.5 / 95.3 / 9
+  leaderboard:     { js: 36,  css: 8, total: 102, requests: 10 }, // 33.7 / 7.5 / 96.8 / 9
+  'match list':    { js: 36,  css: 8, total: 103, requests: 10 }, // 33.7 / 7.5 / 97.6 / 9
+  'match detail':  { js: 99,  css: 8, total: 166, requests: 11 }, // 93.7 / 7.5 / 157.8 / 10
+  'player detail': { js: 99,  css: 8, total: 170, requests: 11 }, // 93.7 / 7.5 / 161.7 / 10
+  'head-to-head':  { js: 99,  css: 8, total: 169, requests: 11 }, // 93.7 / 7.5 / 160.1 / 10
 };
+
+// WebKit, like Safari, only advertises Brotli over HTTPS. Prod is HTTPS, so
+// an iPhone gets the `.br` files; the e2e server is plain HTTP, so without
+// this WebKit asks for gzip and the budgets would weigh bytes no phone
+// downloads. WebKit decodes `br` fine when the server sends it (KAN-122).
+test.use({ extraHTTPHeaders: { 'Accept-Encoding': 'br, gzip, deflate' } });
 
 /** Load `path` and total what crossed the wire, by type. */
 async function weigh(page, path) {
