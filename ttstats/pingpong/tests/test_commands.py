@@ -2,214 +2,180 @@
 Tests for management commands.
 """
 
-import pytest
+import re
+from datetime import UTC, date, datetime, timedelta
 from io import StringIO
-from django.core.management import call_command
+from itertools import pairwise
+from unittest import mock
 
-from ..models import Player, Match, Game, EloHistory
-from .conftest import PlayerFactory, MatchFactory, GameFactory, confirm_match, confirm_match_silent
+import pytest
+from django.core.management import call_command
+from django.core.management.base import CommandError
+
+from .. import rating_replay
+from ..models import EloHistory, PlayerRating, RatingChange, Side
+from .conftest import (
+    ClubFactory,
+    GameFactory,
+    MatchFactory,
+    PlayerFactory,
+    PlayerRatingFactory,
+    SeasonFactory,
+    confirm_match,
+    confirm_match_silent,
+)
+
+
+def _win_3_0(match):
+    GameFactory(match=match, game_number=1, team1_score=11, team2_score=5)
+    GameFactory(match=match, game_number=2, team1_score=11, team2_score=7)
+    GameFactory(match=match, game_number=3, team1_score=11, team2_score=9)
+    match.refresh_from_db()
+
+
+def _all_time(player, fmt="singles"):
+    return PlayerRating.all_objects.get(player=player, season=None, format=fmt)
+
+
+def _summary(text):
+    """(rows that differ, unexplained, explained) from the dry-run summary line."""
+    m = re.search(r"Dry run: (\d+) scope rows? differ \((\d+) unexplained, (\d+) explained", text)
+    assert m, text
+    return tuple(int(g) for g in m.groups())
 
 
 @pytest.mark.django_db
-class TestRecalculateElo:
-    """Test recalculate_elo management command"""
+class TestRecalculateRatings:
+    """Test the recalculate_ratings management command (was recalculate_elo)."""
 
     def test_dry_run_no_changes(self):
-        """Dry run should not make any changes"""
-        p1 = PlayerFactory(elo_rating=1600, matches_for_elo=10)
-        p2 = PlayerFactory(elo_rating=1400, matches_for_elo=10)
-
+        p1, p2 = PlayerFactory(), PlayerFactory()
         match = MatchFactory(player1=p1, player2=p2)
-        GameFactory(match=match, game_number=1, team1_score=11, team2_score=5)
-        GameFactory(match=match, game_number=2, team1_score=11, team2_score=7)
-        GameFactory(match=match, game_number=3, team1_score=11, team2_score=9)
-        match.refresh_from_db()
+        _win_3_0(match)
         confirm_match(match)
-
-        # Save Elo values AFTER confirmation (signal will have updated them)
-        p1.refresh_from_db()
-        p2.refresh_from_db()
-        elo_p1_before = p1.elo_rating
-        elo_p2_before = p2.elo_rating
-        matches_p1_before = p1.matches_for_elo
-        matches_p2_before = p2.matches_for_elo
+        before = sorted(PlayerRating.all_objects.values_list(
+            "pk", "matches", "glicko_rating", "rd", "volatility", "last_rated_on"))
+        changes = sorted(RatingChange.objects.values_list("pk", flat=True))
+        assert before
 
         out = StringIO()
-        call_command('recalculate_elo', '--dry-run', stdout=out)
+        call_command('recalculate_ratings', '--dry-run', stdout=out)
 
-        p1.refresh_from_db()
-        p2.refresh_from_db()
-
-        # Elo should not change from what it was before the command
-        assert p1.elo_rating == elo_p1_before
-        assert p2.elo_rating == elo_p2_before
-        assert p1.matches_for_elo == matches_p1_before
-        assert p2.matches_for_elo == matches_p2_before
-
-        # Output should mention dry run
+        assert sorted(PlayerRating.all_objects.values_list(
+            "pk", "matches", "glicko_rating", "rd", "volatility", "last_rated_on")) == before
+        assert sorted(RatingChange.objects.values_list("pk", flat=True)) == changes
         output = out.getvalue()
         assert 'DRY RUN' in output
         assert 'Found 1 confirmed matches' in output
 
-    def test_recalculate_resets_all_players(self):
-        """Command should reset all players to 1500 before recalculating"""
-        p1 = PlayerFactory(elo_rating=1700, elo_peak=1750, matches_for_elo=50)
-        p2 = PlayerFactory(elo_rating=1300, elo_peak=1500, matches_for_elo=40)
-
+    def test_recalculate_resets_stored_state_to_the_replay(self):
+        """Whatever is stored, a run rebuilds from the unrated base."""
+        p1, p2 = PlayerFactory(), PlayerFactory()
+        PlayerRatingFactory(player=p1, matches=50, glicko_rating=1700.0, rd=50.0,
+                            volatility=0.06, last_rated_on=date(2024, 1, 1))
+        PlayerRatingFactory(player=p2, matches=40, glicko_rating=1300.0, rd=50.0,
+                            volatility=0.06, last_rated_on=date(2024, 1, 1))
         match = MatchFactory(player1=p1, player2=p2)
-        GameFactory(match=match, game_number=1, team1_score=11, team2_score=5)
-        GameFactory(match=match, game_number=2, team1_score=11, team2_score=7)
-        GameFactory(match=match, game_number=3, team1_score=11, team2_score=9)
-        match.refresh_from_db()
-        # Use silent confirm to avoid triggering Elo updates before the command
-        confirm_match_silent(match)
+        _win_3_0(match)
+        confirm_match_silent(match)  # no live write before the command
 
-        call_command('recalculate_elo', stdout=StringIO())
+        call_command('recalculate_ratings', stdout=StringIO())
 
-        p1.refresh_from_db()
-        p2.refresh_from_db()
-
-        # Elo should be recalculated from 1500 base (not from 1700/1300)
-        # Winner should be slightly above 1500
-        assert p1.elo_rating > 1500
-        assert p1.elo_rating < 1550
-        # Loser should be slightly below 1500
-        assert p2.elo_rating < 1500
-        assert p2.elo_rating > 1450
-
-        # matches_for_elo should be 1 (only one match)
-        assert p1.matches_for_elo == 1
-        assert p2.matches_for_elo == 1
+        r1, r2 = _all_time(p1), _all_time(p2)
+        assert r1.glicko_rating > 1500 > r2.glicko_rating
+        assert r1.glicko_rating + r2.glicko_rating == pytest.approx(3000)  # from 1500/1500
+        assert (r1.matches, r2.matches) == (1, 1)
 
     def test_recalculate_chronological_order(self):
-        """Command should process matches in chronological order"""
-        from datetime import datetime, timedelta
+        """Matches replay in play order: each starts from the previous result."""
         from django.utils import timezone
 
-        p1 = PlayerFactory(elo_rating=1500, matches_for_elo=0)
-        p2 = PlayerFactory(elo_rating=1500, matches_for_elo=0)
-
-        # Create 3 matches over 3 days
+        p1, p2 = PlayerFactory(), PlayerFactory()
         base_date = timezone.make_aware(datetime(2024, 1, 1, 12, 0, 0))
-
-        for i in range(3):
-            match = MatchFactory(
-                player1=p1,
-                player2=p2,
-                date_played=base_date + timedelta(days=i)
-            )
-            # P1 wins all matches
-            GameFactory(match=match, game_number=1, team1_score=11, team2_score=5)
-            GameFactory(match=match, game_number=2, team1_score=11, team2_score=7)
-            GameFactory(match=match, game_number=3, team1_score=11, team2_score=9)
-            match.refresh_from_db()
-            # Use silent confirm to avoid triggering Elo updates before the command
+        matches = []
+        for i in (2, 0, 1):  # created out of order
+            match = MatchFactory(player1=p1, player2=p2, date_played=base_date + timedelta(days=i))
+            _win_3_0(match)
             confirm_match_silent(match)
+            matches.append((i, match))
+        matches = [m for _, m in sorted(matches, key=lambda t: t[0])]
 
-        call_command('recalculate_elo', stdout=StringIO())
+        call_command('recalculate_ratings', stdout=StringIO())
 
-        p1.refresh_from_db()
-        p2.refresh_from_db()
+        chain = [RatingChange.objects.get(match=m, player=p1) for m in matches]
+        assert chain[0].glicko_old_rating == 1500
+        for before, after in pairwise(chain):
+            assert after.glicko_old_rating == before.glicko_new_rating
+        assert chain[0].glicko_new_rating < chain[1].glicko_new_rating < chain[2].glicko_new_rating
+        assert _all_time(p1).glicko_rating == chain[2].glicko_new_rating
+        assert (_all_time(p1).matches, _all_time(p2).matches) == (3, 3)
+        assert RatingChange.objects.count() == 6
 
-        # P1 should have gained Elo progressively (3 wins)
-        assert p1.elo_rating > 1540  # ~16 points per win
-        # P2 should have lost Elo progressively (3 losses)
-        assert p2.elo_rating < 1460
-
-        # 3 matches counted
-        assert p1.matches_for_elo == 3
-        assert p2.matches_for_elo == 3
-
-        # 6 history records (2 per match)
-        assert EloHistory.objects.count() == 6
-
-    def test_recalculate_clears_existing_history(self):
-        """Command should delete existing Elo history before recalculating"""
-        p1 = PlayerFactory()
-        p2 = PlayerFactory()
+    def test_a_full_run_leaves_elo_history_untouched(self):
+        """EloHistory is frozen pre-KAN-73 history: never deleted, never written."""
+        p1, p2 = PlayerFactory(), PlayerFactory()
         match = MatchFactory(player1=p1, player2=p2)
-
-        # Create fake history
-        EloHistory.objects.create(
-            match=match,
-            player=p1,
-            old_rating=1500,
-            new_rating=1516,
-            rating_change=16,
-            k_factor=32.0,
-        )
-
-        assert EloHistory.objects.count() == 1
-
-        # Create real match
-        GameFactory(match=match, game_number=1, team1_score=11, team2_score=5)
-        GameFactory(match=match, game_number=2, team1_score=11, team2_score=7)
-        GameFactory(match=match, game_number=3, team1_score=11, team2_score=9)
-        match.refresh_from_db()
+        EloHistory.objects.create(match=match, player=p1, old_rating=1500, new_rating=1516,
+                                  rating_change=16, k_factor=32.0)
+        _win_3_0(match)
         confirm_match(match)
+        frozen = list(EloHistory.objects.values_list(
+            "pk", "match_id", "player_id", "old_rating", "new_rating", "rating_change", "k_factor"))
 
         out = StringIO()
-        call_command('recalculate_elo', stdout=out)
+        call_command('recalculate_ratings', stdout=out)
 
-        # Old history should be deleted, new history created
-        assert EloHistory.objects.count() == 2
+        assert list(EloHistory.objects.values_list(
+            "pk", "match_id", "player_id", "old_rating", "new_rating", "rating_change",
+            "k_factor")) == frozen
+        assert RatingChange.objects.filter(match=match).count() == 2
+        assert 'EloHistory' not in out.getvalue()
 
-        output = out.getvalue()
-        assert 'Deleted 1 existing Elo history records' in output
+    def test_an_empty_database(self):
+        out = StringIO()
+
+        call_command('recalculate_ratings', stdout=out)
+
+        text = out.getvalue()
+        assert 'Found 0 confirmed matches' in text
+        assert 'Rebuilt 0 PlayerRating rows and 0 rating changes' in text
+        assert not PlayerRating.all_objects.exists()
+        assert not RatingChange.objects.exists()
+
+    def test_an_empty_database_dry_run(self):
+        out = StringIO()
+
+        call_command('recalculate_ratings', '--dry-run', stdout=out)
+
+        assert _summary(out.getvalue()) == (0, 0, 0)
 
     def test_skip_unconfirmed_matches(self):
-        """Command should skip matches without both confirmations"""
-        # Create players with verified emails to prevent auto-confirm
         p1 = PlayerFactory(with_user=True)
         p2 = PlayerFactory(with_user=True)
-        p1.user.profile.email_verified = True
-        p1.user.profile.save()
-        p2.user.profile.email_verified = True
-        p2.user.profile.save()
+        for p in (p1, p2):
+            p.user.profile.email_verified = True
+            p.user.profile.save()
 
-        # Confirmed match
         match1 = MatchFactory(player1=p1, player2=p2)
-        GameFactory(match=match1, game_number=1, team1_score=11, team2_score=5)
-        GameFactory(match=match1, game_number=2, team1_score=11, team2_score=7)
-        GameFactory(match=match1, game_number=3, team1_score=11, team2_score=9)
-        match1.refresh_from_db()
+        _win_3_0(match1)
         confirm_match(match1)
-
-        # Unconfirmed match (will NOT auto-confirm because players are verified)
+        # Unconfirmed (will NOT auto-confirm because players are verified)
         match2 = MatchFactory(player1=p1, player2=p2)
-        GameFactory(match=match2, game_number=1, team1_score=11, team2_score=5)
-        GameFactory(match=match2, game_number=2, team1_score=11, team2_score=7)
-        GameFactory(match=match2, game_number=3, team1_score=11, team2_score=9)
-        match2.refresh_from_db()
-        # No confirmations
+        _win_3_0(match2)
 
         out = StringIO()
-        call_command('recalculate_elo', stdout=out)
+        call_command('recalculate_ratings', stdout=out)
 
-        output = out.getvalue()
-        # Only 1 match should be processed
-        assert 'Found 1 confirmed matches' in output
-
-        # Only 2 history records (from confirmed match)
-        # Note: There might be 4 if the first match was auto-confirmed, but we manually confirmed it
-        # so there should only be 2 from the recalculate command
-        assert EloHistory.objects.count() == 2
+        assert 'Found 1 confirmed matches' in out.getvalue()
+        assert set(RatingChange.objects.values_list("match_id", flat=True)) == {match1.pk}
+        assert RatingChange.objects.count() == 2
 
 
 # ---------------------------------------------------------------------------
-# KAN-49 (S4.7): recalculate_elo rebuilds the PlayerRating mirror too
+# KAN-49 (S4.7): the rebuild of every PlayerRating scope
 # ---------------------------------------------------------------------------
 
-from datetime import date, datetime, timedelta, timezone as dt_timezone
-from unittest import mock
-
-from django.core.management.base import CommandError
-
-from .. import elo_replay
-from ..models import PlayerRating, RatingChange, Side
-from .conftest import ClubFactory, SeasonFactory
-
-KAN49_BASE = datetime(2026, 1, 1, 12, tzinfo=dt_timezone.utc)
+KAN49_BASE = datetime(2026, 1, 1, 12, tzinfo=UTC)
 
 
 def _won(side1, side2, *, day, club, winner=Side.ONE):
@@ -238,73 +204,78 @@ def _none_safe(row):
     return tuple((v is None, v if v is not None else 0) for v in row)
 
 
+def _rounded(row):
+    return tuple(round(v, 6) if isinstance(v, float) else v for v in row)
+
+
 def _state():
-    """Everything a rebuild may write, independent of pks it regenerates."""
+    """Everything a rebuild may write (or must not touch), independent of regenerated pks."""
     return (
-        sorted(Player.objects.values_list("pk", "elo_rating", "elo_peak", "matches_for_elo")),
         sorted(EloHistory.objects.values_list("match_id", "player_id", "old_rating", "new_rating",
                                               "rating_change", "k_factor")),
-        sorted(PlayerRating.all_objects.values_list("player_id", "club_id", "season_id", "format",
-                                                    "rating", "peak", "matches"), key=_none_safe),
-        sorted(RatingChange.objects.values_list("match_id", "player_id", "rating__season_id",
-                                                "rating__format", "old_rating", "new_rating",
-                                                "rating_change", "k_factor"), key=_none_safe),
+        sorted((_rounded(r) for r in PlayerRating.all_objects.values_list(
+            "player_id", "club_id", "season_id", "format", "matches",
+            "glicko_rating", "rd", "volatility", "last_rated_on")), key=_none_safe),
+        sorted((_rounded(r) for r in RatingChange.objects.values_list(
+            "match_id", "player_id", "rating__season_id", "rating__format",
+            "glicko_old_rating", "glicko_new_rating", "glicko_change",
+            "glicko_rd_before", "glicko_rd_after",
+            "elo_old_rating", "elo_new_rating", "elo_change", "elo_k_factor")), key=_none_safe),
     )
 
 
 @pytest.mark.django_db
-class TestRecalculateEloRebuildsRatings:
+class TestRecalculateRatingsRebuildsRatings:
     def test_a_full_run_reproduces_live_history_confirmed_in_play_order(self):
         _season_history()
         live = _state()
 
-        call_command('recalculate_elo', stdout=StringIO())
+        call_command('recalculate_ratings', stdout=StringIO())
 
         assert _state() == live
 
-    def test_a_full_run_repairs_corrupted_mirror_rows(self):
+    def test_a_full_run_repairs_corrupted_rows(self):
         _season_history()
         live = _state()
-        PlayerRating.all_objects.update(rating=1111, matches=0)
+        PlayerRating.all_objects.update(glicko_rating=1111.0, matches=0)
         RatingChange.objects.all().delete()
 
-        call_command('recalculate_elo', stdout=StringIO())
+        call_command('recalculate_ratings', stdout=StringIO())
 
         assert _state() == live
 
     def test_two_runs_are_identical(self):
         _season_history()
         # Shuffle the stored state so the first run has real work to do.
-        Player.objects.update(elo_rating=1234)
+        PlayerRating.all_objects.update(glicko_rating=1234.0, rd=99.0)
 
-        call_command('recalculate_elo', stdout=StringIO())
+        call_command('recalculate_ratings', stdout=StringIO())
         first = _state()
-        call_command('recalculate_elo', stdout=StringIO())
+        call_command('recalculate_ratings', stdout=StringIO())
 
         assert _state() == first
 
-    def test_keeps_the_existing_output_style(self):
+    def test_output(self):
         _season_history()
         out = StringIO()
 
-        call_command('recalculate_elo', stdout=out)
+        call_command('recalculate_ratings', stdout=out)
 
         text = out.getvalue()
         assert 'Found 20 confirmed matches to process' in text
-        assert 'Resetting all player Elo ratings to 1500...' in text
-        assert 'Successfully recalculated Elo for 20 matches' in text
+        assert 'Recalculating ratings...' in text
+        assert 'Successfully recalculated ratings for 20 matches' in text
         assert 'PlayerRating' in text
 
 
 @pytest.mark.django_db
-class TestRecalculateEloDryRunDiff:
+class TestRecalculateRatingsDryRunDiff:
     def test_dry_run_writes_nothing_even_when_things_differ(self):
         _season_history()
-        Player.objects.filter(name="Ada").update(elo_rating=1999)
-        PlayerRating.all_objects.filter(format="doubles").update(rating=1111)
+        PlayerRating.all_objects.filter(format="doubles").update(glicko_rating=1111.0)
         before = _state()
 
-        call_command('recalculate_elo', '--dry-run', stdout=StringIO())
+        call_command('recalculate_ratings', '--dry-run', stdout=StringIO())
 
         assert _state() == before
 
@@ -312,90 +283,100 @@ class TestRecalculateEloDryRunDiff:
         _season_history()
         out = StringIO()
 
-        call_command('recalculate_elo', '--dry-run', stdout=out)
+        call_command('recalculate_ratings', '--dry-run', stdout=out)
 
-        assert '0 players differ' in out.getvalue()
+        assert _summary(out.getvalue()) == (0, 0, 0)
 
     def test_a_seeded_divergence_is_reported_per_player_and_scope(self):
-        season, (ada, bob, cy, di) = _season_history()
-        Player.objects.filter(pk=ada.pk).update(elo_rating=1999)
-        PlayerRating.all_objects.filter(player=cy, season=season, format="singles").update(peak=1777)
+        season, (ada, _bob, cy, _di) = _season_history()
+        PlayerRating.all_objects.filter(player=ada, season=None, format="singles").update(
+            glicko_rating=1999.0)
+        PlayerRating.all_objects.filter(player=cy, season=season, format="singles").update(
+            rd=177.5)
         out = StringIO()
 
-        call_command('recalculate_elo', '--dry-run', stdout=out)
+        call_command('recalculate_ratings', '--dry-run', stdout=out)
 
         text = out.getvalue()
-        assert '2 players differ' in text
+        assert _summary(text) == (2, 2, 0)
+        assert 'Per-player differences (stored -> recomputed):' in text
         ada_lines = [line for line in text.splitlines() if line.strip().startswith("Ada")]
-        assert any("legacy" in line and "1999" in line for line in ada_lines)
+        assert any("all-time" in line and "1999" in line for line in ada_lines)
         cy_lines = [line for line in text.splitlines() if line.strip().startswith("Cy")]
-        assert any(season.name in line and "1777" in line for line in cy_lines)
+        assert any(season.name in line and "177.5" in line for line in cy_lines)
         assert not any(line.strip().startswith("Bob") for line in text.splitlines())
+
+    def test_a_tampered_match_count_is_reported(self):
+        _season_history()
+        PlayerRating.all_objects.filter(format="doubles", season=None).update(matches=99)
+        out = StringIO()
+
+        call_command('recalculate_ratings', '--dry-run', stdout=out)
+
+        assert _summary(out.getvalue())[0] == 4
+        assert 'matches: 99 ->' in out.getvalue()
 
     def test_a_missing_row_is_reported(self):
         _season_history()
         PlayerRating.all_objects.filter(format="doubles", season=None).delete()
         out = StringIO()
 
-        call_command('recalculate_elo', '--dry-run', stdout=out)
+        call_command('recalculate_ratings', '--dry-run', stdout=out)
 
-        assert '4 players differ' in out.getvalue()
+        assert _summary(out.getvalue())[0] == 4
         assert 'missing' in out.getvalue()
 
 
 @pytest.mark.django_db
-class TestRecalculateEloScopes:
+class TestRecalculateRatingsScopes:
     def test_format_scope_rebuilds_only_that_format(self):
         _season_history()
         live = _state()
-        PlayerRating.all_objects.update(rating=1111)
-        Player.objects.update(elo_rating=1222)
-        history_pks = sorted(EloHistory.objects.values_list("pk", flat=True))
+        PlayerRating.all_objects.update(glicko_rating=1111.0)
 
-        call_command('recalculate_elo', '--format', 'doubles', stdout=StringIO())
+        call_command('recalculate_ratings', '--format', 'doubles', stdout=StringIO())
 
         doubles = PlayerRating.all_objects.filter(format="doubles")
-        assert doubles.exists() and not doubles.filter(rating=1111).exists()
-        assert set(PlayerRating.all_objects.filter(format="singles").values_list("rating", flat=True)) == {1111}
-        # Legacy and EloHistory are only rewritten by a full, unscoped run.
-        assert set(Player.objects.values_list("elo_rating", flat=True)) == {1222}
-        assert sorted(EloHistory.objects.values_list("pk", flat=True)) == history_pks
-        assert [r for r in _state()[2] if r[3] == "doubles"] == [r for r in live[2] if r[3] == "doubles"]
+        assert doubles.exists() and not doubles.filter(glicko_rating=1111.0).exists()
+        singles = PlayerRating.all_objects.filter(format="singles")
+        assert set(singles.values_list("glicko_rating", flat=True)) == {1111.0}
+        assert [r for r in _state()[1] if r[3] == "doubles"] == [r for r in live[1] if r[3] == "doubles"]
+        assert _state()[0] == live[0]  # EloHistory untouched
 
     def test_season_scope_rebuilds_only_that_season(self):
         season, _ = _season_history()
         live = _state()
-        PlayerRating.all_objects.update(rating=1111)
+        PlayerRating.all_objects.update(glicko_rating=1111.0)
 
-        call_command('recalculate_elo', '--season', str(season.pk), stdout=StringIO())
+        call_command('recalculate_ratings', '--season', str(season.pk), stdout=StringIO())
 
-        assert not PlayerRating.all_objects.filter(season=season, rating=1111).exists()
-        assert set(PlayerRating.all_objects.filter(season=None).values_list("rating", flat=True)) == {1111}
-        assert [r for r in _state()[2] if r[2] == season.pk] == [r for r in live[2] if r[2] == season.pk]
+        assert not PlayerRating.all_objects.filter(season=season, glicko_rating=1111.0).exists()
+        all_time = PlayerRating.all_objects.filter(season=None)
+        assert set(all_time.values_list("glicko_rating", flat=True)) == {1111.0}
+        assert [r for r in _state()[1] if r[2] == season.pk] == [r for r in live[1] if r[2] == season.pk]
 
     def test_season_and_format_scopes_combine(self):
         season, _ = _season_history()
-        PlayerRating.all_objects.update(rating=1111)
+        PlayerRating.all_objects.update(glicko_rating=1111.0)
 
-        call_command('recalculate_elo', '--season', str(season.pk), '--format', 'singles',
+        call_command('recalculate_ratings', '--season', str(season.pk), '--format', 'singles',
                      stdout=StringIO())
 
-        rebuilt = PlayerRating.all_objects.exclude(rating=1111)
+        rebuilt = PlayerRating.all_objects.exclude(glicko_rating=1111.0)
         assert set(rebuilt.values_list("season_id", "format")) == {(season.pk, "singles")}
 
     def test_an_unknown_season_is_an_error(self):
         with pytest.raises(CommandError):
-            call_command('recalculate_elo', '--season', '999999', stdout=StringIO())
+            call_command('recalculate_ratings', '--season', '999999', stdout=StringIO())
 
 
 @pytest.mark.django_db
-class TestRecalculateEloIsAllOrNothing:
+class TestRecalculateRatingsIsAllOrNothing:
     def test_an_interruption_mid_run_leaves_everything_old(self):
         _season_history()
-        Player.objects.update(elo_rating=1234)
-        PlayerRating.all_objects.update(rating=1111)
+        PlayerRating.all_objects.update(glicko_rating=1111.0)
         before = _state()
-        real_add = elo_replay.RatingWriter.add
+        real_add = rating_replay.RatingWriter.add
         calls = []
 
         def explode_halfway(self, match_id, changes):
@@ -404,15 +385,17 @@ class TestRecalculateEloIsAllOrNothing:
                 raise RuntimeError("power cut")
             return real_add(self, match_id, changes)
 
-        with mock.patch.object(elo_replay.RatingWriter, "add", explode_halfway):
-            with pytest.raises(RuntimeError):
-                call_command('recalculate_elo', '--chunk-size', '3', stdout=StringIO())
+        with (
+            mock.patch.object(rating_replay.RatingWriter, "add", explode_halfway),
+            pytest.raises(RuntimeError),
+        ):
+            call_command('recalculate_ratings', '--chunk-size', '3', stdout=StringIO())
 
         assert _state() == before
 
 
 # run_scheduled_jobs (KAN-37 / T3.6). Imports are local to this section so it
-# merges cleanly with concurrent work on the recalculate_elo tests above.
+# merges cleanly with concurrent work on the recalculate_ratings tests above.
 
 
 @pytest.fixture
@@ -492,6 +475,7 @@ class TestRunScheduledJobs:
 
     def test_held_lock_means_the_second_run_does_nothing(self, job_registry):
         from django.core.cache import cache
+
         from pingpong import cache_utils
 
         a = _register_counter("alpha")
@@ -520,9 +504,12 @@ class TestRunScheduledJobs:
     def test_prune_job_runs_end_to_end_is_idempotent(self):
         # The one real job, through the real registry.
         from datetime import timedelta
+
         from django.utils import timezone
+
         from pingpong import scheduled_jobs
         from pingpong.models import JobRun
+
         from .conftest import JobRunFactory
 
         JobRunFactory(

@@ -1,3 +1,5 @@
+from datetime import date, datetime, time, timezone as dt_timezone
+
 import pytest
 
 from pingpong.achievements import (
@@ -17,12 +19,14 @@ from pingpong.achievements import (
     get_achievement_progress,
 )
 from pingpong.achievement_definitions import ACHIEVEMENT_DEFINITIONS
-from pingpong.models import Achievement, EloHistory, PlayerAchievement
+from pingpong.models import Achievement, PlayerAchievement, RatingChange
 
 from .conftest import (
     GameFactory,
     MatchFactory,
     PlayerFactory,
+    PlayerRatingFactory,
+    SeasonFactory,
     confirm_match,
     confirm_match_silent,
 )
@@ -52,6 +56,29 @@ def _make_confirmed_match(p1, p2, scores, best_of=5):
     confirm_match_silent(m)
     m.refresh_from_db()
     return m
+
+
+def _rated(player, glicko_rating, fmt="singles"):
+    """An all-time rated PlayerRating row the next match is projected from."""
+    return PlayerRatingFactory(
+        player=player, format=fmt, glicko_rating=glicko_rating, rd=60.0,
+        volatility=0.06, last_rated_on=date(2026, 1, 1), matches=30,
+    )
+
+
+def _all_time_change(match, player):
+    return RatingChange.objects.get(match=match, player=player, rating__season__isnull=True)
+
+
+def _set_change(match, player, **glicko):
+    """Pin a player's all-time Glicko movement for `match` to exact values."""
+    RatingChange.objects.filter(
+        match=match, player=player, rating__season__isnull=True
+    ).update(**glicko)
+
+
+def _win(p1, p2):
+    return _make_confirmed_match(p1, p2, [(11, 5), (11, 5), (11, 5)])
 
 
 # ===========================================================================
@@ -326,21 +353,85 @@ class TestDeuceMaster:
 
 @pytest.mark.django_db
 class TestGiantSlayer:
-    def test_bronze_at_100_elo_gap(self, achievements):
-        p1 = PlayerFactory(elo_rating=1400)
-        p2 = PlayerFactory(elo_rating=1600)  # 200 higher
-        # Signal creates EloHistory automatically with correct old_rating values
-        m = _make_confirmed_match(p1, p2, [(11, 5), (11, 5), (11, 5)])
+    """Gap = opponents' mean pre-match all-time Glicko rating minus mine."""
+
+    def test_reads_the_pre_match_glicko_ratings_from_the_pipeline(self, achievements):
+        p1, p2 = PlayerFactory(), PlayerFactory()
+        _rated(p1, 1400.0)
+        _rated(p2, 1600.0)  # 200 higher
+        m = _win(p1, p2)
+        assert _all_time_change(m, p1).glicko_old_rating == pytest.approx(1400.0)
+        assert _all_time_change(m, p2).glicko_old_rating == pytest.approx(1600.0)
+
         result = check_giant_slayer(p1, m)
-        assert 'giant_slayer_bronze' in result
-        assert 'giant_slayer_silver' in result  # 200 gap
+
+        assert result == ['giant_slayer_bronze', 'giant_slayer_silver']
+
+    @pytest.mark.parametrize("gap, expected", [
+        (99.9, []),
+        (100, ['giant_slayer_bronze']),
+        (199.9, ['giant_slayer_bronze']),
+        (200, ['giant_slayer_bronze', 'giant_slayer_silver']),
+        (299.9, ['giant_slayer_bronze', 'giant_slayer_silver']),
+        (300, ['giant_slayer_bronze', 'giant_slayer_silver', 'giant_slayer_gold']),
+    ])
+    def test_thresholds_are_100_200_300(self, achievements, gap, expected):
+        p1, p2 = PlayerFactory(), PlayerFactory()
+        m = _win(p1, p2)
+        _set_change(m, p1, glicko_old_rating=1400.0)
+        _set_change(m, p2, glicko_old_rating=1400.0 + gap)
+
+        assert check_giant_slayer(p1, m) == expected
 
     def test_not_awarded_when_higher_rated(self, achievements):
-        p1 = PlayerFactory(elo_rating=1600)
-        p2 = PlayerFactory(elo_rating=1400)
-        m = _make_confirmed_match(p1, p2, [(11, 5), (11, 5), (11, 5)])
-        result = check_giant_slayer(p1, m)
-        assert result == []
+        p1, p2 = PlayerFactory(), PlayerFactory()
+        _rated(p1, 1600.0)
+        _rated(p2, 1400.0)
+        m = _win(p1, p2)
+        assert check_giant_slayer(p1, m) == []
+
+    def test_not_awarded_to_the_loser(self, achievements):
+        p1, p2 = PlayerFactory(), PlayerFactory()
+        m = _win(p1, p2)
+        _set_change(m, p1, glicko_old_rating=1800.0)
+        _set_change(m, p2, glicko_old_rating=1400.0)
+        assert check_giant_slayer(p2, m) == []
+
+    def test_doubles_compare_against_the_opponents_mean(self, achievements):
+        a, b, c, d = (PlayerFactory() for _ in range(4))
+        m = MatchFactory(team1_players=[a, b], team2_players=[c, d], is_double=True, best_of=3)
+        GameFactory(match=m, game_number=1, team1_score=11, team2_score=5)
+        GameFactory(match=m, game_number=2, team1_score=11, team2_score=5)
+        m.refresh_from_db()
+        _set_change(m, a, glicko_old_rating=1400.0)
+        _set_change(m, c, glicko_old_rating=1450.0)
+        _set_change(m, d, glicko_old_rating=1550.0)  # mean 1500: a gap of 100
+
+        assert check_giant_slayer(a, m) == ['giant_slayer_bronze']
+
+    def test_a_skipped_projection_is_not_a_win_over_anyone(self, achievements):
+        p1, p2 = PlayerFactory(), PlayerFactory()
+        m = _win(p1, p2)
+        _set_change(m, p1, glicko_old_rating=1000.0)
+        _set_change(m, p2, glicko_old_rating=None, glicko_new_rating=None)
+        assert check_giant_slayer(p1, m) == []
+
+    def test_season_rows_are_ignored(self, achievements):
+        # Achievements are a career record: only the all-time rows count.
+        season = SeasonFactory()
+        p1, p2 = PlayerFactory(), PlayerFactory()
+        m = MatchFactory(
+            player1=p1, player2=p2, best_of=3, club=season.club,
+            date_played=datetime.combine(season.starts_on, time(12), tzinfo=dt_timezone.utc),
+        )
+        GameFactory(match=m, game_number=1, team1_score=11, team2_score=5)
+        GameFactory(match=m, game_number=2, team1_score=11, team2_score=5)
+        m.refresh_from_db()
+        RatingChange.objects.filter(match=m, player=p2, rating__season=season).update(
+            glicko_old_rating=1900.0
+        )
+        assert RatingChange.objects.filter(match=m, rating__season=season).count() == 2
+        assert check_giant_slayer(p1, m) == []
 
 
 @pytest.mark.django_db
@@ -385,22 +476,68 @@ class TestRivalry:
 
 @pytest.mark.django_db
 class TestPeakPerformer:
-    def test_awarded_on_new_peak(self, achievements):
-        # Start at default 1500; winning raises Elo → new peak
-        p1 = PlayerFactory()
-        p2 = PlayerFactory()
-        m = _make_confirmed_match(p1, p2, [(11, 5), (11, 5), (11, 5)])
-        p1.refresh_from_db()
-        result = check_peak_performer(p1, m)
-        assert 'peak_performer' in result
+    """A positive change to a new all-time max of `glicko_new_rating` in the
+    match's format, never counting a peak below the 1500 start."""
 
-    def test_not_awarded_on_elo_decrease(self, achievements):
-        p1 = PlayerFactory()
-        p2 = PlayerFactory()
+    def test_awarded_on_new_peak(self, achievements):
+        # Unrated players start at 1500; the win lifts p1 above it.
+        p1, p2 = PlayerFactory(), PlayerFactory()
+        m = _win(p1, p2)
+        assert _all_time_change(m, p1).glicko_new_rating > 1500
+        assert check_peak_performer(p1, m) == ['peak_performer']
+
+    def test_not_awarded_on_a_decrease(self, achievements):
+        p1, p2 = PlayerFactory(), PlayerFactory()
         m = _make_confirmed_match(p1, p2, [(5, 11), (5, 11), (5, 11)])
-        p1.refresh_from_db()
-        result = check_peak_performer(p1, m)
-        assert result == []
+        assert check_peak_performer(p1, m) == []
+
+    def test_a_rise_that_stays_below_1500_is_not_a_peak(self, achievements):
+        p1, p2 = PlayerFactory(), PlayerFactory()
+        m = _win(p1, p2)
+        _set_change(m, p1, glicko_old_rating=1300.0, glicko_new_rating=1499.0)
+        assert check_peak_performer(p1, m) == []
+
+    def test_a_rise_below_an_earlier_peak_is_not_a_peak(self, achievements):
+        p1, p2 = PlayerFactory(), PlayerFactory()
+        earlier = _win(p1, p2)
+        _set_change(earlier, p1, glicko_old_rating=1500.0, glicko_new_rating=1700.0)
+        m = _win(p1, p2)
+        _set_change(m, p1, glicko_old_rating=1600.0, glicko_new_rating=1650.0)
+
+        assert check_peak_performer(p1, m) == []
+
+    def test_a_rise_past_an_earlier_peak_is_a_peak(self, achievements):
+        p1, p2 = PlayerFactory(), PlayerFactory()
+        earlier = _win(p1, p2)
+        _set_change(earlier, p1, glicko_old_rating=1500.0, glicko_new_rating=1700.0)
+        m = _win(p1, p2)
+        _set_change(m, p1, glicko_old_rating=1650.0, glicko_new_rating=1710.0)
+
+        assert check_peak_performer(p1, m) == ['peak_performer']
+
+    def test_a_zero_change_is_not_a_peak(self, achievements):
+        p1, p2 = PlayerFactory(), PlayerFactory()
+        m = _win(p1, p2)
+        _set_change(m, p1, glicko_old_rating=1600.0, glicko_new_rating=1600.0)
+        assert check_peak_performer(p1, m) == []
+
+    def test_another_formats_peak_does_not_count(self, achievements):
+        a, b, c, d = (PlayerFactory() for _ in range(4))
+        doubles = MatchFactory(team1_players=[a, b], team2_players=[c, d], is_double=True, best_of=3)
+        GameFactory(match=doubles, game_number=1, team1_score=11, team2_score=5)
+        GameFactory(match=doubles, game_number=2, team1_score=11, team2_score=5)
+        _set_change(doubles, a, glicko_old_rating=1500.0, glicko_new_rating=1900.0)
+        assert _all_time_change(doubles, a).rating.format == 'doubles'
+        m = _win(a, c)
+        _set_change(m, a, glicko_old_rating=1500.0, glicko_new_rating=1520.0)
+
+        assert check_peak_performer(a, m) == ['peak_performer']
+
+    def test_a_skipped_projection_is_not_a_peak(self, achievements):
+        p1, p2 = PlayerFactory(), PlayerFactory()
+        m = _win(p1, p2)
+        _set_change(m, p1, glicko_old_rating=None, glicko_new_rating=None, glicko_change=None)
+        assert check_peak_performer(p1, m) == []
 
 
 # ===========================================================================
@@ -494,6 +631,25 @@ class TestAchievementProgress:
         )
         assert mp_bronze['progress'] == 5
         assert mp_bronze['threshold'] == 10
+
+    def test_giant_slayer_progress_is_the_largest_glicko_gap_won(self, achievements):
+        p1, p2, p3 = PlayerFactory(), PlayerFactory(), PlayerFactory()
+        small = _win(p1, p2)
+        _set_change(small, p1, glicko_old_rating=1400.0)
+        _set_change(small, p2, glicko_old_rating=1480.5)  # gap 80.5
+        big = _win(p1, p3)
+        _set_change(big, p1, glicko_old_rating=1400.0)
+        _set_change(big, p3, glicko_old_rating=1650.9)  # gap 250.9
+        lost = _make_confirmed_match(p1, p3, [(5, 11), (5, 11), (5, 11)])
+        _set_change(lost, p1, glicko_old_rating=1000.0)  # a loss never counts
+
+        progress = get_achievement_progress(p1)
+
+        giant = next(
+            item for item in progress
+            if item['achievement'].slug.startswith('giant_slayer')
+        )
+        assert giant['progress'] == 250
 
 
 # ===========================================================================

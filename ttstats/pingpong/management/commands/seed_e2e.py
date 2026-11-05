@@ -21,13 +21,11 @@ E2E_USERNAME = "e2e"
 E2E_PASSWORD = "e2e-local-only"
 E2E_OPPONENT = "e2e-opponent"
 E2E_MOMENTUM_OPPONENT = "e2e-momentum"
-# The seasons user (KAN-48/50): same password, `seasons` flag on by override,
-# so the season leaderboard specs see the flag-on UI while every other spec
-# keeps exercising the flag-off one -- the staff-first rollout, in miniature.
+# The seasons user (KAN-48/50): same password, a member with season results,
+# for the season leaderboard and archive specs.
 E2E_SEASONS_USERNAME = "e2e-seasons"
-# The Glicko-2 user (KAN-71/72): `seasons` AND `glicko2` on by override, with
-# Glicko state written by the real pipeline, so the cutover specs see exactly
-# what a flagged-in member would.
+# The Glicko-2 user (KAN-71/72): Glicko state written by the real pipeline and
+# a result awaiting their confirmation, for the rating-component specs.
 E2E_GLICKO_USERNAME = "e2e-glicko"
 # Every player the seed rates. A re-seed starts them from scratch.
 E2E_PLAYER_NAMES = (
@@ -137,21 +135,21 @@ class Command(BaseCommand):
         """Back to a fresh database for the seeded players: no matches, no ratings.
 
         Every match involving them goes (live, finished, seeded or left behind
-        by a spec), which cascades EloHistory and RatingChange; their
-        PlayerRating rows go and the legacy fields return to the model
-        defaults. Everything is then rebuilt by the real pipeline below, so a
-        re-run writes exactly what the first run wrote.
+        by a spec), which cascades RatingChange; their PlayerRating rows go.
+        Everything is then rebuilt by the real pipeline below, so a re-run
+        writes exactly what the first run wrote. Overrides of the retired
+        `seasons` / `glicko2` flags left by an older seed are dropped.
         """
         players = Player.objects.filter(name__in=E2E_PLAYER_NAMES)
         Match.all_objects.filter(participants__player__in=players).distinct().delete()
         PlayerRating.all_objects.filter(player__in=players).delete()
-        players.update(elo_rating=1500, elo_peak=1500, matches_for_elo=0)
+        FeatureFlagOverride.objects.filter(name__in=["seasons", "glicko2"]).delete()
 
     def _seed_season(self, club, player, opponent):
         """A current season with confirmed singles results, for the season table.
 
         Matches are confirmed through the real pipeline (MatchConfirmation ->
-        recompute -> update_player_elo), so the PlayerRating and RatingChange
+        recompute -> apply_match_ratings), so the PlayerRating and RatingChange
         rows the specs read are the ones the app writes. Everyone ends up
         provisional (a handful of matches), and E2E Momentum -- rated
         all-time from the momentum match, which predates the club -- is
@@ -183,10 +181,6 @@ class Command(BaseCommand):
         me.save()
         ClubMembership.objects.get_or_create(
             club=club, user=user, defaults={"role": ClubRole.MEMBER}
-        )
-        FeatureFlagOverride.objects.update_or_create(
-            name="seasons", user=user,
-            defaults={"enabled": True, "note": "e2e: season leaderboard specs"},
         )
 
         for winner, loser in ((me, opponent), (me, opponent), (player, opponent)):
@@ -224,11 +218,6 @@ class Command(BaseCommand):
         ClubMembership.objects.get_or_create(
             club=club, user=user, defaults={"role": ClubRole.MEMBER}
         )
-        for flag in ("seasons", "glicko2"):
-            FeatureFlagOverride.objects.update_or_create(
-                name=flag, user=user,
-                defaults={"enabled": True, "note": "e2e: glicko cutover specs"},
-            )
 
         def play(winner, loser, confirm_by):
             match = Match.all_objects.create(club=club, best_of=3)
@@ -248,18 +237,13 @@ class Command(BaseCommand):
     def _seed_archived_season(self, club, user, player, opponent):
         """An archived season with a frozen table, for the archive specs (KAN-51).
 
-        The archive screens are behind the `seasons` flag, so the specs run
-        as the `e2e-seasons` user, who has the override. The rows are
-        written directly rather than through a rollover: the specs are about
+        The specs run as the `e2e-seasons` user. The rows are written directly rather than through a rollover: the specs are about
         what the archive *renders*, and real matches here would move every
         other spec's leaderboard. Rollover itself is covered in pytest.
 
         The table carries a shared first place and a deleted player (no
         Player, only the frozen name), the two rows most likely to break.
         """
-        # The flag is on for the `e2e-seasons` user only (see _seed_season);
-        # turning it on for `e2e` would move every flag-off spec onto the
-        # season leaderboard.
         SeasonStanding.all_objects.filter(season__club=club).delete()
         Season.all_objects.filter(club=club, name="E2E Spring 2025").delete()
         season = Season.all_objects.create(

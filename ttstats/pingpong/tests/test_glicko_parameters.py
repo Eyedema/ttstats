@@ -1,7 +1,7 @@
 """The fitted Glicko-2 parameters and the cold-start seeding (KAN-68).
 
 The seed is a cold-start replay of the full history
-(`recalculate_elo --format singles`), so seeding "from the replay" and
+(`recalculate_ratings --format singles`), so seeding "from the replay" and
 "from RD=350" are the same thing.
 """
 
@@ -61,7 +61,7 @@ class TestSeedingByColdStartReplay:
             glicko_rating=None, rd=None, volatility=None, last_rated_on=None
         )
 
-        call_command("recalculate_elo", "--format", "singles")
+        call_command("recalculate_ratings", "--format", "singles")
 
         on = date(2026, 5, 1)
         assert self._end_rd(regular, on) < self._end_rd(casual, on)
@@ -69,14 +69,14 @@ class TestSeedingByColdStartReplay:
 
     def test_seeding_twice_changes_nothing(self):
         self._history()
-        call_command("recalculate_elo", "--format", "singles")
+        call_command("recalculate_ratings", "--format", "singles")
         first = sorted(
             PlayerRating.all_objects.values_list(
                 "pk", "glicko_rating", "rd", "volatility", "last_rated_on"
             )
         )
 
-        call_command("recalculate_elo", "--format", "singles")
+        call_command("recalculate_ratings", "--format", "singles")
 
         again = sorted(
             PlayerRating.all_objects.values_list(

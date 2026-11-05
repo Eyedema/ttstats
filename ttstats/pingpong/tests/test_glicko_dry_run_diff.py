@@ -1,6 +1,6 @@
-"""`recalculate_elo --dry-run` also diffs the Glicko-2 shadow (KAN-69).
+"""`recalculate_ratings --dry-run` diffs the stored Glicko-2 state (KAN-69).
 
-This is the live-versus-replay check that gates the cutover: the stored shadow
+This is the live-versus-replay check that gates the cutover: the stored state
 must equal what a replay of the history would write.
 """
 
@@ -17,14 +17,14 @@ from .test_glicko_shadow import _at, _finish, _row, _state
 
 def _dry_run(*args):
     out = StringIO()
-    call_command("recalculate_elo", "--dry-run", *args, stdout=out)
+    call_command("recalculate_ratings", "--dry-run", *args, stdout=out)
     return out.getvalue()
 
 
 def _summary(text):
-    """(rows that differ, unexplained, explained) from the Glicko summary line."""
+    """(rows that differ, unexplained, explained) from the dry-run summary line."""
     m = re.search(
-        r"Glicko shadow: (\d+) scope rows? differ \((\d+) unexplained, (\d+) explained",
+        r"Dry run: (\d+) scope rows? differ \((\d+) unexplained, (\d+) explained",
         text,
     )
     assert m, text

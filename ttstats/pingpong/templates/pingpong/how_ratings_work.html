@@ -5,8 +5,8 @@
 {% block nav_title %}How ratings work{% endblock %}
 
 {% comment %}
-The explainer behind the ± (KAN-71). Reachable only under Glicko-2: the view
-404s for an Elo viewer, so this copy can never describe the wrong numbers.
+The explainer behind the ± (KAN-71). Glicko-2 is the only rating system
+(KAN-73), so the page is always available to a signed-in user.
 Plain static prose: no JavaScript, nothing hidden. Thresholds come from
 rating_tags at call time.
 {% endcomment %}

@@ -4,7 +4,7 @@ Three things that are easy to get subtly wrong and impossible to see in a
 screenshot:
 
   * "Waiting on you" must contain only matches *you* still have to act on.
-  * The Elo figure shown before you agree must be the figure that gets written
+  * The rating figure shown before you agree must be the figure that gets written
     when you do.
   * The leaderboard's weekly movement, and the editorial line derived from it.
 """
@@ -14,8 +14,8 @@ import pytest
 from django.urls import reverse
 from django.utils import timezone
 
-from pingpong.elo import projected_elo_change_for, projected_elo_changes
-from pingpong.models import EloHistory, Match, MatchConfirmation, Side
+from pingpong import ratings
+from pingpong.models import Match, MatchConfirmation, RatingChange, Side
 
 from .conftest import (
     GameFactory,
@@ -105,15 +105,17 @@ class TestWaitingOnYou:
         assert row["their_score"] == 3
         assert row["my_score"] == 0
 
-    def test_the_elo_cost_of_agreeing_is_shown(self):
+    def test_the_rating_cost_of_agreeing_is_shown(self):
         user, me = _verified_user_with_player()
         them = _verified_player()
         match = _finished_match(them, me)
         MatchConfirmation.objects.create(match=match, player=them)
 
         row = _login_client(user).get(reverse("pingpong:dashboard")).context["pending_confirmations"][0]
-        assert row["elo_if_true"] == projected_elo_change_for(match, me)
-        assert row["elo_if_true"] < 0  # you lost it
+        assert row["delta_if_true"] == ratings.projected_change_for(
+            match, me, ratings.display_scope(match)
+        )
+        assert row["delta_if_true"] < 0  # you lost it
 
 
 @pytest.mark.django_db
@@ -205,55 +207,57 @@ class TestPlayView:
 
 
 # ---------------------------------------------------------------------------
-# The Elo figure you are asked to agree to
+# The rating figure you are asked to agree to
 # ---------------------------------------------------------------------------
 
 @pytest.mark.django_db
-class TestProjectedElo:
+class TestProjectedRating:
     def test_the_projection_is_what_gets_written(self):
-        """The dashboard says "-16 Elo if true" before you confirm. If that is
+        """The dashboard says "-16 if agreed" before you confirm. If that is
         not the number the confirmation actually applies, the app has lied to
         the user about the consequence of a decision it asked them to make.
         """
         winner = _verified_player()
         loser = _verified_player()
         match = _finished_match(winner, loser)
+        scope = ratings.display_scope(match)
 
-        projection = projected_elo_changes(match)
+        projection, pending = ratings.projected_changes_by_player(match, scope)
+        assert pending is True
         confirm_match(match)
 
-        history = {h.player_id: h for h in EloHistory.objects.filter(match=match)}
-        assert history[winner.pk].rating_change == projection.side1_change
-        assert history[loser.pk].rating_change == projection.side2_change
-
-    def test_the_recorded_k_factor_is_the_one_used(self):
-        winner = _verified_player()
-        loser = _verified_player()
-        match = _finished_match(winner, loser)
-
-        projection = projected_elo_changes(match)
-        confirm_match(match)
-
-        history = {h.player_id: h for h in EloHistory.objects.filter(match=match)}
-        assert history[winner.pk].k_factor == pytest.approx(projection.side1_k)
-        assert history[loser.pk].k_factor == pytest.approx(projection.side2_k)
+        written = {
+            rc.player_id: rc.glicko_change
+            for rc in RatingChange.objects.filter(match=match, rating__season=None)
+        }
+        assert written == projection
+        assert written[winner.pk] != 0
 
     def test_a_match_with_no_winner_moves_nobody(self):
         a, b = PlayerFactory(), PlayerFactory()
         match = MatchFactory(player1=a, player2=b, best_of=5)
-        assert projected_elo_changes(match) == (0, 0, 0.0, 0.0)
+        scope = ratings.display_scope(match)
+
+        assert ratings.projected_change_for(match, a, scope) == 0
+        assert ratings.projected_change_for(match, b, scope) == 0
 
     def test_a_player_who_did_not_play_is_worth_nothing(self):
         a, b = PlayerFactory(), PlayerFactory()
         bystander = PlayerFactory()
         match = _finished_match(a, b)
-        assert projected_elo_change_for(match, bystander) == 0
-        assert projected_elo_change_for(match, None) == 0
+        scope = ratings.display_scope(match)
+        assert ratings.projected_change_for(match, bystander, scope) == 0
+        assert ratings.projected_change_for(match, None, scope) == 0
 
     def test_the_two_sides_are_opposite_in_sign(self):
         a, b = PlayerFactory(), PlayerFactory()
-        projection = projected_elo_changes(_finished_match(a, b))
-        assert projection.side1_change > 0 > projection.side2_change
+        match = _finished_match(a, b)
+        scope = ratings.display_scope(match)
+        assert (
+            ratings.projected_change_for(match, a, scope)
+            > 0
+            > ratings.projected_change_for(match, b, scope)
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -268,7 +272,7 @@ class TestLeaderboardMovement:
         confirm_match(_finished_match(me, them))
 
         # Age one of the two history rows out of the window.
-        EloHistory.objects.filter(player=me).update(
+        RatingChange.objects.filter(player=me).update(
             created_at=timezone.now() - datetime.timedelta(days=30)
         )
 
@@ -295,7 +299,7 @@ class TestLeaderboardMovement:
         user, me = _verified_user_with_player()
         them = _verified_player()
         confirm_match(_finished_match(me, them))
-        EloHistory.objects.all().update(
+        RatingChange.objects.all().update(
             created_at=timezone.now() - datetime.timedelta(days=30)
         )
 
@@ -303,7 +307,7 @@ class TestLeaderboardMovement:
         assert context["biggest_mover"] is None
 
     def test_the_fragment_carries_the_same_context_as_the_page(self):
-        """htmx swaps _leaderboard_results.html on its own, so it has to be
+        """htmx swaps _leaderboard_season_results.html on its own, so it has to be
         handed everything it renders -- including the movement column and the
         footer line, which are derived rather than stored."""
         user, me = _verified_user_with_player()
@@ -313,7 +317,7 @@ class TestLeaderboardMovement:
         resp = _login_client(user).get(
             reverse("pingpong:leaderboard"), HTTP_HX_REQUEST="true"
         )
-        assert "pingpong/_leaderboard_results.html" in [t.name for t in resp.templates]
+        assert "pingpong/_leaderboard_season_results.html" in [t.name for t in resp.templates]
         assert "movement" in resp.context["player_stats"][0]
         assert "biggest_mover" in resp.context
 
@@ -371,25 +375,25 @@ class TestMatchDetailViewerContext:
         resp = _login_client(user).get(reverse("pingpong:match_detail", args=[match.pk]))
         assert resp.context["viewer_can_confirm"] is False
 
-    def test_elo_reads_as_pending_until_confirmed(self):
+    def test_the_delta_reads_as_pending_until_confirmed(self):
         user, me = _verified_user_with_player()
         them = _verified_player()
         match = _finished_match(them, me)
         MatchConfirmation.objects.create(match=match, player=them)
 
         resp = _login_client(user).get(reverse("pingpong:match_detail", args=[match.pk]))
-        assert resp.context["elo_is_pending"] is True
+        assert resp.context["delta_is_pending"] is True
         assert b"if agreed" in resp.content
 
-    def test_elo_reads_as_applied_once_confirmed(self):
+    def test_the_delta_reads_as_applied_once_confirmed(self):
         user, me = _verified_user_with_player()
         them = _verified_player()
         match = _finished_match(them, me)
         confirm_match(match)
 
         resp = _login_client(user).get(reverse("pingpong:match_detail", args=[match.pk]))
-        assert resp.context["elo_is_pending"] is False
-        assert resp.context["side1_elo_delta"] != 0
+        assert resp.context["delta_is_pending"] is False
+        assert resp.context["side1_delta"] != 0
         assert b"if agreed" not in resp.content
 
     def test_game_rows_carry_the_share_of_points(self):

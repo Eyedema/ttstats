@@ -36,7 +36,7 @@ cd ttstats && python -m pytest -k "TestMatch"         # Run by name pattern
 cd ttstats && coverage run -m pytest && coverage report   # or ../scripts/run_tests.sh
 
 # Management Commands
-cd ttstats && python manage.py recalculate_elo [--dry-run]       # Recalculate all Elo ratings
+cd ttstats && python manage.py recalculate_ratings [--dry-run]   # Rebuild all ratings
 cd ttstats && python manage.py generate_vapid_keys              # Web push keypair (run once, then set in .env.prod)
 cd ttstats && python manage.py rebuild_point_rollups [--check]  # Rebuild (or only verify) point rollups from the raw log
 cd ttstats && python manage.py point_storage --by-club          # Point-log row counts, growth rate, retention threshold
@@ -91,7 +91,7 @@ Fixtures and helpers: `complete_match` (finished singles, 3-0 side 1, best of 5)
 3. **Signals fire on User creation.** Every `UserFactory()` creates a `UserProfile` with a verification token. Don't create profiles manually.
 4. **Game.save() triggers Match.save().** Creating enough games sets the match winner. Tests that check "no winner yet" must not create too many games.
 5. **Match confirmations use a junction table.** Singles need 2 confirmations, doubles 4 -- but only *verified* players count. Use `confirmed=True` in MatchFactory or `confirm_match()`.
-6. **Elo updates on confirmation only.** Use `confirm_match()` or `confirm_match_silent()` to trigger it.
+6. **Ratings update on confirmation only.** Use `confirm_match()` or `confirm_match_silent()` to trigger it.
 7. **Manager tests need thread-local manipulation.** Import `_thread_locals` from `ttstats.middleware`, set/clear `_thread_locals.user`, and clean up in an `autouse` fixture.
 8. **`base.html` requires `user.player.pk`.** Every logged-in user in a view test needs a linked Player or rendering raises `NoReverseMatch`. Use `_staff_with_player()` for staff.
 9. **Emails in tests:** use `mailoutbox` or `django.core.mail.outbox`.
@@ -103,7 +103,7 @@ Fixtures and helpers: `complete_match` (finished singles, 3-0 side 1, best of 5)
 When adding a feature, also add an integration test for its happy path. These must exist (check, don't infer from a `-k` count):
 
 1. Registration -> verification -> login (`test_integration.py`)
-2. Singles match lifecycle with Elo (`test_integration.py`)
+2. Singles match lifecycle with ratings (`test_integration.py`)
 3. Doubles match lifecycle (`test_integration.py`)
 4. Scheduled match conversion (`test_scheduled_match_conversion.py::TestConversionIntegration`)
 5. Head-to-head with data (`test_views.py::TestHeadToHead*`)
@@ -131,7 +131,7 @@ When adding a feature, also add an integration test for its happy path. These mu
 - When a winner is first set: if any player is unverified, auto-confirm all; otherwise send confirmation emails. `match_confirmed` is True when all *verified* players confirmed (empty verified set = True).
 - Views filter with `Match.objects.filter(is_confirmed=True)`, not in Python.
 - Championship matches can have a winner with `is_confirmed=False`: filter championship data by `winner_side__isnull=False`.
-- `elo.projected_elo_changes(match, scope)` is the only source of an Elo preview *and* of what gets written, for every scope. Formats and seasons live only in `PlayerRating`; `Player.elo_rating` is the lifetime combined mirror (see `seasons.md`).
+- **Ratings are Glicko-2 only.** `rating_pipeline.guarded_projection` is the one path to the arithmetic for the preview *and* the write. Ratings live only in `PlayerRating`; `EloHistory` and `RatingChange.elo_*` are frozen (see `seasons.md`).
 - Scoring rules (`WIN_POINTS`, `MIN_LEAD`, valid final scores) live only in `live_scoring.py`. Never re-type scorelines.
 
 ### Templates and forms

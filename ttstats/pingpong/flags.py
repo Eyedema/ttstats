@@ -105,7 +105,7 @@ def _lookup_override(name, user_pk):
         from .models import FeatureFlagOverride
 
         # One query for ALL of the user's overrides, cached per declared flag:
-        # a page that checks `clubs`, `seasons` and `glicko2` costs one lookup,
+        # a page that checks several flags costs one lookup,
         # not three.
         found = dict(
             FeatureFlagOverride.objects.filter(user_id=user_pk)
@@ -159,27 +159,6 @@ def prefetch_overrides(users):
         logger.warning("Feature-flag prefetch failed", exc_info=True)
 
 
-def glicko_may_be_shown():
-    """Could ANY user see Glicko-2? Settings default on, or an enabled override.
-
-    A cheap gate (cached 30s) so code that only matters under Glicko pays
-    nothing in a deployment where no one has it.
-    """
-    if is_enabled("glicko2"):
-        return True
-    key = "feature_flag_any_glicko2_override"
-    cached = cache.get(key)
-    if cached is None:
-        try:
-            from .models import FeatureFlagOverride
-
-            cached = FeatureFlagOverride.objects.filter(name="glicko2", enabled=True).exists()
-        except Exception:
-            return False
-        cache.set(key, cached, OVERRIDE_CACHE_TIMEOUT)
-    return bool(cached)
-
-
 def is_enabled(name, user=None):
     """Is feature `name` on, for `user` (or globally when no user is given)?
 
@@ -212,32 +191,6 @@ def invalidate_override(name, user_pk):
     """Drop a cached override. Called from the override model's signals."""
     with contextlib.suppress(Exception):
         cache.delete(_override_cache_key(name, user_pk))
-        cache.delete("feature_flag_any_glicko2_override")
     memo = _request_memo()
     if memo is not None:
         memo.pop((name, user_pk), None)
-
-
-# ---------------------------------------------------------------------------
-# System checks
-# ---------------------------------------------------------------------------
-
-from django.core import checks  # noqa: E402
-
-
-@checks.register()
-def check_glicko_needs_seasons(app_configs=None, **kwargs):
-    """`glicko2` without `seasons` shows Elo: warn, because it looks like a mistake."""
-    declared = all_flags()
-    if declared.get("glicko2") and not declared.get("seasons"):
-        return [
-            checks.Warning(
-                "The 'glicko2' feature flag is on but 'seasons' is off.",
-                hint=(
-                    "ratings.system() only returns Glicko-2 when both are on, so "
-                    "every page keeps showing Elo. Turn 'seasons' on too."
-                ),
-                id="pingpong.W001",
-            )
-        ]
-    return []

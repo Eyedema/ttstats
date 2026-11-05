@@ -1,7 +1,7 @@
 """Query ceilings for the match-completion write path.
 
 Saving the final Game of a match fans out through three `post_save` receivers,
-the Elo pipeline and every achievement checker. That is the app's most
+the rating pipeline and every achievement checker. That is the app's most
 expensive single write, and it cost 114 queries for a two-player
 match -- growing by two more for every match already in the players' history,
 because `check_rivalry` resolved each opponent with its own query.
@@ -55,7 +55,7 @@ class TestMatchCompletionQueryCount:
         match = _finish_match(p1, p2)
 
         # ACT: this game takes the match to 2-0 in a best of 3, so it triggers
-        # winner detection, confirmation, Elo and every achievement checker.
+        # winner detection, confirmation, ratings and every achievement checker.
         with CaptureQueriesContext(connection) as ctx:
             GameFactory(match=match, game_number=2, team1_score=11, team2_score=5)
 
@@ -94,6 +94,6 @@ class TestMatchCompletionQueryCount:
         long_count = len(ctx_long.captured_queries)
         assert long_count <= short_count, (
             f"Query count grew with history: {short_count} queries at 5 prior "
-            f"matches, {long_count} at 40. Something in the achievement or Elo "
+            f"matches, {long_count} at 40. Something in the achievement or rating "
             f"path is querying per historical match."
         )

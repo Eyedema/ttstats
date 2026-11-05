@@ -7,9 +7,9 @@ dashed outline and a different word, so it cannot be mistaken for provisional
 in greyscale either. Established renders nothing: the absence of a marker is
 the "this number has settled" state.
 
-The threshold is decided in ratings.rating_status() (elo.PROVISIONAL_MATCHES, or
-the display RD under Glicko-2); this template only receives the verdict.
-Under Glicko-2 a provisional rating has a `reason`: 'new' keeps the word
+The threshold is decided in ratings.rating_status() (the display RD against
+glicko_adapter.PROVISIONAL_RD); this template only receives the verdict.
+A provisional rating has a `reason`: 'new' keeps the word
 Provisional, 'returning' (wide from idle time) says Returning. Same outline.
 
 Context: `status` ('provisional' | 'unrated' | 'established'), `reason`

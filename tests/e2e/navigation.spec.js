@@ -21,11 +21,14 @@ const { applyProdCSP, expectDrawerClosed } = require('./helpers');
 const tabBar = (page) => page.getByRole('navigation', { name: 'Primary' });
 const tab = (page, name) => tabBar(page).getByRole('link', { name, exact: false });
 
-test('flag-off users never see an uncertainty or the explainer', async ({ page }) => {
+test('every member sees Glicko-2 ratings and can open the explainer', async ({ page }) => {
+  // KAN-73: Elo and the seasons/glicko2 flags are retired, so there is no
+  // flag-off user any more.
   await applyProdCSP(page);
   await page.goto('/pingpong/leaderboard/');
-  expect(await page.locator('body').innerText()).not.toContain('±');
-  expect((await page.goto('/pingpong/ratings/')).status()).toBe(404);
+  await expect(page.locator('#leaderboard-results')).toHaveAttribute('data-rating-system', 'glicko2');
+  expect(await page.locator('body').innerText()).not.toMatch(/\bElo\b/);
+  expect((await page.goto('/pingpong/ratings/')).status()).toBe(200);
 });
 
 const SCREENS = [

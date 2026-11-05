@@ -74,19 +74,17 @@ Four tabs -- **Today, Play, Table, Cups** -- plus a tiered drawer.
 - **Leaderboard weekly movement is derived in both cache paths** via
   `_presentation_context()`, so hit, miss and htmx fragment agree.
 - **Match detail resolves the viewer's position once**, in `_viewer_context`
-  (and, with `seasons` on, the rating scope its Elo figures are in).
-- **With `seasons` on, the Table swaps partials**
-  (`_leaderboard_season_results.html`) and its season/format filters are a
-  rendered `LeaderboardScopeForm` with `hx-trigger="change, submit"` (no
-  `from:` selector to break). E2E runs it as `e2e-seasons`, the flag-on
-  user; every other spec stays flag-off.
+  (and the rating scope its figures are in).
+- **The Table** (`_leaderboard_season_results.html`) filters by season and
+  format through a rendered `LeaderboardScopeForm` with
+  `hx-trigger="change, submit"` (no `from:` selector to break).
 
 ## Rating components (KAN-71)
 
-- Under Glicko-2 show the number plus a muted `±n` and sr-only "give or take n"
+- Show the number plus a muted `±n` and sr-only "give or take n"
   (`_rating_value.html`); uncertainty is text, never opacity or colour alone.
-- Every rating component carries `data-rating-system`. No "Elo" copy under Glicko,
-  no "±" under Elo; `tests/test_glicko_ui.py` enforces both on the rendered pages.
+- Every rating component carries `data-rating-system`. No "Elo" copy anywhere
+  (Elo was retired by KAN-73); `tests/test_glicko_ui.py` sweeps the rendered pages.
 - Chart.js bands use two datasets with `fill`, the player hue (`player.hue_hex`),
   axis colours read with `getComputedStyle` and passed as literal `rgb()`.
 - E2E: `e2e-glicko` user (`glicko.json`); centre a link before tapping it when a

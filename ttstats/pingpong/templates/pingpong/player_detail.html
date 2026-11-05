@@ -79,7 +79,7 @@
 
     {% if format_ratings %}
     {% comment %}
-    Ratings per format (KAN-48 / KAN-50, seasons flag on). Singles and doubles
+    Ratings per format (KAN-48 / KAN-50). Singles and doubles
     are separate numbers, each this season and all-time, and each carries its
     provisional / unrated state as a word -- never as a colour, never as a
     1500 standing in for "no matches yet". The marker links to the
@@ -146,7 +146,6 @@
             </div>
         </div>
 
-        {% if rating_system == 'glicko2' %}
         {% for entry in format_ratings.formats %}{% if entry.format == 'singles' %}
         <div class="rounded-lg border bg-card p-4 md:p-6" data-rating-card data-rating-system="{{ rating_system }}">
             <div class="flex items-center justify-between">
@@ -170,29 +169,6 @@
             </div>
         </div>
         {% endif %}{% endfor %}
-        {% else %}
-        <div class="rounded-lg border bg-card p-4 md:p-6">
-            <div class="flex items-center justify-between">
-                <div>
-                    <p class="text-xs md:text-sm font-medium text-muted-foreground">Elo Rating</p>
-                    <p class="text-xl md:text-2xl font-bold text-primary mt-1">{{ player.elo_rating }}</p>
-                    <p class="text-xs text-muted-foreground mt-1">Current skill</p>
-                </div>
-                {% icon "trending-up" css="w-6 h-6 md:w-8 md:h-8 text-primary flex-shrink-0" %}
-            </div>
-        </div>
-
-        <div class="rounded-lg border bg-card p-4 md:p-6">
-            <div class="flex items-center justify-between">
-                <div>
-                    <p class="text-xs md:text-sm font-medium text-muted-foreground">Peak Elo</p>
-                    <p class="text-xl md:text-2xl font-bold text-warning mt-1">{{ player.elo_peak }}</p>
-                    <p class="text-xs text-muted-foreground mt-1">All-time best</p>
-                </div>
-                {% icon "award" css="w-6 h-6 md:w-8 md:h-8 text-warning flex-shrink-0" %}
-            </div>
-        </div>
-        {% endif %}
 
         <div class="rounded-lg border bg-card p-4 md:p-6">
             <div class="flex items-center justify-between">
@@ -264,19 +240,12 @@
     {% endif %}
 
     <!-- Rating chart -->
-    {% if rating_system == 'glicko2' and rating_chart_data %}
+    {% if rating_chart_data %}
     <div class="rounded-lg border bg-card p-4 md:p-6" data-rating-chart data-rating-system="{{ rating_system }}">
         <h3 class="font-semibold text-base md:text-lg mb-1">Rating history</h3>
         <p class="text-xs text-muted-foreground mb-4">Singles, all time. The shaded band is the ±: how sure we were after each match. <a href="{% url 'pingpong:how_ratings_work' %}" class="underline" data-how-ratings-link>How ratings work</a></p>
         <div class="relative" style="height: 300px;">
             <canvas id="ratingChart" role="img" aria-label="Rating history, singles, with the uncertainty band"></canvas>
-        </div>
-    </div>
-    {% elif rating_chart_data %}
-    <div class="rounded-lg border bg-card p-4 md:p-6">
-        <h3 class="font-semibold text-base md:text-lg mb-4">Elo Rating History</h3>
-        <div class="relative" style="height: 300px;">
-            <canvas id="eloChart"></canvas>
         </div>
     </div>
     {% endif %}
@@ -462,7 +431,7 @@
                     {% if item.achievement.tier != 'none' %}
                     <p class="text-xs text-muted-foreground capitalize">{{ item.achievement.get_tier_display }}</p>
                     {% endif %}
-                    <p class="text-xs text-muted-foreground mt-1">{{ item.achievement.description|neutral_rating_copy:rating_system }}</p>
+                    <p class="text-xs text-muted-foreground mt-1">{{ item.achievement.description }}</p>
                     {% if item.threshold > 1 %}
                     <div class="mt-2">
                         <div class="w-full bg-secondary rounded-full h-1.5">
@@ -772,7 +741,7 @@
     </div>
 </div>
 
-{% if rating_system == 'glicko2' and rating_chart_data %}
+{% if rating_chart_data %}
 {{ rating_chart_labels|json_script:"rating-chart-labels" }}
 {{ rating_chart_data|json_script:"rating-chart-data" }}
 {{ rating_chart_lower|json_script:"rating-chart-lower" }}
@@ -844,63 +813,6 @@
             scales: {
                 x: { ticks: { color: ink, maxTicksLimit: small ? 5 : 10, maxRotation: 45 }, grid: { display: false } },
                 y: { ticks: { color: ink, precision: 0 }, grid: { color: grid } }
-            }
-        }
-    });
-})();
-</script>
-{% elif rating_chart_data %}
-{{ rating_chart_labels|json_script:"elo-chart-labels" }}
-{{ rating_chart_data|json_script:"elo-chart-data" }}
-<script src="{% static 'pingpong/js/vendor/chart.umd.js' %}"></script>
-<script>
-(function() {
-    const labels = JSON.parse(document.getElementById('elo-chart-labels').textContent);
-    const data = JSON.parse(document.getElementById('elo-chart-data').textContent);
-    const ctx = document.getElementById('eloChart').getContext('2d');
-
-    new Chart(ctx, {
-        type: 'line',
-        data: {
-            labels: labels,
-            datasets: [{
-                label: 'Elo Rating',
-                data: data,
-                borderColor: 'rgb(59, 130, 246)',
-                backgroundColor: 'rgba(59, 130, 246, 0.08)',
-                fill: true,
-                tension: 0.3,
-                pointBackgroundColor: 'rgb(59, 130, 246)',
-                pointBorderColor: 'rgb(255, 255, 255)',
-                pointBorderWidth: 2,
-                pointRadius: window.innerWidth < 768 ? 3 : 4,
-                pointHoverRadius: window.innerWidth < 768 ? 5 : 6,
-                borderWidth: 2,
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: { display: false },
-                tooltip: {
-                    callbacks: {
-                        label: function(ctx) { return 'Elo: ' + ctx.parsed.y; }
-                    }
-                }
-            },
-            scales: {
-                x: {
-                    ticks: {
-                        maxTicksAllowed: window.innerWidth < 768 ? 5 : 10,
-                        maxRotation: 45,
-                    },
-                    grid: { display: false },
-                },
-                y: {
-                    ticks: { precision: 0 },
-                    grid: { color: 'rgba(156, 163, 175, 0.2)' },
-                }
             }
         }
     });

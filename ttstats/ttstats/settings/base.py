@@ -224,13 +224,8 @@ FEATURE_FLAGS = {
     # the hottest path in the app, so it is separately killable without a
     # deploy -- and gated again by TENANCY_CANARY_SAMPLE_RATE below.
     'tenancy_canary': False,
-    # Seasonal leaderboards and the S4.4 provisional marker (KAN-9). Off means
-    # every page renders exactly as before; the PlayerRating mirror is
-    # written either way.
-    'seasons': False,
-    # Glicko-2 as the displayed rating system (KAN-72). Only takes effect with
-    # `seasons` also on (ratings.system()); both systems keep being written.
-    'glicko2': False,
+    # `seasons` (KAN-9) and `glicko2` (KAN-72) were retired by KAN-73: seasons
+    # and Glicko-2 are always on. A stale name in TTSTATS_FLAGS_ON is ignored.
 }
 
 # Fraction of scoped querysets the canary inspects. 0.0 means never; the flag

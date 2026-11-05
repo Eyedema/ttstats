@@ -49,7 +49,7 @@ def pingpong_context(request):
         'nav_player': None,
         'nav_player_rank': None,
         'live_championships_count': 0,
-        'rating_system': ratings.ELO,
+        'rating_system': ratings.GLICKO,
         'nav_rating': None,
         'nav_rd': None,
     }
@@ -59,10 +59,6 @@ def pingpong_context(request):
 
     if not request.user.is_authenticated:
         return {**empty, 'nav_tab': nav_tab}
-
-    # One source for the nav and the page body, so they cannot disagree.
-    system = ratings.system(request.user)
-    empty['rating_system'] = system
 
     player = getattr(request.user, 'player', None)
     if not player:
@@ -103,7 +99,7 @@ def pingpong_context(request):
         ).count()
         cache.set(live_key, live_championships_count, 300)
 
-    reading = ratings.nav_reading(player, system=system)
+    reading = ratings.nav_reading(player)
     rank = reading['rank']
 
     return {
@@ -113,9 +109,8 @@ def pingpong_context(request):
         'nav_player': player,
         'nav_player_rank': rank,
         'live_championships_count': live_championships_count,
-        'rating_system': system,
-        # Neutral nav reading: Elo -> lifetime rating, RD None; Glicko ->
-        # season-else-all-time singles rating and its display RD.
+        'rating_system': ratings.GLICKO,
+        # The season-else-all-time singles rating and its display RD.
         'nav_rating': reading['rating'],
         'nav_rd': reading['rd'],
     }

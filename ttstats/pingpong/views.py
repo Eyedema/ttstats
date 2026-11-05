@@ -14,7 +14,7 @@ from django.core.exceptions import PermissionDenied
 from django.core.mail import send_mail
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db import transaction
-from django.db.models import Count, F, Max, Prefetch, Q, Sum
+from django.db.models import Count, F, Max, Prefetch, Q
 from django.http import Http404, HttpResponse, JsonResponse
 from django.urls import reverse
 from django.views.decorators.http import require_POST
@@ -39,17 +39,13 @@ logger = logging.getLogger(__name__)
 
 from ttstats.middleware import get_current_club
 
-from . import elo, live_scoring, notifications, player_hues, point_rollups, point_stats, push, ratings
+from . import live_scoring, notifications, player_hues, point_rollups, point_stats, push, rating_pipeline, ratings
 from .forms import GameForm, MatchEditForm, MatchForm, PlayerRegistrationForm, ScheduledMatchForm, MatchConvertForm, \
     ChampionshipCreateForm, ChampionshipEditForm, ScheduledMatchEditForm, LeaderboardScopeForm, DEFAULT_TOP_X
 from .achievements import get_achievement_progress
-from .elo import (
-    calculate_expected_score,
-    projected_elo_changes,
-)
 from . import cache_utils
 from .managers import scope_to_active_club
-from .models import Game, Location, Match, MatchParticipant, PointEvent, Player, UserProfile, MatchConfirmation, ScheduledMatch, ScheduledMatchParticipant, Side, Championship, Club, ClubInvite, ClubMembership, ClubRole, EloHistory, format_side_label, NotificationKind, NotificationPreference, PushSubscription
+from .models import Game, Location, Match, MatchParticipant, PointEvent, Player, UserProfile, MatchConfirmation, ScheduledMatch, ScheduledMatchParticipant, Side, Championship, Club, ClubInvite, ClubMembership, ClubRole, format_side_label, NotificationKind, NotificationPreference, PushSubscription
 from .emails import send_scheduled_match_email, send_passkey_deleted_email
 from .services import set_match_sides, set_scheduled_match_sides
 
@@ -249,34 +245,16 @@ class MatchDetailView(LoginRequiredMixin, DetailView):
         context = super().get_context_data(**kwargs)
         match = self.get_object()
 
-        # Get Elo changes for this match
-        elo_changes = match.elo_history.select_related('player').all()
-
-        # Pass separate elo changes for easier template access
-        side_by_player = {
-            p.player_id: p.side for p in match.participants.all()
-        }
-        for change in elo_changes:
-            side = side_by_player.get(change.player_id)
-            if side == Side.ONE:
-                context['player1_elo_change'] = change
-            elif side == Side.TWO:
-                context['player2_elo_change'] = change
-
-        # Win probability (the pre-match ratings of whichever system is shown)
-        system = ratings.system(self.request.user)
+        # Win probability from the pre-match ratings in the match's scope.
+        scope = ratings.display_scope(match)
         t1_pct, t2_pct = ratings.win_probability(
-            match.side1_players, match.side2_players,
-            system=system,
-            scope=ratings.display_scope(match) if system == ratings.GLICKO else None,
-            match=match,
+            match.side1_players, match.side2_players, scope=scope, match=match,
         )
-        context['rating_system'] = system
         context['team1_win_pct'] = t1_pct
         context['team2_win_pct'] = t2_pct
 
-        context.update(self._viewer_context(match))
-        context.update(self._elo_deltas(match, context, system=system))
+        context.update(self._viewer_context(match, scope))
+        context.update(self._rating_deltas(match, scope))
         context.update(self._point_context(match))
         game_rows = self._game_rows(match)
         context['game_rows'] = game_rows
@@ -285,62 +263,32 @@ class MatchDetailView(LoginRequiredMixin, DetailView):
         return context
 
     @staticmethod
-    def _elo_deltas(match, context, *, system):
+    def _rating_deltas(match, scope):
         """What each side's rating did, or will do once both sides agree.
 
-        A match awaiting confirmation has no EloHistory yet, and showing
+        A match awaiting confirmation has no RatingChange yet, and showing
         nothing there is the wrong answer: the number is exactly what the
         viewer is being asked to agree to. So the page shows the projection,
         clearly marked as pending, and swaps to the recorded figure once it is
-        real. Both come from the same arithmetic (see elo.projected_elo_changes)
-        so the pending number is never a different number.
-
-        With the seasons flag on, `rating_scope` (from `_viewer_context`) is
-        the match's season and format: the recorded figure is its
-        `RatingChange`, and the projection is the same call in that scope.
+        real. Both come from the same arithmetic (`ratings.match_deltas`), so
+        the pending number is never a different number.
         """
-        scope = context.get('rating_scope')
-        if scope is not None:
-            side1_delta, side2_delta, pending = ratings.match_deltas(
-                match, scope, system=system
-            )
-        else:
-            applied_1 = context.get('player1_elo_change')
-            applied_2 = context.get('player2_elo_change')
-            if applied_1 or applied_2:
-                side1_delta = applied_1.rating_change if applied_1 else 0
-                side2_delta = applied_2.rating_change if applied_2 else 0
-                pending = False
-            else:
-                projection = projected_elo_changes(match)
-                side1_delta, side2_delta = projection.side1_change, projection.side2_change
-                pending = True
-        # The neutral names are always emitted. The `*_elo_*` names are the
-        # pre-Glicko template contract: Elo only, so they can never carry a
-        # Glicko number.
+        side1_delta, side2_delta, pending = ratings.match_deltas(match, scope)
         deltas = {
             'side1_delta': side1_delta,
             'side2_delta': side2_delta,
             'delta_is_pending': pending,
         }
-        if system == ratings.ELO:
-            deltas.update({
-                'side1_elo_delta': side1_delta,
-                'side2_elo_delta': side2_delta,
-                'elo_is_pending': pending,
-            })
-        elif scope is not None and match.is_double:
+        if match.is_double:
             # Doubles are rated per player: show each player's own figure,
             # not the side mean, so every number equals what is written.
-            by_player, _ = ratings.projected_changes_by_player(
-                match, scope, system=system
-            )
+            by_player, _ = ratings.projected_changes_by_player(match, scope)
             side1, side2 = match.sides()
             deltas['side1_player_deltas'] = [(p, by_player.get(p.pk, 0)) for p in side1]
             deltas['side2_player_deltas'] = [(p, by_player.get(p.pk, 0)) for p in side2]
         return deltas
 
-    def _viewer_context(self, match):
+    def _viewer_context(self, match, scope):
         """Where the person reading this page stands in it.
 
         The old template worked this out inline with a chain of
@@ -349,12 +297,8 @@ class MatchDetailView(LoginRequiredMixin, DetailView):
         question, which is how they came to disagree about whether a confirmed
         side should still show a Confirm button.
         """
-        # The rating scope this viewer reads (KAN-48): with the seasons flag
-        # on, the match's season and format; off, None and the legacy fields.
-        rating = {'rating_scope': None, 'scope_label': ''}
-        if ratings.enabled(self.request.user):
-            scope = ratings.display_scope(match)
-            rating = {'rating_scope': scope, 'scope_label': ratings.scope_label(scope)}
+        # The rating scope this match moves (KAN-48): its season and format.
+        rating = {'rating_scope': scope, 'scope_label': ratings.scope_label(scope)}
 
         player = getattr(self.request.user, 'player', None)
         if player is None:
@@ -605,41 +549,13 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
             # Check if player won (works for both 1v1 and 2v2)
             match.player_won = _player_won(player, match)
 
-        # Elo chart data (included in player_stats cache)
-        if 'elo_chart_labels' in cached_stats:
-            elo_labels = cached_stats['elo_chart_labels']
-            elo_data = cached_stats['elo_chart_data']
-        else:
-            elo_history = list(
-                EloHistory.objects.filter(player=player)
-                .order_by('created_at')
-                .values_list('created_at', 'new_rating')
-            )
-            if elo_history:
-                elo_labels = ['Start'] + [entry[0].strftime('%Y-%m-%d') for entry in elo_history]
-                elo_data = [1500] + [entry[1] for entry in elo_history]
-            else:
-                elo_labels = []
-                elo_data = []
-            # Update cache with elo chart data
-            cached_stats['elo_chart_labels'] = elo_labels
-            cached_stats['elo_chart_data'] = elo_data
-            cache.set(stats_cache_key, cached_stats, 600)
-
         # Achievement data
         achievement_progress = get_achievement_progress(player)
 
         context.update(self._point_stats_context(player))
 
         # Per-format ratings with their provisional/unrated state (KAN-48/50).
-        # None with the seasons flag off, so the section is absent.
-        system = ratings.system(self.request.user)
-        context['rating_system'] = system
-        context['format_ratings'] = (
-            ratings.player_format_ratings(player, system=system)
-            if ratings.enabled(self.request.user) else None
-        )
-        context['provisional_matches'] = elo.PROVISIONAL_MATCHES
+        context['format_ratings'] = ratings.player_format_ratings(player)
 
         context.update({
             'matches': confirmed_matches_page.object_list,
@@ -648,28 +564,13 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
             'achievement_progress': achievement_progress,
             **cached_stats,
         })
-        # The `elo_chart_*` names are the pre-Glicko template contract: Elo
-        # only, so they can never carry a Glicko series (nor, under Glicko,
-        # an Elo one the page must not show). The neutral names always exist.
-        for key in ('elo_chart_labels', 'elo_chart_data'):
-            context.pop(key, None)
-        if system == ratings.GLICKO:
-            history = ratings.rating_history(player, system=system)
-            context.update({
-                'rating_chart_labels': history['labels'],
-                'rating_chart_data': history['data'],
-                'rating_chart_lower': history['lower'],
-                'rating_chart_upper': history['upper'],
-            })
-        else:
-            context.update({
-                'elo_chart_labels': elo_labels,
-                'elo_chart_data': elo_data,
-                'rating_chart_labels': elo_labels,
-                'rating_chart_data': elo_data,
-                'rating_chart_lower': [],
-                'rating_chart_upper': [],
-            })
+        history = ratings.rating_history(player)
+        context.update({
+            'rating_chart_labels': history['labels'],
+            'rating_chart_data': history['data'],
+            'rating_chart_lower': history['lower'],
+            'rating_chart_upper': history['upper'],
+        })
 
         return context
 
@@ -844,20 +745,15 @@ class DashboardView(LoginRequiredMixin, TemplateView):
             .order_by("-date_played")[: self.CONFIRMATION_LIMIT]
         )
 
-        # With the seasons flag on, "if true" is the season-and-format change
-        # that confirmation will write (ratings.display_scope), not the legacy
-        # combined one.
-        seasons_on = ratings.enabled(self.request.user)
-        system = ratings.system(self.request.user)
+        # "If true" is the season-and-format change that confirmation will
+        # write (ratings.display_scope).
         rows = []
         for match in qs:
             cache_side_players(match)
             mine, theirs = self._sides_relative_to(match, player)
             opponent = theirs[0] if theirs else None
             delta_if_true = ratings.projected_change_for(
-                match, player,
-                ratings.display_scope(match) if seasons_on else elo.LEGACY,
-                system=system,
+                match, player, ratings.display_scope(match)
             )
             rows.append(
                 {
@@ -877,9 +773,6 @@ class DashboardView(LoginRequiredMixin, TemplateView):
                     "waiting_since": match.date_played,
                 }
             )
-            if system == ratings.ELO:
-                # Pre-Glicko name: Elo only, never a Glicko number.
-                rows[-1]["elo_if_true"] = delta_if_true
         return rows
 
     # --- Live rivalries -----------------------------------------------------
@@ -1317,29 +1210,13 @@ def is_htmx(request):
 
 
 class HowRatingsWorkView(LoginRequiredMixin, TemplateView):
-    """The plain-language explainer for Glicko-2 ratings (KAN-71).
-
-    Fails closed: it describes a system the viewer does not have under Elo, so
-    it 404s there rather than render copy about the wrong numbers.
-    """
+    """The plain-language explainer for Glicko-2 ratings (KAN-71)."""
 
     template_name = "pingpong/how_ratings_work.html"
 
-    def dispatch(self, request, *args, **kwargs):
-        if request.user.is_authenticated and (
-            ratings.system(request.user) != ratings.GLICKO
-        ):
-            raise Http404("Not available")
-        return super().dispatch(request, *args, **kwargs)
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context["rating_system"] = ratings.GLICKO
-        return context
-
 
 class LeaderboardView(LoginRequiredMixin, TemplateView):
-    """Display player rankings and statistics"""
+    """The seasons table: one club, one season or all-time, one format."""
 
     template_name = "pingpong/leaderboard.html"
 
@@ -1347,216 +1224,28 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
         # htmx asks for just the results block; a normal load gets the page.
         # Both render the same partial, so they cannot drift.
         if is_htmx(self.request):
-            if ratings.enabled(self.request.user):
-                return ["pingpong/_leaderboard_season_results.html"]
-            return ["pingpong/_leaderboard_results.html"]
+            return ["pingpong/_leaderboard_season_results.html"]
         return [self.template_name]
-
-    def _leaderboard_cache_key(
-        self, match_type, date_filter, start_date, end_date, top_x, rating_scope=None,
-        *, system,
-    ):
-        """Cache key: club namespace, then generation, then the filter params.
-
-        The club goes in the *prefix* so `cache_control --stats` can group by
-        club and a targeted flush stays possible. Its generation counter is
-        per club too, so a match in Club A no longer invalidates Club B's
-        leaderboard -- previously correct, but wasteful, and it hid the missing
-        key component during testing.
-
-        With the flag off `club_prefix()` is empty and the key is byte-identical
-        to its pre-tenancy shape.
-        """
-        if rating_scope is not None:
-            # The seasons table (KAN-48): season and format replace the legacy
-            # match-type/period filters; the key is built only in cache_utils.
-            return cache_utils.leaderboard_key(rating_scope, top_x, system)
-        return cache_utils.legacy_leaderboard_key(
-            match_type, date_filter, start_date, end_date, top_x
-        )
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context["rating_scope"] = None
-
-        if ratings.enabled(self.request.user):
-            context.update(self._season_context(system=ratings.system(self.request.user)))
-            return context
-
-        # Get filter parameters
-        match_type = self.request.GET.get('match_type', 'all')  # 'all', 'singles', 'doubles'
-        date_filter = self.request.GET.get('date_filter', 'all')  # 'all', 'month', '3months', '6months', 'year', 'custom'
-        start_date = self.request.GET.get('start_date', '')
-        end_date = self.request.GET.get('end_date', '')
-        top_x = self.request.GET.get('top_x', '10')
-
-        # Try cache first (10 minute TTL)
-        cache_key = self._leaderboard_cache_key(
-            match_type, date_filter, start_date, end_date, top_x, system=ratings.ELO
-        )
-        cached_data = cache.get(cache_key)
-
-        if cached_data is not None:
-            context.update(
-                self._presentation_context(
-                    cached_data, top_x, match_type, date_filter, start_date, end_date,
-                    system=ratings.ELO,
-                )
-            )
-            return context
-
-        # Calculate date range
-        from datetime import datetime, timedelta
-        from django.utils import timezone
-
-        filter_start_date = None
-        filter_end_date = timezone.now()
-
-        if date_filter == 'month':
-            filter_start_date = filter_end_date - timedelta(days=30)
-        elif date_filter == '3months':
-            filter_start_date = filter_end_date - timedelta(days=90)
-        elif date_filter == '6months':
-            filter_start_date = filter_end_date - timedelta(days=180)
-        elif date_filter == 'year':
-            filter_start_date = filter_end_date - timedelta(days=365)
-        elif date_filter == 'custom' and start_date and end_date:
-            try:
-                filter_start_date = timezone.make_aware(datetime.strptime(start_date, '%Y-%m-%d'))
-                filter_end_date = timezone.make_aware(
-                    datetime.strptime(end_date, '%Y-%m-%d').replace(hour=23, minute=59, second=59))
-            except ValueError:
-                # Invalid date format, default to all
-                filter_start_date = None
-
-        # Build base match query with filters applied at DB level
-        # Use is_confirmed=True to filter at DB level instead of Python
-        # _base_manager deliberately bypasses row-level security: the
-        # leaderboard is a whole-club table, not "matches I played in".
-        # It must NOT also bypass tenancy -- this feeds the cached payload,
-        # which makes it the single highest-risk bypass in the app.
-        matches_query = scope_to_active_club(
-            Match._base_manager.filter(is_confirmed=True)
-        )
-
-        # Apply match type filter at DB level
-        if match_type == 'singles':
-            matches_query = matches_query.filter(is_double=False)
-        elif match_type == 'doubles':
-            matches_query = matches_query.filter(is_double=True)
-
-        # Apply date filter at DB level
-        if filter_start_date:
-            matches_query = matches_query.filter(
-                date_played__gte=filter_start_date,
-                date_played__lte=filter_end_date
-            )
-
-        # Prefetch only what we need for stats
-        matches_query = matches_query.prefetch_related(
-            participants_prefetch(), 'games'
-        )
-
-        # Load all confirmed matches once into memory
-        confirmed_matches = list(matches_query)
-
-        # Build a lookup dictionary: player_id -> list of their matches
-        # This avoids N+1 queries
-        player_matches = {}
-        player_won_match = set()  # (player_id, match_id) pairs
-        for match in confirmed_matches:
-            for participant in match.participants.all():
-                player_matches.setdefault(participant.player_id, []).append(match)
-                if match.winner_side == participant.side:
-                    player_won_match.add((participant.player_id, match.id))
-
-        # Pre-cache game counts for all matches to avoid repeated queries
-        match_game_counts = {}
-        for match in confirmed_matches:
-            # Games are already prefetched, so this uses cached data
-            match_game_counts[match.id] = len(match.games.all())
-
-        # Get only players that have matches (optimization)
-        player_ids_with_matches = set(player_matches.keys())
-        player_stats_qs = Player.objects.filter(
-            id__in=player_ids_with_matches
-        ).select_related('user')
-
-        # Calculate stats in Python using pre-loaded data
-        player_stats = []
-        for player in player_stats_qs:
-            # Get matches for this player from our lookup dict
-            player_match_list = player_matches.get(player.id, [])
-
-            if not player_match_list:
-                continue
-
-            total_matches = len(player_match_list)
-
-            # Calculate wins using cached data
-            wins = sum(
-                1
-                for match in player_match_list
-                if (player.id, match.id) in player_won_match
-            )
-
-            losses = total_matches - wins
-            win_rate = (wins / total_matches * 100) if total_matches > 0 else 0
-
-            # Use pre-cached game counts
-            total_games = sum(match_game_counts.get(m.id, 0) for m in player_match_list)
-
-            player_stats.append({
-                "player": player,
-                "total_matches": total_matches,
-                "total_games": total_games,
-                "wins": wins,
-                "losses": losses,
-                "win_rate": win_rate,
-                "elo_rating": player.elo_rating,
-                "elo_peak": player.elo_peak,
-            })
-
-        # Sort by Elo rating (desc), then by total wins (desc), then by win rate (desc)
-        player_stats.sort(
-            key=lambda x: (x["elo_rating"], x["wins"], x["win_rate"]), reverse=True
-        )
-
-        # Apply top X filter
-        try:
-            top_x_int = int(top_x)
-            if top_x_int > 0:
-                player_stats = player_stats[:top_x_int]
-        except (ValueError, TypeError):
-            player_stats = player_stats[:10]
-
-        self._annotate_weekly_movement(player_stats)
-
-        # Cache for 10 minutes
-        cache.set(cache_key, player_stats, 600)
-
-        context.update(
-            self._presentation_context(
-                player_stats, top_x, match_type, date_filter, start_date, end_date,
-                system=ratings.ELO,
-            )
-        )
+        context.update(self._season_context())
         return context
 
-    def _season_context(self, *, system):
-        """The seasons table (flag on): one club, one season or all-time, one format.
+    def _season_context(self):
+        """Resolve the scope from GET and build the table for it.
 
-        Resolves the scope from GET through `LeaderboardScopeForm`, so a bad or
-        foreign season id falls back to the default (the active club's current
-        season, else all-time) rather than reaching the ORM. Both cache paths
-        then go through `_presentation_context`, like the legacy table.
+        Resolves the scope through `LeaderboardScopeForm`, so a bad or foreign
+        season id falls back to the default (the active club's current season,
+        else all-time) rather than reaching the ORM. Both cache paths then go
+        through `_presentation_context`.
         """
         club = get_current_club()
         seasons = ratings.club_seasons(club)
         current = ratings.current_season(seasons)
         defaults = {
             "season": str(current.pk) if current else ratings.ALL_TIME,
-            "format": elo.SINGLES,
+            "format": rating_pipeline.SINGLES,
             "top_x": DEFAULT_TOP_X,
         }
         form_kwargs = {"seasons": seasons, "current": current, "all_time_value": ratings.ALL_TIME}
@@ -1570,38 +1259,34 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
         form.is_valid()
 
         season = next((s for s in seasons if str(s.pk) == chosen["season"]), None)
-        scope = elo.RatingScope(season, chosen["format"])
+        scope = rating_pipeline.RatingScope(season, chosen["format"])
         top_x = chosen["top_x"]
 
         # Day one of a season: with fewer than 2 rated players the default
         # (current-season) table would be empty, so the *default* scope shows
-        # all-time instead. An explicit choice is never overridden. Glicko
-        # only: the Elo seasons table keeps its S4.3 behaviour.
+        # all-time instead. An explicit choice is never overridden.
         fell_back = False
         if (
-            system == ratings.GLICKO
-            and not self.request.GET.get("season")
+            not self.request.GET.get("season")
             and season is not None
-            and ratings.season_table_is_empty(scope, system=system)
+            and ratings.season_table_is_empty(scope)
         ):
-            scope = elo.RatingScope(None, chosen["format"])
+            scope = rating_pipeline.RatingScope(None, chosen["format"])
             chosen = {**chosen, "season": ratings.ALL_TIME}
             form = LeaderboardScopeForm(chosen, **form_kwargs)
             form.is_valid()
             fell_back = True
 
-        cache_key = self._leaderboard_cache_key(
-            "", "", "", "", top_x, rating_scope=scope, system=system
-        )
+        # The club namespace and generation live in the key (cache_utils).
+        cache_key = cache_utils.leaderboard_key(scope, top_x)
         payload = cache.get(cache_key)
         if payload is None:
-            rows, unrated = ratings.leaderboard(scope, int(top_x), system=system)
+            rows, unrated = ratings.leaderboard(scope, int(top_x))
             payload = {"rows": rows, "unrated": unrated}
             cache.set(cache_key, payload, 600)
 
         context = self._presentation_context(
-            payload["rows"], top_x, "all", "all", "", "",
-            rating_scope=scope, unrated=payload["unrated"], system=system,
+            payload["rows"], top_x, rating_scope=scope, unrated=payload["unrated"],
         )
         context.update({
             "scope_form": form,
@@ -1612,10 +1297,7 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
         return context
 
     @staticmethod
-    def _presentation_context(
-        player_stats, top_x, match_type, date_filter, start_date, end_date,
-        *, rating_scope=None, unrated=(), system,
-    ):
+    def _presentation_context(player_stats, top_x, *, rating_scope, unrated=()):
         """Everything the template reads, derived once for both cache paths.
 
         `biggest_mover` is the editorial line at the foot of the table -- the
@@ -1623,84 +1305,40 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
         It is only interesting when somebody has in fact moved, so a week where
         nothing happened produces no line rather than "Nobody, +0".
 
-        With a `rating_scope` (the seasons table) each row's provisional status
-        is derived here, from its cached all-time experience, so a change to
-        `elo.PROVISIONAL_MATCHES` reaches a cached table too.
+        Each row's provisional status is derived here, from its cached RD
+        inflated to today and its all-time experience, so the verdict is never
+        cached.
         """
         movers = [row for row in player_stats if row.get("movement")]
         biggest_mover = (
             max(movers, key=lambda row: abs(row["movement"])) if movers else None
         )
 
-        context = {
+        today = timezone.now().date()
+        for row in player_stats:
+            shown = ratings.display_rd(row, today)
+            if shown is not None:
+                # The verdict uses the rounded RD: the figure shown as the ±.
+                row["rd"] = round(shown)
+            row["status"] = ratings.rating_status(
+                True, experience=row["experience"],
+                rd=row["rd"] if shown is not None else None,
+            )
+            row["reason"] = row["status"].reason
+
+        return {
             "player_stats": player_stats,
             "top_x": top_x,
-            "match_type": match_type,
-            "date_filter": date_filter,
-            "start_date": start_date,
-            "end_date": end_date,
             "biggest_mover": biggest_mover,
             "leaderboard_week": timezone.localdate().isocalendar().week,
+            "rating_scope": rating_scope,
+            "scope_label": ratings.scope_label(rating_scope),
+            "format_label": ratings.format_label(rating_scope.format),
+            "unrated_players": list(unrated),
+            "show_rating_help": bool(unrated) or any(
+                row["status"] == ratings.PROVISIONAL for row in player_stats
+            ),
         }
-        if rating_scope is not None:
-            today = timezone.now().date()
-            for row in player_stats:
-                # A cache entry written before the neutral keys existed (the
-                # Elo seasons key is unchanged across the deploy) lacks them.
-                if "rating" not in row and "elo_rating" in row:
-                    row["rating"] = row["elo_rating"]
-                if "peak" not in row and "elo_peak" in row:
-                    row["peak"] = row["elo_peak"]
-                shown = ratings.display_rd(row, today) if system == ratings.GLICKO else None
-                if shown is not None:
-                    # The verdict uses the rounded RD: the figure shown as the ±.
-                    row["rd"] = round(shown)
-                row["status"] = ratings.rating_status(
-                    True, experience=row["experience"],
-                    rd=row["rd"] if shown is not None else None, system=system,
-                )
-                row["reason"] = row["status"].reason
-            context.update({
-                "rating_system": system,
-                "rating_scope": rating_scope,
-                "scope_label": ratings.scope_label(rating_scope),
-                "format_label": ratings.format_label(rating_scope.format),
-                "unrated_players": list(unrated),
-                "provisional_matches": elo.PROVISIONAL_MATCHES,
-                "show_rating_help": bool(unrated) or any(
-                    row["status"] == ratings.PROVISIONAL for row in player_stats
-                ),
-            })
-        return context
-
-    MOVEMENT_WINDOW_DAYS = 7
-
-    @classmethod
-    def _annotate_weekly_movement(cls, player_stats):
-        """Add this week's net Elo change to each row.
-
-        The leaderboard is meant to be screenshotted into the group chat, and a
-        column of static ratings gives nobody a reason to. Movement is the part
-        that makes it worth sending: it is the only number on the screen that
-        says something happened *since last time*.
-
-        Rendered as an arrow PLUS a signed integer, never colour alone, so it
-        survives greyscale and colour blindness.
-        """
-        if not player_stats:
-            return
-
-        since = timezone.now() - timedelta(days=cls.MOVEMENT_WINDOW_DAYS)
-        deltas = dict(
-            EloHistory.objects.filter(
-                player_id__in=[row["player"].pk for row in player_stats],
-                created_at__gte=since,
-            )
-            .values_list("player_id")
-            .annotate(total=Sum("rating_change"))
-        )
-        for row in player_stats:
-            row["movement"] = deltas.get(row["player"].pk, 0)
 
 
 class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
@@ -1983,29 +1621,20 @@ class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
         return context
 
     def _prediction(self, player1, player2):
-        """Head-to-head win chance in the viewer's rating system (not cached).
+        """Head-to-head win chance (not cached).
 
         Singles in the current season (else all-time), computed per request.
         """
-        system = ratings.system(self.request.user)
-        if system == ratings.GLICKO:
-            scope = ratings.scope_for(player1.club_id, timezone.now(), False)
-            p1_pct, p2_pct = ratings.win_probability(
-                [player1], [player2], system=system, scope=scope
-            )
-        else:
-            p1_pct = round(calculate_expected_score(player1.elo_rating, player2.elo_rating) * 100)
-            p2_pct = 100 - p1_pct
+        scope = ratings.scope_for(player1.club_id, timezone.now(), False)
+        p1_pct, p2_pct = ratings.win_probability([player1], [player2], scope=scope)
         prediction = {
             "player1_win_pct": p1_pct,
             "player2_win_pct": p2_pct,
-            "rating_system": system,
         }
-        if system == ratings.GLICKO:
-            # The two readings the bar was computed from, for display.
-            readings = ratings.glicko_readings([player1, player2], scope=scope)
-            prediction["player1_rating"], prediction["player1_rd"] = readings[player1.pk]
-            prediction["player2_rating"], prediction["player2_rd"] = readings[player2.pk]
+        # The two readings the bar was computed from, for display.
+        readings = ratings.glicko_readings([player1, player2], scope=scope)
+        prediction["player1_rating"], prediction["player1_rd"] = readings[player1.pk]
+        prediction["player2_rating"], prediction["player2_rd"] = readings[player2.pk]
         return prediction
 
     @staticmethod
@@ -2441,17 +2070,14 @@ class CalendarView(LoginRequiredMixin, TemplateView):
         ).order_by("scheduled_date", "scheduled_time")[:5]
 
         # Attach win probability to upcoming matches
-        system = ratings.system(self.request.user)
         for sm in upcoming_matches:
             cache_side_players(sm)
             t1_pct, t2_pct = ratings.win_probability(
                 sm.cached_team1_players, sm.cached_team2_players,
-                system=system,
                 scope=ratings.scope_for(
                     sm.club_id, sm.scheduled_date,
                     max(len(sm.cached_team1_players), len(sm.cached_team2_players)) > 1,
-                )
-                if system == ratings.GLICKO else None,
+                ),
                 day=sm.scheduled_date,
             )
             sm.team1_win_pct = t1_pct
@@ -2508,17 +2134,14 @@ class ScheduledMatchDetailView(LoginRequiredMixin, DetailView):
         context['can_convert'] = can_convert
 
         # Win probability
-        system = ratings.system(user)
         t1_pct, t2_pct = ratings.win_probability(
             scheduled_match.side1_players, scheduled_match.side2_players,
-            system=system,
             scope=ratings.scope_for(
                 scheduled_match.club_id, scheduled_match.scheduled_date,
                 max(len(scheduled_match.side1_players), len(scheduled_match.side2_players)) > 1,
-            ) if system == ratings.GLICKO else None,
+            ),
             day=scheduled_match.scheduled_date,
         )
-        context['rating_system'] = system
         context['team1_win_pct'] = t1_pct
         context['team2_win_pct'] = t2_pct
 
@@ -3432,7 +3055,7 @@ class LivePointView(LoginRequiredMixin, View):
                 if match_complete:
                     # Flip is_live OFF first so the upcoming Game.save() →
                     # Match.save() pipeline runs the existing winner /
-                    # signal / Elo cascade as if it were a normal match.
+                    # signal / rating cascade as if it were a normal match.
                     Match.all_objects.filter(pk=match.pk).update(
                         is_live=False, live_state=None
                     )

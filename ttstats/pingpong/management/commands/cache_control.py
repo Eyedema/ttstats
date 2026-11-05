@@ -22,7 +22,7 @@ class Command(BaseCommand):
         parser.add_argument(
             '--bump-leaderboard',
             action='store_true',
-            help='Bump every club\'s leaderboard generation (run after flipping a rating flag)',
+            help='Bump every club\'s leaderboard generation (run after a deploy that changes a cached rating payload)',
         )
         parser.add_argument(
             '--stats',

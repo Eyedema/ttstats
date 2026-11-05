@@ -301,20 +301,6 @@ class Player(ClubStampedMixin, models.Model):
     notes = models.TextField(blank=True, help_text="Strengths, weaknesses, etc.")
     created_at = models.DateTimeField(auto_now_add=True)
 
-    # Elo rating fields
-    elo_rating = models.IntegerField(
-        default=1500,
-        help_text="Current Elo rating"
-    )
-    elo_peak = models.IntegerField(
-        default=1500,
-        help_text="All-time highest Elo rating"
-    )
-    matches_for_elo = models.IntegerField(
-        default=0,
-        help_text="Number of confirmed matches that affected Elo (for new player boost)"
-    )
-
     # The primary scoping column. Nullable until S1.2 backfills; PROTECT
     # because a club holding players must not be deletable out from under them.
     club = models.ForeignKey(
@@ -584,7 +570,7 @@ class Match(ClubStampedMixin, SideLabelMixin, models.Model):
 
         `players_on()` is a queryset, so every call is another round trip --
         and the completion pipeline asked for a side seven times per save
-        (twice in `projected_elo_changes`, twice more in `update_player_elo`,
+        (several times in the rating pipeline,
         twice in cache invalidation, and again for the labels). This answers
         all of them once.
 
@@ -2124,19 +2110,15 @@ class RatingFormat(models.TextChoices):
 class PlayerRating(models.Model):
     """A player's rating in one format, all-time or in one season (KAN-47).
 
-    `season=NULL` is the **all-time** rating for the format. Written by
-    `elo.update_player_elo` alongside the legacy `Player.elo_*` fields, which
-    stay lifetime and combined (decision 3). **A mirror for now: nothing
-    outside elo.py, elo_replay.py, elo_parity.py and recalculate_elo reads it.**
+    `season=NULL` is the **all-time** rating for the format. Written only by
+    `rating_pipeline.apply_match_ratings` (and rebuilt by `recalculate_ratings`);
+    displayed only through `ratings.py`.
 
-    `glicko_rating`, `rd`, `volatility` and `last_rated_on` (KAN-67) are an
-    **inert shadow** of the Glicko-2 rating (docs/decisions/kan-63-glicko2.md),
-    written beside the Elo fields by `glicko_adapter` and read by nothing.
-    NULL means "no Glicko state yet"; they replace Elo only at the cutover.
-
-    `peak` is per row: per format all-time, and per format per season.
-    A player with no row in a format is *unrated* in it, which is not the same
-    as 1500-with-history.
+    `glicko_rating`, `rd`, `volatility` and `last_rated_on` are the Glicko-2
+    state (docs/decisions/kan-63-glicko2.md). NULL means "no Glicko state yet":
+    the row is *unrated*, which is not the same as 1500-with-history. `matches`
+    counts the rated matches in the scope. The peak is not stored; it is the
+    max `RatingChange.glicko_new_rating` of the row.
     """
 
     player = models.ForeignKey(
@@ -2151,8 +2133,6 @@ class PlayerRating(models.Model):
         related_name="player_ratings",
     )
     format = models.CharField(max_length=10, choices=RatingFormat.choices)
-    rating = models.IntegerField(default=1500)
-    peak = models.IntegerField(default=1500)
     matches = models.IntegerField(default=0)
     glicko_rating = models.FloatField(null=True, blank=True)
     rd = models.FloatField(null=True, blank=True)
@@ -2183,22 +2163,26 @@ class PlayerRating(models.Model):
             # The leaderboard read: one club, one season (or all-time), one
             # format, best first.
             models.Index(
-                fields=["club", "season", "format", "-rating"],
+                fields=["club", "season", "format", "-glicko_rating"],
                 name="playerrating_leaderboard",
             ),
         ]
 
     def __str__(self):
         scope = self.season.name if self.season_id else "all-time"
-        return f"{self.player} {self.format} {scope}: {self.rating}"
+        shown = round(self.glicko_rating) if self.glicko_rating is not None else "unrated"
+        return f"{self.player} {self.format} {scope}: {shown}"
 
 
 class RatingChange(models.Model):
     """The audit trail for `PlayerRating`, one row per player per scope per match.
 
-    `EloHistory` stays the immutable legacy trail (lifetime, combined). The
-    unique `(match, rating)` is what makes a concurrent second confirmation
-    roll back instead of applying a match twice.
+    The `glicko_*` columns are the history; NULL when the projection was
+    skipped. The `elo_*` columns are the frozen Elo mirror from before KAN-73:
+    never written again and NULL on every newer row. `EloHistory` stays the
+    immutable legacy trail (lifetime, combined). The unique `(match, rating)`
+    is what makes a concurrent second confirmation roll back instead of
+    applying a match twice, and its existence is the "already applied" guard.
     """
 
     match = models.ForeignKey(
@@ -2210,12 +2194,12 @@ class RatingChange(models.Model):
     rating = models.ForeignKey(
         PlayerRating, on_delete=models.CASCADE, related_name="changes"
     )
-    old_rating = models.IntegerField()
-    new_rating = models.IntegerField()
-    rating_change = models.IntegerField()
-    k_factor = models.FloatField()
-    # Glicko-2 history (KAN-71), written beside the Elo columns; NULL when the
-    # projection was skipped or the row predates the backfill.
+    # Frozen Elo history (pre-KAN-73); never written, NULL on newer rows.
+    elo_old_rating = models.IntegerField(null=True, blank=True)
+    elo_new_rating = models.IntegerField(null=True, blank=True)
+    elo_change = models.IntegerField(null=True, blank=True)
+    elo_k_factor = models.FloatField(null=True, blank=True)
+    # Glicko-2 history (KAN-71); NULL when the projection was skipped.
     glicko_old_rating = models.FloatField(null=True, blank=True)
     glicko_new_rating = models.FloatField(null=True, blank=True)
     glicko_change = models.IntegerField(null=True, blank=True)
@@ -2232,7 +2216,8 @@ class RatingChange(models.Model):
         ]
 
     def __str__(self):
-        return f"{self.player} {self.rating_change:+d} ({self.rating.format}, match {self.match_id})"
+        change = f"{self.glicko_change:+d}" if self.glicko_change is not None else "unrated"
+        return f"{self.player} {change} ({self.rating.format}, match {self.match_id})"
 
 
 class SeasonStanding(models.Model):
@@ -2240,7 +2225,7 @@ class SeasonStanding(models.Model):
 
     Written once, by `season_rollover`, when the season is archived, and
     **never recomputed or updated** afterwards (only `notified_at` is ever
-    set). A late confirmation still moves `PlayerRating`, and `recalculate_elo`
+    set). A late confirmation still moves `PlayerRating`, and `recalculate_ratings`
     may rebuild every rating, but the archive is the record as it stood at
     rollover.
 
@@ -2266,7 +2251,7 @@ class SeasonStanding(models.Model):
     wins = models.PositiveIntegerField()
     losses = models.PositiveIntegerField()
     # Which system `rating` was frozen under (KAN-71); `rd` is set for Glicko.
-    rating_system = models.CharField(max_length=10, default="elo")
+    rating_system = models.CharField(max_length=10, default="glicko2")
     rd = models.FloatField(null=True, blank=True)
     notified_at = models.DateTimeField(null=True, blank=True, editable=False)
     created_at = models.DateTimeField(auto_now_add=True)

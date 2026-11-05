@@ -1,7 +1,7 @@
 """seed_e2e: the Playwright fixture must be identical however often it runs.
 
 The e2e specs assert exact ratings and ranks, so a re-seed that drifts a
-rating (a leftover match, or Elo applied on top of the previous run's) makes
+rating (a leftover match, or a rating applied on top of the previous run's) makes
 the suite depend on how many times the seed ran.
 """
 from datetime import timedelta
@@ -11,9 +11,9 @@ import pytest
 from django.core.management import call_command
 from django.utils import timezone
 
-from pingpong.models import Match, Player, PlayerRating, Season
+from pingpong.models import FeatureFlagOverride, Match, Player, PlayerRating, Season
 
-from .conftest import GameFactory, MatchFactory, confirm_match
+from .conftest import GameFactory, MatchFactory, UserFactory, confirm_match
 
 E2E_NAMES = ("E2E Player", "E2E Opponent", "E2E Momentum", "E2E Seasons Player")
 
@@ -23,16 +23,13 @@ def _seed():
 
 
 def _ratings():
-    players = sorted(
-        Player.objects.filter(name__in=E2E_NAMES)
-        .values_list("name", "elo_rating", "elo_peak", "matches_for_elo")
-    )
-    rows = sorted(
-        PlayerRating.all_objects.filter(player__name__in=E2E_NAMES)
-        .values_list("player__name", "season__name", "format", "rating", "peak", "matches"),
+    return sorted(
+        PlayerRating.all_objects.filter(player__name__in=E2E_NAMES).values_list(
+            "player__name", "season__name", "format",
+            "glicko_rating", "rd", "volatility", "last_rated_on", "matches",
+        ),
         key=repr,
     )
-    return players, rows
 
 
 @pytest.fixture(autouse=True)
@@ -49,7 +46,8 @@ class TestSeedE2EIsIdempotent:
         _seed()
 
         assert _ratings() == first
-        assert first[1], "the seed wrote no PlayerRating rows"
+        assert first, "the seed wrote no PlayerRating rows"
+        assert any(row[3] is not None for row in first), "no Glicko state was written"
 
     def test_a_leftover_match_between_seeded_players_is_removed(self):
         """A spec that finishes the live match leaves a confirmed result behind."""
@@ -88,7 +86,6 @@ class TestGlickoSeed:
     def test_the_glicko_member_has_pipeline_written_state_and_a_pending_result(self):
         from django.contrib.auth.models import User
 
-        from pingpong import ratings
         from pingpong.models import RatingChange
 
         _seed()
@@ -96,7 +93,7 @@ class TestGlickoSeed:
         user = User.objects.get(username="e2e-glicko")
         me = Player.objects.get(name="E2E Glicko Player")
         row = PlayerRating.all_objects.get(player=me, season__isnull=True, format="singles")
-        assert ratings.system(user) == ratings.GLICKO
+        assert user.player == me
         assert row.glicko_rating is not None and row.rd is not None
         assert RatingChange.objects.filter(player=me, glicko_change__isnull=False).exists()
         assert Match.all_objects.filter(participants__player=me, is_confirmed=False).count() == 1
@@ -116,3 +113,27 @@ class TestGlickoSeed:
             .values_list("season__name", "format", "glicko_rating", "rd")
             .order_by("season__name", "format")
         )
+
+
+@pytest.mark.django_db
+class TestRetiredFlagOverrides:
+    """`seasons` and `glicko2` were retired by KAN-73: the seed sets no
+    override for them and drops the ones an older seed left behind."""
+
+    def test_the_seed_creates_no_override_for_a_retired_flag(self):
+        _seed()
+
+        assert not FeatureFlagOverride.objects.filter(
+            name__in=["seasons", "glicko2"]
+        ).exists()
+
+    def test_a_stale_override_is_deleted(self):
+        user = UserFactory()
+        for flag in ("seasons", "glicko2"):
+            FeatureFlagOverride.objects.create(name=flag, user=user, enabled=True)
+
+        _seed()
+
+        assert not FeatureFlagOverride.objects.filter(
+            name__in=["seasons", "glicko2"]
+        ).exists()

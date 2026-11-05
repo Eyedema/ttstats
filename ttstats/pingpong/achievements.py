@@ -10,9 +10,10 @@ Use Match.all_objects throughout to bypass row-level security.
 import logging
 from collections import Counter
 
-from django.db.models import F, Prefetch, prefetch_related_objects
+from django.db.models import F, Max, Prefetch, prefetch_related_objects
 
-from .models import Achievement, EloHistory, Game, Match, PlayerAchievement, Side
+from . import glicko2
+from .models import Achievement, Game, Match, PlayerAchievement, RatingChange, Side
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,7 @@ class PlayerContext:
         self.player = player
         self.match = match
         self._confirmed_matches = None
-        self._elo_by_player = None
+        self._ratings_by_player = None
 
         if match is not None:
             _ensure_match_prefetched(match)
@@ -56,21 +57,30 @@ class PlayerContext:
         )
 
     @property
-    def elo_by_player(self):
-        """This match's EloHistory rows, keyed by player id.
+    def ratings_by_player(self):
+        """This match's all-time `RatingChange` rows with Glicko values, by player id.
 
         Two checkers need them (giant slayer, peak performer) and each used to
-        fetch its own.
+        fetch its own. All-time, not season: achievements are a career record.
         """
-        if self._elo_by_player is None:
+        if self._ratings_by_player is None:
             if self.match is None:
-                self._elo_by_player = {}
+                self._ratings_by_player = {}
             else:
-                self._elo_by_player = {
-                    eh.player_id: eh
-                    for eh in EloHistory.objects.filter(match=self.match)
+                self._ratings_by_player = {
+                    rc.player_id: rc
+                    for rc in _all_time_changes().filter(match=self.match)
                 }
-        return self._elo_by_player
+        return self._ratings_by_player
+
+
+def _all_time_changes():
+    """`RatingChange` rows of the all-time scopes that carry a Glicko movement."""
+    return RatingChange.objects.filter(
+        rating__season__isnull=True,
+        glicko_old_rating__isnull=False,
+        glicko_new_rating__isnull=False,
+    )
 
 
 def _ensure_match_prefetched(match):
@@ -365,26 +375,30 @@ def check_deuce_master(player, match, ctx=None):
 
 @register_checker
 def check_giant_slayer(player, match, ctx=None):
-    """Beat someone rated significantly higher (uses pre-match Elo)."""
+    """Beat someone rated significantly higher (pre-match all-time Glicko-2 rating).
+
+    Glicko-2 is on the Elo scale (1500 start, 400-point logistic), so the
+    thresholds kept their meaning across the KAN-73 switch.
+    """
     ctx = ctx or PlayerContext(player, match)
     if not _player_won_match(player, match):
         return []
 
-    elo = ctx.elo_by_player
-    player_history = elo.get(player.pk)
-    if player_history is None:
+    rows = ctx.ratings_by_player
+    mine = rows.get(player.pk)
+    if mine is None:
         return []
 
     opponent_ratings = [
-        elo[opponent.pk].old_rating
+        rows[opponent.pk].glicko_old_rating
         for opponent in _opponents_in(player, match)
-        if opponent.pk in elo
+        if opponent.pk in rows
     ]
     if not opponent_ratings:
         return []
 
     avg_opponent_rating = sum(opponent_ratings) / len(opponent_ratings)
-    gap = avg_opponent_rating - player_history.old_rating
+    gap = avg_opponent_rating - mine.glicko_old_rating
 
     slugs = []
     if gap >= 100:
@@ -430,13 +444,24 @@ def check_rivalry(player, match, ctx=None):
 
 @register_checker
 def check_peak_performer(player, match, ctx=None):
-    """Reach a new personal Elo peak from this match."""
+    """Reach a new personal peak (all-time, in the match's format) from this match.
+
+    The peak is the highest rating after any match in that format's all-time
+    history, never below the 1500 start.
+    """
     ctx = ctx or PlayerContext(player, match)
-    history = ctx.elo_by_player.get(player.pk)
-    if history is None:
+    mine = ctx.ratings_by_player.get(player.pk)
+    if mine is None or mine.glicko_new_rating <= mine.glicko_old_rating:
         return []
 
-    if history.new_rating >= player.elo_peak and history.rating_change > 0:
+    previous = (
+        _all_time_changes()
+        .filter(rating_id=mine.rating_id)
+        .exclude(pk=mine.pk)
+        .aggregate(top=Max('glicko_new_rating'))['top']
+    )
+    peak = max(previous or glicko2.BASE_RATING, glicko2.BASE_RATING)
+    if mine.glicko_new_rating >= peak:
         return ['peak_performer']
     return []
 
@@ -483,21 +508,32 @@ def get_achievement_progress(player):
                     and game.winner_side == side):
                 deuce_wins += 1
 
-    # Giant slayer max gap
-    max_elo_gap = 0
-    for eh in EloHistory.objects.filter(player=player).select_related('match'):
-        m = eh.match
-        if not _player_won_match(player, m):
-            continue
-        opp_ratings = list(
-            EloHistory.objects.filter(
-                match=m, player__in=m.players_on(_opponent_side(player, m))
-            ).values_list('old_rating', flat=True)
-        )
+    # Giant slayer max gap: two queries, whatever the history length.
+    max_rating_gap = 0
+    won = {m.pk: m for m in confirmed_list if _player_won_match(player, m)}
+    mine = dict(
+        _all_time_changes()
+        .filter(player=player, match_id__in=list(won))
+        .values_list('match_id', 'glicko_old_rating')
+    )
+    others = {}
+    for match_id, player_id, old in (
+        _all_time_changes()
+        .filter(match_id__in=list(mine))
+        .exclude(player=player)
+        .values_list('match_id', 'player_id', 'glicko_old_rating')
+    ):
+        others.setdefault(match_id, {})[player_id] = old
+    for match_id, my_old in mine.items():
+        m = won[match_id]
+        opp_ratings = [
+            others.get(match_id, {})[o.pk]
+            for o in _opponents_in(player, m)
+            if o.pk in others.get(match_id, {})
+        ]
         if opp_ratings:
-            avg_opp = sum(opp_ratings) / len(opp_ratings)
-            gap = avg_opp - eh.old_rating
-            max_elo_gap = max(max_elo_gap, gap)
+            gap = sum(opp_ratings) / len(opp_ratings) - my_old
+            max_rating_gap = max(max_rating_gap, gap)
 
     # Rivalry max
     opponent_counts = Counter()
@@ -514,7 +550,7 @@ def get_achievement_progress(player):
         'matches_won': total_won,
         'win_streak': best_streak,
         'deuce_master': deuce_wins,
-        'giant_slayer': int(max_elo_gap),
+        'giant_slayer': int(max_rating_gap),
         'rivalry': max_rivalry,
     }
 
