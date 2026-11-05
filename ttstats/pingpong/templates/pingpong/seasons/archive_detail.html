@@ -52,7 +52,7 @@ is two plain links, no JS.
         </span>
       </span>
       <span class="flex-none px-4 py-3 text-right">
-        <span class="n block text-[22px]" data-testid="standing-rating">{{ row.rating }}</span>
+        <span class="n block text-[22px]" data-testid="standing-rating" data-rating-system="{{ row.rating_system }}">{{ row.rating }}{% if row.rating_system == 'glicko2' and row.rd %}<span class="ml-1 text-[0.5em] font-semibold text-muted-foreground" aria-hidden="true">±{{ row.rd|floatformat:0 }}</span><span class="sr-only"> give or take {{ row.rd|floatformat:0 }}</span>{% endif %}</span>
       </span>
     </li>
     {% endfor %}

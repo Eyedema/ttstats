@@ -7,6 +7,9 @@ const AUTH_FILE = path.join(__dirname, '.auth', 'user.json');
 // limit -- and the dev server's LocMemCache restarts with every run.
 const SEASONS_AUTH_FILE = path.join(__dirname, '.auth', 'seasons.json');
 
+// The Glicko-2 user (KAN-71/72): `seasons` AND `glicko2` on by override.
+const GLICKO_AUTH_FILE = path.join(__dirname, '.auth', 'glicko.json');
+
 async function authenticate(page, username, file) {
   await page.goto('/accounts/login/');
   await page.fill('input[name="username"]', username);
@@ -36,4 +39,11 @@ setup('authenticate the seasons user', async ({ browser }) => {
   await context.close();
 });
 
-module.exports = { AUTH_FILE, SEASONS_AUTH_FILE };
+setup('authenticate the glicko user', async ({ browser }) => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await authenticate(page, 'e2e-glicko', GLICKO_AUTH_FILE);
+  await context.close();
+});
+
+module.exports = { AUTH_FILE, SEASONS_AUTH_FILE, GLICKO_AUTH_FILE };

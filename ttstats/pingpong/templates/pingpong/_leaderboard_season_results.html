@@ -1,4 +1,4 @@
-{% load player_tags %}
+{% load player_tags icon_tags %}
 {% comment %}
 The seasons table (KAN-48 / S4.3): one season (or all-time), one format.
 
@@ -16,7 +16,7 @@ Provisional rows carry the S4.4 marker; players with no row in this scope are
 listed separately as Unrated, with no number -- not 1500. The explanation sits
 directly under the table whenever either state is on screen.
 {% endcomment %}
-<div id="leaderboard-results" data-scope="{{ rating_scope.season_id|default:'all' }}-{{ rating_scope.format }}">
+<div id="leaderboard-results" data-scope="{{ rating_scope.season_id|default:'all' }}-{{ rating_scope.format }}" data-rating-system="{{ rating_system }}">
   <p class="-mt-3 mb-4 text-[13px] font-semibold text-muted-foreground" data-scope-label>
     {{ player_stats|length }} rated · {{ scope_label }}
   </p>
@@ -34,11 +34,11 @@ directly under the table whenever either state is on screen.
         {% player_link stat.player css="block truncate text-[18px] font-extrabold leading-tight tracking-[-0.02em] after:absolute after:inset-0 after:content-['']" %}
         <span class="flex flex-wrap items-center gap-x-1.5 text-[12px] font-semibold text-muted-foreground">
           <span>{{ stat.total_matches }} played · {{ stat.wins }}–{{ stat.losses }} · peak {{ stat.peak }}</span>
-          {% include 'pingpong/_rating_status.html' with status=stat.status %}
+          {% include 'pingpong/_rating_status.html' with status=stat.status reason=stat.status_reason %}
         </span>
       </span>
       <span class="flex-none px-4 py-3 text-right">
-        <span class="n block text-[24px]">{{ stat.rating }}</span>
+        <span class="n block text-[24px]">{% include 'pingpong/_rating_value.html' with rating=stat.rating rd=stat.rd %}</span>
         {% include 'pingpong/_movement.html' with movement=stat.movement size_class='text-[12px]' %}
       </span>
     </div>
@@ -53,11 +53,11 @@ directly under the table whenever either state is on screen.
         {% player_link stat.player css="block truncate text-[16px] font-extrabold leading-tight after:absolute after:inset-0 after:content-['']" %}
         <span class="flex flex-wrap items-center gap-x-1.5 text-[11.5px] font-semibold text-muted-foreground">
           <span>{{ stat.total_matches }} played · {{ stat.wins }}–{{ stat.losses }}</span>
-          {% include 'pingpong/_rating_status.html' with status=stat.status %}
+          {% include 'pingpong/_rating_status.html' with status=stat.status reason=stat.status_reason %}
         </span>
       </span>
       <span class="flex-none px-4 py-2.5 text-right">
-        <span class="n block text-[20px]">{{ stat.rating }}</span>
+        <span class="n block text-[20px]">{% include 'pingpong/_rating_value.html' with rating=stat.rating rd=stat.rd %}</span>
         {% include 'pingpong/_movement.html' with movement=stat.movement size_class='text-[11.5px]' %}
       </span>
     </div>
@@ -107,7 +107,21 @@ directly under the table whenever either state is on screen.
   </div>
   {% endif %}
 
+  {% if fell_back_to_all_time %}
+  <p class="mt-3 text-[12.5px] font-semibold text-muted-foreground" data-fell-back>
+    The new season has too few rated players to rank yet, so this is the all-time table.
+  </p>
+  {% endif %}
+
   {% if show_rating_help %}
   {% include 'pingpong/_rating_help.html' %}
+  {% endif %}
+
+  {% if rating_system == 'glicko2' %}
+  <p class="mt-3">
+    <a href="{% url 'pingpong:how_ratings_work' %}" class="inline-flex min-h-[44px] items-center gap-2 text-[13px] font-extrabold underline" data-how-ratings-link>
+      {% icon "book-open" size="sm" %} How ratings work
+    </a>
+  </p>
   {% endif %}
 </div>

@@ -25,8 +25,15 @@ E2E_MOMENTUM_OPPONENT = "e2e-momentum"
 # so the season leaderboard specs see the flag-on UI while every other spec
 # keeps exercising the flag-off one -- the staff-first rollout, in miniature.
 E2E_SEASONS_USERNAME = "e2e-seasons"
+# The Glicko-2 user (KAN-71/72): `seasons` AND `glicko2` on by override, with
+# Glicko state written by the real pipeline, so the cutover specs see exactly
+# what a flagged-in member would.
+E2E_GLICKO_USERNAME = "e2e-glicko"
 # Every player the seed rates. A re-seed starts them from scratch.
-E2E_PLAYER_NAMES = ("E2E Player", "E2E Opponent", "E2E Momentum", "E2E Seasons Player")
+E2E_PLAYER_NAMES = (
+    "E2E Player", "E2E Opponent", "E2E Momentum", "E2E Seasons Player",
+    "E2E Glicko Player",
+)
 
 
 class Command(BaseCommand):
@@ -100,6 +107,7 @@ class Command(BaseCommand):
         )
 
         season = self._seed_season(club, player, opponent)
+        glicko_match = self._seed_glicko(club, opponent)
 
         # One live invite and one revoked one, so the suite can render both the
         # working and the dead page without mutating state mid-run.
@@ -121,6 +129,8 @@ class Command(BaseCommand):
         self.stdout.write(f"E2E_CLUB_TWO={second.name}")
         self.stdout.write(f"E2E_SEASONS_USERNAME={E2E_SEASONS_USERNAME}")
         self.stdout.write(f"E2E_SEASON={season.name}")
+        self.stdout.write(f"E2E_GLICKO_USERNAME={E2E_GLICKO_USERNAME}")
+        self.stdout.write(f"E2E_GLICKO_PENDING_MATCH_PK={glicko_match.pk}")
         self.stdout.write(f"E2E_ARCHIVED_SEASON_PK={archived_season.pk}")
 
     def _reset_seeded_players(self):
@@ -189,6 +199,51 @@ class Command(BaseCommand):
             for p in (winner, loser):
                 MatchConfirmation.objects.get_or_create(match=match, player=p)
         return season
+
+    def _seed_glicko(self, club, opponent):
+        """The Glicko-2 member: two confirmed wins and one result awaiting them.
+
+        Confirmed through the real pipeline, so the PlayerRating Glicko fields
+        and the RatingChange history are the ones the app writes. Two matches
+        leave a wide RD: the player is provisional. The last match is the
+        opponent's win with only the opponent's confirmation, which is what
+        the dashboard and match detail preview ("if agreed").
+        """
+        user, _ = User.objects.get_or_create(
+            username=E2E_GLICKO_USERNAME,
+            defaults={"email": "e2e-glicko@example.test"},
+        )
+        user.set_password(E2E_PASSWORD)
+        user.save()
+        user.profile.email_verified = True
+        user.profile.save()
+        me, _ = Player.objects.get_or_create(name="E2E Glicko Player")
+        me.user = user
+        me.club = club
+        me.save()
+        ClubMembership.objects.get_or_create(
+            club=club, user=user, defaults={"role": ClubRole.MEMBER}
+        )
+        for flag in ("seasons", "glicko2"):
+            FeatureFlagOverride.objects.update_or_create(
+                name=flag, user=user,
+                defaults={"enabled": True, "note": "e2e: glicko cutover specs"},
+            )
+
+        def play(winner, loser, confirm_by):
+            match = Match.all_objects.create(club=club, best_of=3)
+            services.set_match_sides(match, [winner], [loser])
+            for n in (1, 2):
+                Game.objects.create(
+                    match=match, game_number=n, team1_score=11, team2_score=7
+                )
+            for p in confirm_by:
+                MatchConfirmation.objects.get_or_create(match=match, player=p)
+            return match
+
+        play(me, opponent, [me, opponent])
+        play(me, opponent, [me, opponent])
+        return play(opponent, me, [opponent])
 
     def _seed_archived_season(self, club, user, player, opponent):
         """An archived season with a frozen table, for the archive specs (KAN-51).

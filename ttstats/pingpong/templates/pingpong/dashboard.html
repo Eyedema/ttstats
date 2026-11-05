@@ -89,7 +89,7 @@ before you read what.
             <p class="mt-0.5 text-[12px] font-semibold text-muted-foreground">
               {{ row.waiting_since|date:"D H:i" }}
               {% if row.match.location %} · {{ row.match.location.name }}{% endif %}
-              {% if row.elo_if_true %} · {{ row.elo_if_true|stringformat:"+d" }} Elo if true{% endif %}
+              {% if row.delta_if_true %} · <span data-rating-delta data-rating-system="{{ rating_system }}">{{ row.delta_if_true|stringformat:"+d" }}</span>{% if rating_system != 'glicko2' %} Elo{% endif %} if true{% endif %}
             </p>
           </a>
 

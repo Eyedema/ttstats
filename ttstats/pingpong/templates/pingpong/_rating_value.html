@@ -1,0 +1,12 @@
+{% comment %}
+A rating number and, under Glicko-2, how sure we are of it (KAN-71).
+
+The uncertainty is TEXT: a muted "±48" for the eye and a visually-hidden
+"give or take 48" for a screen reader. It is never colour or opacity alone.
+Inline, so the caller's wrapper owns the size (`n block text-[24px]`) and the
+± follows it in em. Elo has no uncertainty (`rd` is None) and renders the bare
+number.
+
+Context: `rating` (int), `rd` (int or None), `rating_system` (context processor).
+{% endcomment %}
+<span data-rating-value data-rating-system="{{ rating_system }}">{{ rating }}{% if rd %}<span class="ml-1 text-[0.5em] font-semibold text-muted-foreground" aria-hidden="true" data-rating-rd>±{{ rd }}</span><span class="sr-only"> give or take {{ rd }}</span>{% endif %}</span>

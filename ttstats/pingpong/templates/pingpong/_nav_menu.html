@@ -102,6 +102,10 @@ you are almost always after.
   {% include 'pingpong/_nav_row.html' with url=u icon_name='chart-spline' label='Head to head' match_urls='head_to_head' %}
   {% url 'pingpong:calendar' as u %}
   {% include 'pingpong/_nav_row.html' with url=u icon_name='calendar' label='Calendar' match_urls='calendar scheduled_match_detail' %}
+  {% if rating_system == 'glicko2' %}
+  {% url 'pingpong:how_ratings_work' as u %}
+  {% include 'pingpong/_nav_row.html' with url=u icon_name='book-open' label='How ratings work' match_urls='how_ratings_work' %}
+  {% endif %}
   {% url 'pingpong:player_list' as u %}
   {% include 'pingpong/_nav_row.html' with url=u icon_name='users' label='Everyone' match_urls='player_list player_detail player_add player_edit' %}
   {% url 'pingpong:match_list' as u %}

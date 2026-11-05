@@ -100,6 +100,7 @@ URL_EXPECTATIONS = {
     # --- Auth: pre-login or per-user, no club data on the page --------------
     "signup": ("agnostic", "Pre-login. The user has no club yet by definition."),
     "login": ("agnostic", "Pre-login."),
+    "how_ratings_work": ("agnostic", "Static explainer copy; reads no club data."),
     "email_verify": ("agnostic", "Token-addressed, pre-login, renders no club data."),
     "email_resend_verification": ("agnostic", "Pre-login."),
 

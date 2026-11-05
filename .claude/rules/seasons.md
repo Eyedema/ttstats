@@ -26,6 +26,10 @@ paths:
   - "ttstats/pingpong/tests/test_glicko_shadow.py"
   - "ttstats/pingpong/migrations/0045_ratingchange_glicko_history.py"
   - "ttstats/pingpong/tests/test_glicko_read.py"
+  - "ttstats/pingpong/tests/test_glicko_ui.py"
+  - "ttstats/pingpong/templatetags/rating_tags.py"
+  - "ttstats/pingpong/templates/pingpong/how_ratings_work.html"
+  - "docs/glicko2-cutover.md"
   - "ttstats/pingpong/tests/test_glicko_parameters.py"
   - "ttstats/pingpong/tests/test_glicko_dry_run_diff.py"
   - "ttstats/pingpong/management/commands/recalculate_elo.py"
@@ -175,7 +179,16 @@ The plan is `docs/decisions/kan-63-cutover-plan.md`.
 - **Push and rollover**: the system is resolved per recipient (gated by
   `flags.glicko_may_be_shown()` to keep the match-save query count flat);
   `season_rollover` freezes under `system(None)`.
-- Unconverted gap: achievements stay on Elo (copy only) until KAN-73.
+- Unconverted gap: achievements stay on Elo (copy only) until KAN-73; under
+  Glicko the words go neutral through `rating_tags.neutral_rating_copy`.
+- **Templates read the neutral keys only** (`rating`, `peak`, `rd`, `side1_delta`,
+  `delta_is_pending`, `delta_if_true`, `rating_chart_*`), never the Elo-named aliases.
+- **Rating components carry `data-rating-system`**; the ± is text
+  (`_rating_value.html`: visible `±n` plus sr-only "give or take n"), never colour alone.
+  Provisional/Returning is a bordered `label-cap`, never amber.
+- **`/pingpong/ratings/` (`how_ratings_work`) 404s under Elo** (fail closed).
+  `tests/test_glicko_ui.py` sweeps every surface: no "Elo" under Glicko, no "±" under Elo.
+  The cutover steps are `docs/glicko2-cutover.md`.
 
 ## The seasons UI (S4.3 / S4.4)
 

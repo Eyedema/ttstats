@@ -16,6 +16,7 @@ urlpatterns = [
     # match. See PlayView and TAB_FOR_URL_NAME.
     path("play/", views.PlayView.as_view(), name="play"),
     path("leaderboard/", views.LeaderboardView.as_view(), name="leaderboard"),
+    path("ratings/", views.HowRatingsWorkView.as_view(), name="how_ratings_work"),
     path("head-to-head/", views.HeadToHeadStatsView.as_view(), name="head_to_head"),
     path("calendar/", views.CalendarView.as_view(), name="calendar"),
 

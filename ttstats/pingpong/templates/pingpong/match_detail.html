@@ -55,7 +55,7 @@ no winner yet) is stated in words instead.
         <span class="min-w-0">
           {% player_link match.side1_players.0 css="block truncate text-heading" label=match.side1_label %}
           {% if match.winner_side == 1 %}<span class="{{ match.side1_players.0|hue }} hue-text block text-[10px] font-extrabold uppercase tracking-[0.12em]">WINNER</span>{% endif %}
-          {% include 'pingpong/_elo_delta.html' with delta=side1_elo_delta pending=elo_is_pending %}
+          {% include 'pingpong/_elo_delta.html' with delta=side1_delta pending=delta_is_pending %}
         </span>
       </div>
 
@@ -70,7 +70,7 @@ no winner yet) is stated in words instead.
         <span class="min-w-0">
           {% player_link match.side2_players.0 css="block truncate text-heading" label=match.side2_label %}
           {% if match.winner_side == 2 %}<span class="{{ match.side2_players.0|hue }} hue-text block text-[10px] font-extrabold uppercase tracking-[0.12em]">WINNER</span>{% endif %}
-          {% include 'pingpong/_elo_delta.html' with delta=side2_elo_delta pending=elo_is_pending %}
+          {% include 'pingpong/_elo_delta.html' with delta=side2_delta pending=delta_is_pending %}
         </span>
         <span class="{{ match.side2_players.0|hue }} hue-bar w-1.5 h-12"></span>
       </div>
@@ -105,14 +105,14 @@ no winner yet) is stated in words instead.
         {% icon "check" size="sm" %} Agreed by both sides.
       </p>
       <p class="mt-0.5 text-[12px] font-semibold leading-relaxed text-muted-foreground">
-        Elo has been applied. {% if team1_win_pct %}The winner was a {% if match.winner_side == 1 %}{{ team1_win_pct }}{% else %}{{ team2_win_pct }}{% endif %}% favourite going in.{% endif %}
+        {% if rating_system == 'glicko2' %}Ratings have been updated.{% else %}Elo has been applied.{% endif %} {% if team1_win_pct %}The winner was a {% if match.winner_side == 1 %}{{ team1_win_pct }}{% else %}{{ team2_win_pct }}{% endif %}% favourite going in.{% endif %}
       </p>
       {% elif viewer_can_confirm %}
       <p class="text-[14px] font-extrabold leading-snug">
         {{ match.winner_label }} says they won it. Your call.
       </p>
       <p class="mt-0.5 text-[12px] font-semibold leading-relaxed text-muted-foreground">
-        Elo only moves once you both agree.
+        {% if rating_system == 'glicko2' %}Ratings only move{% else %}Elo only moves{% endif %} once you both agree.
         {% if team1_win_pct %}
           The winner was a {% if match.winner_side == 1 %}{{ team1_win_pct }}{% else %}{{ team2_win_pct }}{% endif %}% favourite, so they will be telling people about it either way.
         {% endif %}
@@ -121,7 +121,7 @@ no winner yet) is stated in words instead.
       <p class="text-[14px] font-extrabold leading-snug">Waiting on the other side.</p>
       <p class="mt-0.5 text-[12px] font-semibold leading-relaxed text-muted-foreground">
         {% if viewer_has_confirmed %}You have agreed to this.{% endif %}
-        Elo lands when everybody has.
+        {% if rating_system == 'glicko2' %}Ratings land{% else %}Elo lands{% endif %} when everybody has.
       </p>
       {% endif %}
     </div>

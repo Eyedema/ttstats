@@ -150,7 +150,7 @@
 
     <!-- Win Probability -->
     {% if team1_win_pct is not None and not is_converted %}
-    <div class="rounded-lg border bg-card p-4 md:p-6">
+    <div class="rounded-lg border bg-card p-4 md:p-6" data-win-chance data-rating-system="{{ rating_system }}">
         <h3 class="text-sm font-medium text-muted-foreground mb-3">Win Probability</h3>
         <div class="flex justify-between text-sm font-medium mb-1.5">
             <span>{{ scheduled_match.side1_label }} {{ team1_win_pct }}%</span>

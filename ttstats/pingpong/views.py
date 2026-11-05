@@ -840,6 +840,11 @@ class DashboardView(LoginRequiredMixin, TemplateView):
             cache_side_players(match)
             mine, theirs = self._sides_relative_to(match, player)
             opponent = theirs[0] if theirs else None
+            delta_if_true = ratings.projected_change_for(
+                match, player,
+                ratings.display_scope(match) if seasons_on else elo.LEGACY,
+                system=system,
+            )
             rows.append(
                 {
                     "match": match,
@@ -854,11 +859,9 @@ class DashboardView(LoginRequiredMixin, TemplateView):
                     # Signed, and shown before you agree: this is what saying
                     # yes costs. It is the same arithmetic that will be
                     # written when both of you have confirmed.
-                    "elo_if_true": ratings.projected_change_for(
-                        match, player,
-                        ratings.display_scope(match) if seasons_on else elo.LEGACY,
-                        system=system,
-                    ),
+                    "delta_if_true": delta_if_true,
+                    # Pre-Glicko name, kept until the alias cleanup; templates read delta_if_true.
+                    "elo_if_true": delta_if_true,
                     "waiting_since": match.date_played,
                 }
             )
@@ -1296,6 +1299,28 @@ class MatchUpdateView(LoginRequiredMixin, UpdateView):
 def is_htmx(request):
     """True when htmx issued this request, so only a fragment is wanted."""
     return request.headers.get("HX-Request") == "true"
+
+
+class HowRatingsWorkView(LoginRequiredMixin, TemplateView):
+    """The plain-language explainer for Glicko-2 ratings (KAN-71).
+
+    Fails closed: it describes a system the viewer does not have under Elo, so
+    it 404s there rather than render copy about the wrong numbers.
+    """
+
+    template_name = "pingpong/how_ratings_work.html"
+
+    def dispatch(self, request, *args, **kwargs):
+        if request.user.is_authenticated and (
+            ratings.system(request.user) != ratings.GLICKO
+        ):
+            raise Http404("Not available")
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["rating_system"] = ratings.GLICKO
+        return context
 
 
 class LeaderboardView(LoginRequiredMixin, TemplateView):
