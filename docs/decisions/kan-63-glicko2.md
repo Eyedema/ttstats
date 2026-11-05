@@ -134,3 +134,77 @@ per-player attribution".** Pairs are fluid, so a pair entity would need its own
 persisted state (and a policy for pair identity, partial overlap and
 dissolution). Weighted attribution needs an invented weighting. The per-player
 update needs neither and keeps the stored state exactly what singles stores.
+
+## Parameters (KAN-68)
+
+Fitted with `manage.py rating_divergence --json --period-days N --tau T` on the
+Supabase clone (read-only): 101 singles matches, 3 players, 67 matches between
+two established players. Raw outputs for all 32 runs are kept outside the repo
+(scratchpad `kan68/p<N>_t<T>.json`). Elo for reference: Brier 0.2426, log-loss
+0.6816, favourite rate 0.590 (all); 0.2574 / 0.7096 / 0.522 (established).
+
+Grid, Glicko-2, all matches. Brier and log-loss are identical across tau to
+4 decimals except where shown; tau only moves end RD in the 2nd decimal.
+
+| period_days | Brier | log-loss | fav rate | est. Brier | est. log-loss | est. fav | Kendall | end RD (p1 / p2 / p3) |
+|---|---|---|---|---|---|---|---|---|
+| 1  | 0.2420 | 0.6839 | 0.610 | 0.2616 | 0.7209 | 0.567 | 0.33 | 95 / 95 / 180 |
+| 2  | 0.2413 | 0.6824 | 0.620 | 0.2601 | 0.7164 | 0.567 | 1.0  | 83 / 83 / 160 |
+| 3  | 0.2411 | 0.6821 | 0.630 | 0.2597 | 0.7150 | 0.582 | 1.0  | 78 / 77 / 152 |
+| 7  | 0.2410 | 0.6821 | 0.620 | 0.2592 | 0.7135 | 0.567 | 1.0  | 70 / 70 / 142 |
+| 14 | 0.2410 | 0.6822 | 0.590 | 0.2591 | 0.7131 | 0.522 | 1.0  | 66 / 66 / 138 |
+| 30 | 0.2411 | 0.6824 | 0.590 | 0.2590 | 0.7129 | 0.522 | 1.0  | 64 / 64 / 135 |
+| 60 | 0.2411 | 0.6825 | 0.590 | 0.2590 | 0.7128 | 0.522 | 1.0  | 63 / 63 / 134 |
+| 90 | 0.2411 | 0.6825 | 0.590 | 0.2590 | 0.7128 | 0.522 | 1.0  | 62 / 63 / 134 |
+
+tau in {0.3, 0.5, 0.8, 1.2} changes log-loss by at most 1e-4 (only at 1 day)
+and sigma stays 0.0600.
+
+### Chosen values
+
+- **`period_days = 7`.** By log-loss on all matches, 3 and 7 days tie at
+  0.6821 and 14 days is 0.6822; everything from 2 to 90 days lies within
+  0.0004. Only 1 day is visibly worse (0.6839), because it inflates RD inside
+  a run of sessions. With n=101 and 3 players these differences are noise
+  (a 0.0004 gap in mean log-loss is a fraction of one match's contribution),
+  so the choice is a judgement, not a measurement: a week is the round,
+  explainable value and sits at the optimum. The favourite rate prefers 3
+  days (0.630 vs 0.620, one match) and is not used.
+- **`tau = 0.5`.** tau is unidentifiable here: one game per period keeps sigma
+  at 0.0600 and the score does not move across 0.3-1.2. 0.5 is the mid-range
+  of Glickman's 0.3-1.2. Revisit when there are more players and matches.
+- **`season_rd_floor = 100`**, a judgement call (no season data exists).
+  Under period 7, sigma 0.06, a regular at RD 70 who sits out a whole year
+  reaches RD ~103. A season reset moves r toward 1500 (carry-over), which
+  loses information, so a seeded row should be no more certain than a
+  year-idle regular, and far below 350, which would discard all history.
+  Revisit once real seasons exist.
+- `initial_volatility` stays at Glickman's 0.06 and `rd_max` at 350.
+
+### Open Questions 2 and 3
+
+**Open Question 2, what τ is:** 0.5. It is unidentifiable on this data, as shown above.
+
+**Open Question 3, the initial RD for existing players:** the seed is **a cold-start
+replay of the full history** (`recalculate_elo --format singles|doubles`), not a formula.
+Every player starts at 1500 / RD 350 / σ 0.06. RD then shrinks with play and grows with idle
+time, so each player's history and recency are preserved without a judgement-call formula.
+Because of this, "seeded replay versus cold start at RD=350" is the same thing, and there is no
+second method to compare. `test_glicko_parameters.py` pins two properties:
+- a player with many recent matches ends with a lower RD than one with three old matches;
+- seeding twice changes nothing.
+
+RD grown to the planned cutover (2026-11-05) under the chosen parameters:
+
+| player | last match | idle days | RD at last match | RD at cutover |
+|---|---|---|---|---|
+| 1 | 2026-05-29 | 160 | 69.7 | 85.7 |
+| 2 | 2026-05-29 | 160 | 69.7 | 85.7 |
+| 3 | 2026-02-26 | 252 | 136.7 | 150.4 |
+
+### Cutover check (KAN-69)
+
+`recalculate_elo --dry-run` now also diffs the stored shadow against the
+replay (tolerance 1e-6). It is the live-versus-replay gate: unexplained diffs
+must be zero. Diffs for players in matches confirmed out of date order are
+listed separately as expected.

@@ -24,7 +24,7 @@ player against a composite opponent and reported in their own section; their
 pre-match Glicko prediction treats each side as one composite player (mean
 rating, RMS of the RDs, `glicko_adapter.composite_opponent`).
 
-Parameters are the PLACEHOLDER defaults unless overridden; this harness is the
+Parameters are `glicko_adapter.DEFAULT_PARAMS` (fitted in KAN-68) unless overridden; this harness was the
 instrument KAN-68 uses to fit them.
 """
 

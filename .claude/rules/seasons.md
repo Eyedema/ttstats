@@ -24,6 +24,9 @@ paths:
   - "ttstats/pingpong/tests/test_season*.py"
   - "ttstats/pingpong/tests/test_ratings.py"
   - "ttstats/pingpong/tests/test_glicko_shadow.py"
+  - "ttstats/pingpong/tests/test_glicko_parameters.py"
+  - "ttstats/pingpong/tests/test_glicko_dry_run_diff.py"
+  - "ttstats/pingpong/management/commands/recalculate_elo.py"
   - "ttstats/pingpong/tests/test_rating_backfill.py"
 ---
 
@@ -103,7 +106,15 @@ The contract is `docs/decisions/kan-9-seasons.md`; these are the rules it implie
   side's players; `updates` is per player.
 - `RatingWriter` writes the shadow only if the model has the fields, because
   migration 0040 runs it against the historical 0039 model.
-- `DEFAULT_PARAMS` are PLACEHOLDERS until KAN-68 fits them.
+- `DEFAULT_PARAMS` are fitted (KAN-68): tau 0.5, period 7 days, season RD floor
+  100 (the floor is a judgement call). The why is in the decision record; change
+  them only in that one named tuple.
+- **`recalculate_elo --dry-run` also diffs the shadow** (KAN-69): stored vs
+  replayed `glicko_rating`/`rd`/`volatility` (1e-6) and `last_rated_on`, per
+  player and scope. It is the live-vs-replay gate for the cutover. Diffs of
+  players in a match confirmed out of date order (found from `RatingChange`
+  application order) are listed as explained; any unexplained diff is a bug.
+  Seeding is a cold-start replay (`--format singles`), not a formula.
 - Only `recalculate_elo` rebuilds the shadow; `elo_parity` does not.
 - **Deploying 0044 must be followed by `recalculate_elo --format singles`,
   and KAN-70 by `recalculate_elo --format doubles`**:

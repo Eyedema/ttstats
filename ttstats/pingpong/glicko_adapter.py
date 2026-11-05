@@ -32,12 +32,19 @@ class GlickoParams(NamedTuple):
     initial_volatility: float = glicko2.DEFAULT_VOLATILITY
 
 
-# PLACEHOLDERS until S6.5 (KAN-68) fits tau, the rating-period length and the
-# season RD floor against the real match history. Do not read meaning into them.
+# Fitted in S6.5 (KAN-68); the grid and reasoning are in
+# docs/decisions/kan-63-glicko2.md, "Parameters (KAN-68)". This is the one place.
 DEFAULT_PARAMS = GlickoParams(
-    tau=0.5,  # PLACEHOLDER: Glickman suggests 0.3-1.2
-    period_days=7,  # PLACEHOLDER: days that make one idle rating period
-    season_rd_floor=100.0,  # PLACEHOLDER: minimum RD of a freshly seeded season row
+    # Unidentifiable on our data (one game per period keeps sigma at 0.0600), so
+    # the mid-range of Glickman's 0.3-1.2. Revisit when the history has grown.
+    tau=0.5,
+    # Log-loss is flat from 3 to 90 days (within noise at n=101) and best at 3-7;
+    # a week is the round value, and play comes in weekly-or-longer sessions.
+    period_days=7,
+    # Judgement call: a regular (RD ~70) idle for a year reaches RD ~100 under
+    # these params. A season reset moves r toward 1500, which loses information,
+    # so a seeded row is never more certain than that, yet far below 350.
+    season_rd_floor=100.0,
 )
 
 # The fields a PlayerRating (or RatingState) carries as the shadow.

@@ -4,7 +4,7 @@ Run after initial Elo system deployment or to fix rating inconsistencies.
 
 Usage:
     python manage.py recalculate_elo                      # full rebuild
-    python manage.py recalculate_elo --dry-run            # per-player diff, writes nothing
+    python manage.py recalculate_elo --dry-run            # per-player diff (Elo and Glicko shadow), writes nothing
     python manage.py recalculate_elo --format doubles     # rebuild only doubles PlayerRating rows
     python manage.py recalculate_elo --season 7           # rebuild only season 7's rows
 
@@ -35,11 +35,12 @@ top of the rebuilt values. At this scale that is seconds; run it
 when nobody is playing.
 """
 
+import math
+
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
 from pingpong import cache_utils
-from pingpong.glicko_adapter import DEFAULT_PARAMS
 from pingpong.elo_replay import (
     DEFAULT_CHUNK_SIZE,
     confirmed_history,
@@ -47,10 +48,21 @@ from pingpong.elo_replay import (
     replay_history,
     scope_filter,
 )
-from pingpong.models import EloHistory, Match, Player, PlayerRating, RatingFormat, Season
+from pingpong.glicko_adapter import DEFAULT_PARAMS, SHADOW_FIELDS
+from pingpong.models import (
+    EloHistory,
+    Match,
+    Player,
+    PlayerRating,
+    RatingChange,
+    RatingFormat,
+    Season,
+)
 
 PROGRESS_EVERY = 50
 FIELDS = ("rating", "peak", "matches")
+# The Glicko floats are compared to this absolute tolerance; last_rated_on exactly.
+GLICKO_TOLERANCE = 1e-6
 
 
 class Command(BaseCommand):
@@ -180,9 +192,10 @@ class Command(BaseCommand):
             self.stdout.write(f'Would delete {EloHistory.objects.count()} existing history records')
         self.stdout.write(f'Would recalculate Elo for {match_count} matches')
 
-        replay = replay_history(chunk_size=chunk_size).replay
+        replay = replay_history(chunk_size=chunk_size, glicko=DEFAULT_PARAMS).replay
         diffs = self._diffs(replay, keep, scoped)
         self._print_diffs(diffs)
+        self._print_glicko_diffs(replay, keep)
 
     def _diffs(self, replay, keep, scoped):
         """[(player name, player pk, scope label, {field: (stored, recomputed)})]."""
@@ -257,11 +270,124 @@ class Command(BaseCommand):
         else:
             self.stdout.write(self.style.SUCCESS(summary))
 
+    # -- the Glicko shadow diff (KAN-69) -------------------------------------------
+
+    def _glicko_diffs(self, replay, keep):
+        """[(player pk, name, scope label, {field: (stored, recomputed)})].
+
+        The live-versus-replay check that gates the cutover. Floats compare to
+        `GLICKO_TOLERANCE`, the date exactly; a row on one side only is a diff.
+        """
+        names = dict(Player._base_manager.values_list('pk', 'name'))
+        season_names = dict(Season.all_objects.values_list('pk', 'name'))
+        stored = {}
+        for row in PlayerRating.all_objects.values_list(
+            'player_id', 'season_id', 'format', *SHADOW_FIELDS
+        ).iterator(chunk_size=DEFAULT_CHUNK_SIZE):
+            if keep(_Key(*row[:3])):
+                stored[row[:3]] = row[3:]
+        recomputed = {
+            key: tuple(getattr(state, f) for f in SHADOW_FIELDS)
+            for key, state in replay.book.rows.items() if keep(state)
+        }
+
+        out = []
+        for key in sorted(set(stored) | set(recomputed), key=lambda k: (k[0], k[1] or 0, k[2])):
+            a, b = stored.get(key), recomputed.get(key)
+            if a is None or b is None:
+                changed = {
+                    f: (a[i] if a else 'missing', b[i] if b else 'missing')
+                    for i, f in enumerate(SHADOW_FIELDS)
+                }
+            else:
+                changed = {
+                    f: (a[i], b[i]) for i, f in enumerate(SHADOW_FIELDS)
+                    if not _same(a[i], b[i])
+                }
+            if not changed:
+                continue
+            player_id, season_id, fmt = key
+            label = f'{fmt} {season_names.get(season_id, season_id) if season_id else "all-time"}'
+            out.append((player_id, names.get(player_id, f'#{player_id}'), label, changed))
+        return out
+
+    def _out_of_order_matches(self):
+        """(match ids, player ids) of matches applied after a later-played one.
+
+        Live ratings are applied in confirmation order and a replay in play
+        order, so a match confirmed out of date order legitimately moves the
+        shadow away from the replay. Per rating row, walk its RatingChange in
+        application order; a match whose replay key is below the running
+        maximum was applied out of order. Streams with O(1) state per row.
+        """
+        late, running_max, current = set(), None, None
+        rows = RatingChange._base_manager.order_by(
+            'rating_id', 'created_at', 'pk'
+        ).values_list(
+            'rating_id', 'match_id', 'match__date_played', 'match__created_at'
+        ).iterator(chunk_size=DEFAULT_CHUNK_SIZE)
+        for rating_id, match_id, played, created in rows:
+            if rating_id != current:
+                current, running_max = rating_id, None
+            key = (played, created, match_id)
+            if running_max is not None and key < running_max:
+                late.add(match_id)
+            elif running_max is None or key > running_max:
+                running_max = key
+        players, ids = set(), sorted(late)
+        for start in range(0, len(ids), 500):
+            players.update(
+                RatingChange._base_manager.filter(match_id__in=ids[start:start + 500])
+                .values_list('player_id', flat=True)
+            )
+        return late, players
+
+    def _print_glicko_diffs(self, replay, keep):
+        diffs = self._glicko_diffs(replay, keep)
+        late, late_players = self._out_of_order_matches() if diffs else (set(), set())
+        explained = [d for d in diffs if d[0] in late_players]
+        unexplained = [d for d in diffs if d[0] not in late_players]
+
+        if diffs:
+            self.stdout.write('\nGlicko shadow differences (stored -> recomputed):')
+            for tag, group in (('', unexplained), ('[out of date order] ', explained)):
+                for _, name, label, changed in group:
+                    cells = '; '.join(f'{f}: {s} -> {r}' for f, (s, r) in changed.items())
+                    self.stdout.write(f'  {tag}{name[:24]:<24} {label[:28]:<28} {cells}')
+        summary = (
+            f'\nGlicko shadow: {len(diffs)} scope rows differ '
+            f'({len(unexplained)} unexplained, {len(explained)} explained by '
+            f'matches confirmed out of date order)'
+        )
+        if unexplained:
+            self.stdout.write(self.style.ERROR(summary))
+        elif explained:
+            self.stdout.write(self.style.WARNING(summary))
+        else:
+            self.stdout.write(self.style.SUCCESS(summary))
+        if late:
+            self.stdout.write(
+                f'Matches confirmed out of date order ({len(late)}): '
+                + ', '.join(f'match {pk}' for pk in sorted(late))
+                + ". Their players' diffs are expected; a replay is the fix."
+            )
+            self.stdout.write(
+                '(A player is "explained" when they played any such match; an '
+                "opponent's later diffs inherit it, so check unexplained ones first.)"
+            )
+
+
+def _same(a, b):
+    """Equal shadow values: floats within `GLICKO_TOLERANCE`, anything else exactly."""
+    if not isinstance(a, float) or not isinstance(b, float):
+        return a == b
+    return math.isclose(a, b, rel_tol=0, abs_tol=GLICKO_TOLERANCE)
+
 
 class _Key:
     """A (season_id, format) view of a stored row key, for `scope_filter`."""
 
-    __slots__ = ('season_id', 'format')
+    __slots__ = ('format', 'season_id')
 
     def __init__(self, player_id, season_id, fmt):
         self.season_id, self.format = season_id, fmt

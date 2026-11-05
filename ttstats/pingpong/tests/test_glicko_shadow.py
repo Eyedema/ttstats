@@ -618,6 +618,9 @@ class TestNothingReadsTheShadow:
             # KAN-66: the divergence harness reads the in-memory MemoryBook
             # RatingState attributes of its own replay, not the stored columns.
             "ttstats/pingpong/rating_divergence.py",
+            # KAN-69: the dry-run diff compares stored shadow to the replay; it
+            # reports, it never feeds the value to anything.
+            "ttstats/pingpong/management/commands/recalculate_elo.py",
         }
     )
 
