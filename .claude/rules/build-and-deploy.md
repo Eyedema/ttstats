@@ -48,7 +48,11 @@ paths:
   `ttstats.settings.prod`. Production is the `db` service in `compose.prod.yml`;
   Supabase is only a dev clone.
 - Optional `.env.prod` vars (see `.env.prod.example`): `VAPID_*` for push,
-  `SENTRY_*` for Sentry. Unset, both are no-ops.
+  `SENTRY_*` for Sentry. Unset, both are no-ops. `DB_CONN_MAX_AGE` (default 60,
+  `0` = close per request) sets persistent connections, with `CONN_HEALTH_CHECKS`.
+- **Gunicorn runs 3 sync workers** (`entrypoint.sh`): at most 3 persistent
+  connections. Moving to gevent or threads multiplies that; revisit
+  `CONN_MAX_AGE` in the same change.
 - **CI/CD** (`.github/workflows/main.yml`): tests with coverage on push/PR; SSH
   deploy on master. `.py` changes gate tests, frontend extensions gate the asset
   build.
