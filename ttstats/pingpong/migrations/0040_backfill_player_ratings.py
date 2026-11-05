@@ -1,44 +1,22 @@
 """Backfill PlayerRating/RatingChange by replaying confirmed history (KAN-47).
 
-Deterministic: the replay order is `date_played, created_at, pk` and the
-arithmetic is `elo.projected_elo_changes`, through the same traversal
-`recalculate_elo` and the parity harness use (`elo_replay`). Batched, so it
-never materialises the whole history.
+FROZEN AS A NO-OP by KAN-73. This migration used to call the live replay
+(`elo_replay.rebuild_player_ratings`) against the historical 0039 models. The
+Elo arithmetic it replayed is gone, and the live code no longer fits the 0039
+schema, so it cannot run any more.
 
-Idempotent: forward deletes every PlayerRating/RatingChange row and rebuilds,
-so running it twice gives the same rows. Reverse deletes them, leaving the
-legacy `Player.elo_*` fields and `EloHistory` untouched -- they are never
-written here.
+That is safe:
+* every database with history that we run (prod, the Supabase clone) applied
+  it before KAN-73, and migrations never re-run;
+* a from-scratch database has no confirmed matches, so the backfill had
+  nothing to do.
 
-This imports app code (`elo_replay`, `elo`) on purpose: the backfill's job is
-to produce exactly what the live pipeline would, and a frozen copy of the
-arithmetic here would be a second source of truth. Re-running it after the
-arithmetic changes produces what `recalculate_elo` would.
+**A database with history first migrated past 0040 after KAN-73** (an old
+dump, say) gets no rating rows here: run `manage.py recalculate_ratings`
+right after `migrate`. Until then its old matches are guarded against being
+rated twice by their `EloHistory` (`rating_pipeline.already_applied`).
 """
 from django.db import migrations
-
-
-def _models(apps):
-    return dict(
-        match=apps.get_model("pingpong", "Match"),
-        participant=apps.get_model("pingpong", "MatchParticipant"),
-        season=apps.get_model("pingpong", "Season"),
-        player=apps.get_model("pingpong", "Player"),
-        rating=apps.get_model("pingpong", "PlayerRating"),
-        change=apps.get_model("pingpong", "RatingChange"),
-    )
-
-
-def backfill(apps, schema_editor):
-    from pingpong.elo_replay import rebuild_player_ratings
-
-    rebuild_player_ratings(models=_models(apps))
-
-
-def unbackfill(apps, schema_editor):
-    models = _models(apps)
-    models["change"].objects.all().delete()
-    models["rating"].objects.all().delete()
 
 
 class Migration(migrations.Migration):
@@ -48,5 +26,5 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.RunPython(backfill, unbackfill),
+        migrations.RunPython(migrations.RunPython.noop, migrations.RunPython.noop),
     ]

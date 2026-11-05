@@ -4,8 +4,8 @@ const { applyProdCSP } = require('./helpers');
 
 /**
  * The seasons leaderboard (KAN-48 / S4.3) and the provisional marker
- * (KAN-50 / S4.4), as the `e2e-seasons` user, who has the `seasons` flag on by
- * override (`seed_e2e`). Every other spec runs as `e2e`, flag off.
+ * (KAN-50 / S4.4), as the `e2e-seasons` user, who has season results
+ * (`seed_e2e`). Seasons and Glicko-2 are on for everyone since KAN-73.
  *
  * pytest proves the context and the markup. It cannot prove the filters are
  * wired: a dead Period control has shipped on this page before -- an invalid
@@ -73,10 +73,10 @@ test.describe('season leaderboard', () => {
     await expect(results.locator('[data-scope-label]')).toContainText('Singles · all-time');
   });
 
-  test('Elo seasons users see no uncertainty', async ({ page }) => {
-    await expect(page.locator('#leaderboard-results')).toHaveAttribute('data-rating-system', 'elo');
-    expect(await page.locator('main').innerText()).not.toContain('±');
-    await expect(page.locator('[data-how-ratings-link]')).toHaveCount(0);
+  test('the table is Glicko-2 and never says Elo', async ({ page }) => {
+    await expect(page.locator('#leaderboard-results')).toHaveAttribute('data-rating-system', 'glicko2');
+    expect(await page.locator('main').innerText()).not.toMatch(/\bElo\b/);
+    await expect(page.locator('[data-how-ratings-link]').first()).toBeAttached();
   });
 
   test('a player with no match this season is unrated, not 1500', async ({ page }) => {
@@ -103,7 +103,7 @@ test.describe('season leaderboard', () => {
     await expect(help).not.toHaveAttribute('open', '');
     await help.locator('summary').tap();
     await expect(help).toHaveAttribute('open', '');
-    await expect(help).toContainText('rated matches in that format');
+    await expect(help).toContainText('the ± is wider than');
     await expect(help).toContainText('Singles and doubles are rated separately');
   });
 

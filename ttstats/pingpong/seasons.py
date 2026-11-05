@@ -13,7 +13,6 @@ the models and the Elo pipeline call them, and the tests need no database.
   that format just before the match.
 """
 import calendar
-import math
 from datetime import date, datetime, timedelta
 
 RATING_MEAN = 1500
@@ -95,24 +94,12 @@ def first_season_bounds(starts_on, months=DEFAULT_FIRST_SEASON_MONTHS):
 def carry_over_seed_float(all_time_rating):
     """The unrounded carry-over seed: `1500 + SEASON_CARRY_FACTOR * (R - 1500)`.
 
-    The one place the formula lives. The Glicko-2 shadow (KAN-67) seeds a
-    season row from this because its ratings are floats; `carry_over_seed`
-    rounds it for the integer Elo rating. `None` (unrated) is the mean.
+    The one place the formula lives: `glicko_adapter` seeds a player's first
+    season row in a format from it. `None` (unrated) is the mean.
     """
     if all_time_rating is None:
         return float(RATING_MEAN)
     return RATING_MEAN + SEASON_CARRY_FACTOR * (all_time_rating - RATING_MEAN)
-
-
-def carry_over_seed(all_time_rating):
-    """The seed for a player's first season rating in a format.
-
-    `None` (unrated in that format) starts at the mean. Rounds half up, so the
-    result does not depend on Python's banker's rounding.
-    """
-    if all_time_rating is None:
-        return RATING_MEAN
-    return math.floor(carry_over_seed_float(all_time_rating) + 0.5)
 
 
 def is_due_for_rollover(ends_on, today):

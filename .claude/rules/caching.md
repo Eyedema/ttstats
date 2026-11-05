@@ -31,23 +31,16 @@ the single source of the namespace.
 - **A player's keys are namespaced by that player's club, not the viewer's.**
 - **A cross-club match invalidates both clubs.**
 - Flag off: `club_prefix()` is `""` and keys keep their pre-tenancy shape.
-- **The seasons leaderboard key** is
-  `{club}leaderboard_{gen}_season{id|all}_{format}_{top_x}`, built only in
-  `_leaderboard_cache_key()`; with `seasons` off the legacy key is unchanged.
+- **The leaderboard key** is built only in `cache_utils.leaderboard_key()`.
 - **`warm_cache` scopes by explicit filter, never by faking a request.** A
   command has no user, so managers run unfiltered; a club in thread-local alone
   would write each club's key with the whole database's numbers.
-- **Key shapes (KAN-71).** Elo keys keep their exact shape; Glicko adds `g2_`:
-  `leaderboard_key(scope, top_x, system)` = `{club}leaderboard_{gen}_{g2_}season{id|all}_{fmt}_{top}`,
-  `player_rank_key(player, system)` = `{club}{g2_}player_rank_{pk}` (Glicko holds the
-  nav reading), `rating_history_key(player, system)` = `{club}{g2_}rating_history_{pk}`.
-  `invalidate_match_caches` / `invalidate_player_caches` delete both variants.
-- **Saving or deleting a `glicko2` or `seasons` `FeatureFlagOverride` bumps that
-  user's clubs' leaderboard generation** (`signals.py`).
-  `cache_control --bump-leaderboard` bumps every club; run it after an env flag flip.
-- **Deploy step for the Glicko read cutover:** run
-  `manage.py cache_control --bump-leaderboard` after deploying. Elo seasons
-  leaderboard keys are byte-identical, so entries cached before the deploy lack
-  `rating`/`peak` and would be served as-is.
-- A club-on nav key is `club{player.club_id}:[g2_]player_rank_{pk}`, and the rank
+- **Rating key shapes** all carry `cache_utils.RATING_INFIX` (`g2_`), kept after
+  Elo's retirement so a pre-KAN-73 Elo entry still in Redis is never read:
+  `leaderboard_key(scope, top_x)` = `{club}leaderboard_{gen}_g2_season{id|all}_{fmt}_{top}`,
+  `player_rank_key(player)` = `{club}g2_player_rank_{pk}` (the nav reading),
+  `rating_history_key(player)` = `{club}g2_rating_history_{pk}`.
+- `cache_control --bump-leaderboard` bumps every club; run it after any deploy
+  that changes a cached rating payload's shape.
+- A club-on nav key is `club{player.club_id}:g2_player_rank_{pk}`, and the rank
   inside it is counted in that same club.

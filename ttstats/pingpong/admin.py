@@ -3,9 +3,6 @@ from django.contrib import admin, messages
 from django.contrib.admin import SimpleListFilter
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import User
-from django.core.management import call_command
-from django.http import HttpResponseRedirect
-from django.urls import path
 from django.db.models import Exists, OuterRef
 from django.utils import timezone
 from django.utils.html import format_html
@@ -119,7 +116,7 @@ class MatchConfirmationInline(admin.TabularInline):
 
 
 class EloHistoryInline(admin.TabularInline):
-    """Show Elo history for a match"""
+    """A match's frozen pre-KAN-73 Elo history (read-only; never written again)."""
 
     model = EloHistory
     fields = ("player", "old_rating", "new_rating", "rating_change", "k_factor")
@@ -351,30 +348,20 @@ class UserProfileAdmin(admin.ModelAdmin):
 
 @admin.register(Player)
 class PlayerAdmin(admin.ModelAdmin):
-    """Custom Player admin with Elo rating information"""
+    """Player admin. Ratings live in PlayerRating (see the player's profile)."""
 
     list_display = (
         "name",
         "nickname",
-        "elo_rating",
-        "elo_peak",
-        "matches_for_elo",
         "user",
         "created_at",
     )
     list_filter = ("playing_style", "created_at", "user__profile__email_verified")
     search_fields = ("name", "nickname", "user__username", "user__email")
-    readonly_fields = ("created_at", "elo_rating", "elo_peak", "matches_for_elo")
+    readonly_fields = ("created_at",)
 
     fieldsets = (
         ("Basic Info", {"fields": ("user", "name", "nickname", "playing_style", "notes")}),
-        (
-            "Elo Statistics",
-            {
-                "fields": ("elo_rating", "elo_peak", "matches_for_elo"),
-                "classes": ("collapse",),
-            },
-        ),
         ("Metadata", {"fields": ("created_at",), "classes": ("collapse",)}),
     )
 
@@ -854,7 +841,11 @@ class ChampionshipAdmin(admin.ModelAdmin):
 
 @admin.register(EloHistory)
 class EloHistoryAdmin(admin.ModelAdmin):
-    """Elo history admin with recalculation action"""
+    """The frozen pre-KAN-73 Elo history: read-only, never written again.
+
+    Rebuild ratings with `manage.py recalculate_ratings` (never from a web
+    request: it locks every Player row for the duration).
+    """
 
     list_display = (
         "player",
@@ -877,35 +868,14 @@ class EloHistoryAdmin(admin.ModelAdmin):
         "created_at",
     )
 
-    # Point to the new template we just created
-    change_list_template = "admin/pingpong/EloHistory/change_list.html"
-
     def has_add_permission(self, request):
         return False
 
     def has_change_permission(self, request, obj=None):
         return False
 
-    def get_urls(self):
-        urls = super().get_urls()
-        my_urls = [
-            path(
-                "recalculate/",
-                self.admin_site.admin_view(self.recalculate_elo_view),
-                name="recalculate_elo",
-            ),
-        ]
-        return my_urls + urls
-
-    def recalculate_elo_view(self, request):
-        if request.method == "POST":
-            # Your command does not take arguments, so we just call it
-            call_command("recalculate_elo")
-            self.message_user(request, "Elo ratings recalculated successfully.")
-            return HttpResponseRedirect("../")
-
-        # Fallback if accessed via GET (optional)
-        return HttpResponseRedirect("../")
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(Achievement)
@@ -1087,7 +1057,7 @@ class SeasonAdmin(admin.ModelAdmin):
             messages.warning(
                 request,
                 f"{unrated} confirmed {noun} in this season's dates have no season "
-                f"ratings yet. Run `python manage.py recalculate_elo --season {obj.pk}` "
+                f"ratings yet. Run `python manage.py recalculate_ratings --season {obj.pk}` "
                 "to rate them.",
             )
 

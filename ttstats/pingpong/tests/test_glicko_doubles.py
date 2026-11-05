@@ -14,12 +14,12 @@ from unittest import mock
 import pytest
 from django.core.management import call_command
 
-from .. import elo, glicko2, glicko_adapter
-from ..elo import LiveBook, RatingScope, update_player_elo
-from ..elo_replay import MemoryBook, ReplayMatch, ReplayPlayer
+from .. import glicko2, glicko_adapter, rating_pipeline
 from ..glicko2 import Rating
 from ..glicko_adapter import DEFAULT_PARAMS, composite_opponent
 from ..models import EloHistory, Match, PlayerRating, RatingChange, Side
+from ..rating_pipeline import LiveBook, RatingScope, apply_match_ratings
+from ..rating_replay import MemoryBook, ReplayMatch, ReplayPlayer
 from .conftest import (
     GameFactory,
     MatchFactory,
@@ -27,12 +27,21 @@ from .conftest import (
     PlayerRatingFactory,
     confirm_match_silent,
 )
-from .test_glicko_shadow import FIELDS, _at, _finish, _row, _state
+from .test_glicko_read import _at, _finish
 
 SINGLES = RatingScope(None, "singles")
 DOUBLES = RatingScope(None, "doubles")
 DAY = _at(2026, 2, 1)
 DAY_DATE = date(2026, 2, 1)
+FIELDS = glicko_adapter.SHADOW_FIELDS
+
+
+def _row(player, season=None, fmt="singles"):
+    return PlayerRating.all_objects.get(player=player, season=season, format=fmt)
+
+
+def _state(row):
+    return tuple(getattr(row, f) for f in FIELDS)
 
 
 def _seed(player, rd, rating=1500.0, fmt="doubles"):
@@ -40,7 +49,6 @@ def _seed(player, rd, rating=1500.0, fmt="doubles"):
     return PlayerRatingFactory(
         player=player,
         format=fmt,
-        rating=1500,
         matches=5,
         glicko_rating=rating,
         rd=rd,
@@ -50,7 +58,7 @@ def _seed(player, rd, rating=1500.0, fmt="doubles"):
 
 
 def _pending_doubles(winner=Side.ONE):
-    """A won, confirmed doubles match whose Elo has NOT been applied yet."""
+    """A won, confirmed doubles match whose ratings have NOT been applied yet."""
     players = [PlayerFactory(with_user=True) for _ in range(4)]
     for p in players:
         p.user.profile.email_verified = True
@@ -242,7 +250,8 @@ class TestOnlyTheDoublesRowsChange:
 
         match = _finish(players[:2], players[2:], when=DAY)
 
-        assert EloHistory.objects.filter(match=match).count() == 4
+        assert RatingChange.objects.filter(match=match).count() == 4
+        assert not EloHistory.objects.filter(match=match).exists()  # frozen, never written
         for p in players:
             doubles = _row(p, fmt="doubles")
             assert all(getattr(doubles, f) is not None for f in FIELDS)
@@ -266,16 +275,6 @@ class TestOnlyTheDoublesRowsChange:
         ) == before
         assert _row(p1, fmt="singles").glicko_rating is not None
 
-    def test_elo_is_unchanged_by_the_doubles_shadow(self):
-        players = [PlayerFactory() for _ in range(4)]
-
-        match = _finish(players[:2], players[2:], when=DAY)
-
-        history = EloHistory.objects.get(match=match, player=players[0])
-        players[0].refresh_from_db()
-        assert players[0].elo_rating == 1500 + history.rating_change
-        assert _row(players[0], fmt="doubles").rating == players[0].elo_rating
-
 
 @pytest.mark.django_db
 class TestIdempotencyAndRaces:
@@ -285,10 +284,10 @@ class TestIdempotencyAndRaces:
     def test_four_confirmations_write_once(self):
         match, players = _pending_doubles()
 
-        update_player_elo(match)
+        apply_match_ratings(match)
         once = self._snapshot(players)
         for _ in range(3):  # the other three confirmers arrive
-            update_player_elo(match)
+            apply_match_ratings(match)
 
         assert self._snapshot(players) == once
         assert all(_row(p, fmt="doubles").matches == 1 for p in players)
@@ -296,26 +295,28 @@ class TestIdempotencyAndRaces:
 
     def test_a_confirmer_that_loses_the_race_writes_the_shadow_once(self):
         match, players = _pending_doubles()
-        update_player_elo(match)
+        apply_match_ratings(match)
         once = self._snapshot(players)
 
-        with mock.patch.object(elo, "_already_applied", side_effect=[False, True]):
-            update_player_elo(match)
+        with mock.patch.object(
+            rating_pipeline, "already_applied", side_effect=[False, True]
+        ):
+            apply_match_ratings(match)
 
         assert self._snapshot(players) == once
 
     def test_a_retried_write_after_an_integrity_error_applies_once(self):
         match, players = _pending_doubles()
-        real, calls = elo._apply_match, []
+        real, calls = rating_pipeline._apply_match, []
 
         def flaky(m):
             calls.append(1)
             if len(calls) == 1:
-                raise elo.IntegrityError("conflict")
+                raise rating_pipeline.IntegrityError("conflict")
             return real(m)
 
-        with mock.patch.object(elo, "_apply_match", side_effect=flaky):
-            update_player_elo(match)
+        with mock.patch.object(rating_pipeline, "_apply_match", side_effect=flaky):
+            apply_match_ratings(match)
 
         assert len(calls) == 2
         assert all(_row(p, fmt="doubles").glicko_rating > 1500 for p in players[:2])
@@ -324,7 +325,7 @@ class TestIdempotencyAndRaces:
 
     def test_a_flush_that_fails_after_the_rows_mutated_is_a_single_application(self):
         plain, plain_players = _pending_doubles()
-        update_player_elo(plain)
+        apply_match_ratings(plain)
         baseline = self._snapshot(plain_players)
 
         retried, players = _pending_doubles()
@@ -333,11 +334,11 @@ class TestIdempotencyAndRaces:
         def flaky_flush(self, match, changes):
             calls.append(1)
             if len(calls) == 1:
-                raise elo.IntegrityError("conflict after the rows were mutated")
+                raise rating_pipeline.IntegrityError("conflict after the rows were mutated")
             return real_flush(self, match, changes)
 
         with mock.patch.object(LiveBook, "flush", flaky_flush):
-            update_player_elo(retried)
+            apply_match_ratings(retried)
 
         assert len(calls) == 2
         assert self._snapshot(players) == baseline
@@ -350,7 +351,7 @@ class TestPreviewIsThePersistedValue:
         _seed(players[0], rd=60)
         projection = _project(match)
 
-        update_player_elo(match)
+        apply_match_ratings(match)
 
         updates = _by_player(projection)
         for p in players:
@@ -365,7 +366,10 @@ class TestPreviewIsThePersistedValue:
         match.sides()
 
         with django_assert_num_queries(0):
-            assert elo._plan_glicko(match, DOUBLES, book, DEFAULT_PARAMS) is not None
+            assert (
+                rating_pipeline.guarded_projection(match, DOUBLES, book, DEFAULT_PARAMS)
+                is not None
+            )
 
 
 def _stub(side1, side2, *, is_double=True):
@@ -479,7 +483,7 @@ class TestOddShapesThroughTheDatabase:
 
 @pytest.mark.django_db
 class TestReplayMatchesLive:
-    def test_recalculate_elo_rebuilds_the_same_doubles_shadow(self):
+    def test_recalculate_ratings_rebuilds_the_same_doubles_ratings(self):
         a, b, c, d, e = (PlayerFactory() for _ in range(5))
         history = [
             ([a, b], [c, d], _at(2026, 1, 3)),
@@ -492,7 +496,7 @@ class TestReplayMatchesLive:
 
         def snapshot():
             return {
-                (r.player_id, r.season_id, r.format): (r.rating, *_state(r))
+                (r.player_id, r.season_id, r.format): (r.matches, *_state(r))
                 for r in PlayerRating.all_objects.filter(format="doubles")
             }
 
@@ -500,7 +504,7 @@ class TestReplayMatchesLive:
         assert len(live) == 5
         assert all(v[1] is not None for v in live.values())
 
-        call_command("recalculate_elo")
+        call_command("recalculate_ratings")
         replayed = snapshot()
 
         assert replayed.keys() == live.keys()

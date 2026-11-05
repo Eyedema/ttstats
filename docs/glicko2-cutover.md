@@ -1,6 +1,12 @@
-# Glicko-2 read cutover runbook (KAN-71 / KAN-72)
+# Glicko-2 read cutover runbook (KAN-71 / KAN-72 / KAN-73)
 
-**What this changes:** the rating every member sees (Elo becomes Glicko-2 with a
+> **Historical since KAN-73 (2026-11-05).** Phases 0 and 1 ran on 2026-11-05
+> and Elo was retired the same day: the flags below no longer exist, and the
+> flag rollback is gone. What still applies: "Backup and restore", "Restarting
+> web" and the final section, "KAN-73: retire Elo". The rest is kept as the
+> record of how the cutover was done.
+
+**What this changed:** the rating every member sees (Elo becomes Glicko-2 with a
 ±), and it turns seasons on for them. Elo keeps being written the whole time, so
 the change is reversible by flags until KAN-73 stops the Elo writes.
 
@@ -225,39 +231,61 @@ where a rating is shown:
 
 ## Rollback
 
-**Full rollback is removing BOTH `glicko2` and `seasons` from `TTSTATS_FLAGS_ON`**
-(and disabling the overrides), which puts every member back on exactly today's
-screens. Dropping only `glicko2` leaves the seasons-plus-Elo UI (season tables,
-format ratings), which is **not** today's screen.
+**Since KAN-73 there is no flag rollback.** The flags are gone and Elo is no
+longer written, so the only way back is restoring the pre-KAN-73 dump (see
+"Backup and restore"), which discards every match played since.
 
-1. Edit `.env.prod`: remove `glicko2` and `seasons` from `TTSTATS_FLAGS_ON`.
-2. Restart web the pinned way (see "Restarting web"; never a bare `dcp up -d web`).
-3. `dweb cache_control --bump-leaderboard`.
-
-**Elo is current, because both systems kept writing**, so members are back on
-today's numbers with nothing to rebuild. Overrides take effect within 30s and
-bump the clubs' leaderboard themselves; the env flip needs the restart and the
-manual bump.
+Before KAN-73 the rollback was removing both `glicko2` and `seasons` from
+`TTSTATS_FLAGS_ON`, a pinned restart and `cache_control --bump-leaderboard`.
 
 ## Point of no return
 
-- **Hard: KAN-73**, when Elo writes stop. After it, rollback leaves stale Elo.
-  Do it no earlier than the end of the first full season on Glicko.
-- **Soft: the first rollover.** It freezes a Glicko `SeasonStanding`
-  (labelled with its `rating_system`, so it survives a rollback and keeps its ±).
+- **KAN-73 passed it** on 2026-11-05 (see `docs/decisions/kan-73-retire-elo.md`).
 - **Pushes already sent** with Glicko numbers cannot be recalled.
-
-## Known gap
-
-**Achievements stay on Elo until KAN-73.** Giant Slayer and Peak Performer are
-still decided from `EloHistory`; only their wording is neutral under Glicko
-("well above you", "rating peak"; the Elo-scale point thresholds are dropped from
-the copy). A member can therefore earn or miss one in a way that does not match
-the number they see. Acceptable for the soak; do not announce achievements as
-rating-based.
 
 ## Announcement draft
 
 > Ratings now use Glicko-2 and seasons start today. Your number shows a ± (how
 > sure we are). Expect numbers to shift; rankings largely hold. Tap *How ratings
 > work* in the menu for the short version.
+
+---
+
+## KAN-73: retire Elo
+
+What it does: deletes the Elo code path and both flags, and migration 0046
+drops `Player.elo_*` and `PlayerRating.rating/peak`. It also renames
+`RatingChange`'s Elo columns to `elo_*`, rewords two achievements and deletes
+the retired flags' overrides. **Irreversible except by restore.**
+
+1. **Dump first** (see "Backup and restore"), name it `ttstats-pre-kan73-*`.
+   This dump is the only rollback. Then a read-only check; both counts should
+   be 0. A non-zero first count is safe (the guard also reads `EloHistory`)
+   but those matches have no Glicko rows until a `recalculate_ratings` run.
+   A non-zero second count means confirmed matches that were never rated.
+   ```bash
+   dcp exec -T db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At' <<'SQL'
+   SELECT count(*) FROM pingpong_match m
+    WHERE EXISTS (SELECT 1 FROM pingpong_elohistory e WHERE e.match_id = m.id)
+      AND NOT EXISTS (SELECT 1 FROM pingpong_ratingchange r WHERE r.match_id = m.id);
+   SELECT count(*) FROM pingpong_match m
+    WHERE m.winner_side IS NOT NULL AND m.is_confirmed AND NOT m.is_live
+      AND NOT EXISTS (SELECT 1 FROM pingpong_ratingchange r WHERE r.match_id = m.id);
+   SQL
+   ```
+2. **Deploy** (merge to master). The entrypoint runs `migrate`, which applies
+   0046.
+3. **Verify the replay** (read-only), and record the output and the peak memory
+   on KAN-73:
+   ```bash
+   dcp exec -T web sh -c '/usr/bin/time -v python manage.py recalculate_ratings --dry-run' 2>&1 \
+     | grep -E "Dry run:|Maximum resident"
+   ```
+   Expect `0 scope rows differ`, or only rows explained by out-of-date-order
+   confirmations. An unexplained diff is a bug: stop and investigate.
+4. **Tidy `.env.prod`**: remove `seasons,glicko2` from `TTSTATS_FLAGS_ON`.
+   The names are ignored now, so this is cosmetic. Then do a pinned restart.
+5. `dweb cache_control --bump-leaderboard`.
+6. Smoke: the leaderboard, a profile (chart and peak), match detail (pending
+   "if agreed" and applied deltas) and head to head show no "Elo". Confirm a
+   match and check the result push says "Rating N (+d)".

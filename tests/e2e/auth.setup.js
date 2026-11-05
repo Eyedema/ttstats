@@ -2,12 +2,12 @@ const { test: setup } = require('@playwright/test');
 const path = require('path');
 
 const AUTH_FILE = path.join(__dirname, '.auth', 'user.json');
-// The seasons user (KAN-48/50) has the `seasons` flag on by override; every
-// other spec keeps the flag-off UI. Two logins per run, still well inside the
+// The seasons user (KAN-48/50) has season results. Seasons and Glicko-2 are on
+// for everyone since KAN-73. Three logins per run, still well inside the
 // limit -- and the dev server's LocMemCache restarts with every run.
 const SEASONS_AUTH_FILE = path.join(__dirname, '.auth', 'seasons.json');
 
-// The Glicko-2 user (KAN-71/72): `seasons` AND `glicko2` on by override.
+// The Glicko-2 user (KAN-71/72): rated, with a result awaiting their confirmation.
 const GLICKO_AUTH_FILE = path.join(__dirname, '.auth', 'glicko.json');
 
 async function authenticate(page, username, file) {

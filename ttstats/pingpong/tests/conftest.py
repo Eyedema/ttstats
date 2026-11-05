@@ -106,7 +106,10 @@ class PlayerFactory(DjangoModelFactory):
 
 class PlayerRatingFactory(DjangoModelFactory):
     """A PlayerRating row: all-time singles unless told otherwise. For tests
-    that need a player to arrive with format history already in place."""
+    that need a player to arrive with format history already in place.
+
+    Unrated (NULL Glicko state) by default; pass `glicko_rating`, `rd`,
+    `volatility` and `last_rated_on` for a rated row."""
 
     class Meta:
         model = PlayerRating
@@ -115,8 +118,6 @@ class PlayerRatingFactory(DjangoModelFactory):
     club = None
     season = None
     format = "singles"
-    rating = 1500
-    peak = factory.LazyAttribute(lambda o: max(o.rating, 1500))
     matches = 0
 
 
@@ -336,7 +337,7 @@ def confirm_match(match, players=None):
 def confirm_match_silent(match, players=None):
     """Create MatchConfirmation records WITHOUT triggering signals.
 
-    Use this when you want to set up test data without triggering Elo updates.
+    Use this when you want to set up test data without triggering rating updates.
     Uses bulk_create which bypasses Django signals.
 
     Args:

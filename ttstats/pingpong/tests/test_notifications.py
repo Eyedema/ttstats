@@ -9,18 +9,25 @@ down "push preferred, email as fallback", which is the rule most likely to
 regress into either double-notifying everyone or silently notifying nobody.
 """
 
+from datetime import date, datetime, time, timezone as dt_timezone
+
 import pytest
 from unittest.mock import patch
 
 from django.core import mail
 from django.test import override_settings
 
-from pingpong import notifications
+from pingpong import notifications, ratings
 from pingpong.models import (
-    EloHistory, Match, NotificationKind, NotificationPreference, PushSubscription, Side,
+    Match, NotificationKind, NotificationPreference, PlayerRating, PushSubscription,
+    RatingChange,
 )
+from pingpong.rating_pipeline import RatingScope
 
-from .conftest import GameFactory, MatchFactory, PlayerFactory, UserFactory, confirm_match
+from .conftest import (
+    GameFactory, MatchFactory, PlayerFactory, PlayerRatingFactory, SeasonFactory,
+    confirm_match,
+)
 
 with_vapid = override_settings(
     VAPID_PUBLIC_KEY='test-public-key',
@@ -55,6 +62,30 @@ def play_out(match):
         )
     match.refresh_from_db()
     return match
+
+
+def confirmed_singles(p1, p2, **kwargs):
+    """A best-of-3 won 2-0 by `p1`, confirmed, so its ratings are applied."""
+    match = MatchFactory(player1=p1, player2=p2, best_of=3, **kwargs)
+    play_out(match)
+    confirm_match(match)
+    match.refresh_from_db()
+    return match
+
+
+def _change(match, player, season=None):
+    """The player's RatingChange for `match` in the season (or all-time) table."""
+    return RatingChange.objects.get(match=match, player=player, rating__season=season)
+
+
+def _noon(day):
+    return datetime.combine(day, time(12), tzinfo=dt_timezone.utc)
+
+
+def body_for(send, player):
+    return next(
+        c.kwargs['body'] for c in send.call_args_list if c.args[0].pk == player.user.pk
+    )
 
 
 @pytest.mark.django_db
@@ -103,42 +134,68 @@ class TestNotifyMatchConfirmationNeeded:
 
 @pytest.mark.django_db
 class TestNotifyMatchResult:
-    def test_body_carries_the_elo_delta(self):
+    def test_body_carries_the_rating_delta(self):
         p1, p2 = verified_player('Ada'), verified_player('Bob')
-        match = MatchFactory(player1=p1, player2=p2, best_of=3)
-        play_out(match)
-        confirm_match(match)
-        match.refresh_from_db()
+        match = confirmed_singles(p1, p2)
 
         with patch('pingpong.push.send_to_user', return_value=1) as send:
             notifications.notify_match_result(match)
 
-        winner_body = next(
-            c.kwargs['body'] for c in send.call_args_list
-            if c.args[0].pk == p1.user.pk
-        )
-        entry = EloHistory.objects.get(match=match, player=p1)
+        winner_body = body_for(send, p1)
+        change = _change(match, p1)
         assert 'You won' in winner_body
-        assert str(entry.new_rating) in winner_body
-        assert f'+{entry.rating_change}' in winner_body
+        assert change.glicko_change > 0
+        assert winner_body.endswith(
+            f" Rating {round(change.glicko_new_rating)} ({change.glicko_change:+d})."
+        )
 
     def test_loser_is_told_they_lost(self):
         p1, p2 = verified_player('Ada'), verified_player('Bob')
-        match = MatchFactory(player1=p1, player2=p2, best_of=3)
-        play_out(match)
-        confirm_match(match)
-        match.refresh_from_db()
+        match = confirmed_singles(p1, p2)
 
         with patch('pingpong.push.send_to_user', return_value=1) as send:
             notifications.notify_match_result(match)
 
-        loser_body = next(
-            c.kwargs['body'] for c in send.call_args_list
-            if c.args[0].pk == p2.user.pk
-        )
+        loser_body = body_for(send, p2)
+        change = _change(match, p2)
         assert 'You lost' in loser_body
+        assert f"({change.glicko_change:+d})." in loser_body
+        assert change.glicko_change < 0
 
-    def test_sends_nothing_without_elo_history(self):
+    def test_reads_the_matchs_season_table_not_the_all_time_one(self):
+        p1, p2 = verified_player('Ada'), verified_player('Bob')
+        season = SeasonFactory()
+        match = confirmed_singles(
+            p1, p2, club=season.club, date_played=_noon(season.starts_on)
+        )
+        seasonal = _change(match, p1, season=season)
+        RatingChange.objects.filter(match=match, rating__season__isnull=True).update(
+            glicko_new_rating=999.0, glicko_change=-77
+        )
+
+        with patch('pingpong.push.send_to_user', return_value=1) as send:
+            notifications.notify_match_result(match)
+
+        body = body_for(send, p1)
+        assert f" Rating {round(seasonal.glicko_new_rating)} ({seasonal.glicko_change:+d})." in body
+        assert '999' not in body and '-77' not in body
+
+    def test_a_skipped_projection_still_gets_the_result_without_a_rating(self):
+        # NULL Glicko columns = the projection was skipped for this player.
+        p1, p2 = verified_player('Ada'), verified_player('Bob')
+        match = confirmed_singles(p1, p2)
+        RatingChange.objects.filter(match=match, player=p1).update(
+            glicko_old_rating=None, glicko_new_rating=None, glicko_change=None
+        )
+
+        with patch('pingpong.push.send_to_user', return_value=1) as send:
+            reached = notifications.notify_match_result(match)
+
+        assert reached == {p1.pk, p2.pk}
+        assert body_for(send, p1) == 'You won 2-0.'
+        assert 'Rating' in body_for(send, p2)
+
+    def test_sends_nothing_without_rating_changes(self):
         p1, p2 = verified_player('Ada'), verified_player('Bob')
         match = MatchFactory(player1=p1, player2=p2)
 
@@ -149,42 +206,67 @@ class TestNotifyMatchResult:
         assert not send.called
 
 
+def _rated(player, glicko_rating, **kwargs):
+    kwargs.setdefault('format', 'singles')
+    return PlayerRatingFactory(
+        player=player, glicko_rating=glicko_rating, rd=80.0, volatility=0.06,
+        last_rated_on=date(2026, 1, 1), matches=5, **kwargs,
+    )
+
+
+ALL_TIME_SINGLES = RatingScope(None, 'singles')
+
+
 @pytest.mark.django_db
-class TestPlayersPassedOnLeaderboard:
+class TestPlayersBetween:
+    """`ratings.players_between`: who a climb from old to new passed, in one table."""
+
     def test_finds_players_strictly_between_the_two_ratings(self):
         climber = PlayerFactory(name='Climber', with_user=True)
-        passed = PlayerFactory(name='Passed', with_user=True, elo_rating=1510)
-        ahead = PlayerFactory(name='Ahead', with_user=True, elo_rating=1600)
+        passed = PlayerFactory(name='Passed', with_user=True)
+        ahead = PlayerFactory(name='Ahead', with_user=True)
+        _rated(passed, 1510.0)
+        _rated(ahead, 1600.0)
 
-        result = notifications.players_passed_on_leaderboard(climber, 1500, 1520)
+        result = ratings.players_between(ALL_TIME_SINGLES, climber, 1500.0, 1520.0)
 
         assert list(result) == [passed]
-        assert ahead not in result
 
     def test_a_tie_at_either_bound_is_not_an_overtake(self):
         climber = PlayerFactory(name='Climber', with_user=True)
-        PlayerFactory(name='TiedBelow', with_user=True, elo_rating=1500)
-        PlayerFactory(name='TiedAbove', with_user=True, elo_rating=1520)
+        _rated(PlayerFactory(name='TiedBelow', with_user=True), 1500.0)
+        _rated(PlayerFactory(name='TiedAbove', with_user=True), 1520.0)
 
-        result = notifications.players_passed_on_leaderboard(climber, 1500, 1520)
-
-        assert list(result) == []
+        assert list(ratings.players_between(ALL_TIME_SINGLES, climber, 1500.0, 1520.0)) == []
 
     def test_empty_when_the_rating_did_not_rise(self):
         climber = PlayerFactory(name='Climber', with_user=True)
-        PlayerFactory(name='Other', with_user=True, elo_rating=1490)
+        _rated(PlayerFactory(name='Other', with_user=True), 1490.0)
 
-        assert list(
-            notifications.players_passed_on_leaderboard(climber, 1500, 1480)
-        ) == []
+        assert list(ratings.players_between(ALL_TIME_SINGLES, climber, 1500.0, 1480.0)) == []
 
     def test_ignores_players_with_no_account(self):
         climber = PlayerFactory(name='Climber', with_user=True)
-        PlayerFactory(name='Guest', elo_rating=1510)  # no user, unreachable
+        _rated(PlayerFactory(name='Guest'), 1510.0)  # no user, unreachable
 
-        assert list(
-            notifications.players_passed_on_leaderboard(climber, 1500, 1520)
-        ) == []
+        assert list(ratings.players_between(ALL_TIME_SINGLES, climber, 1500.0, 1520.0)) == []
+
+    def test_ignores_unrated_rows_and_the_climber(self):
+        climber = PlayerFactory(name='Climber', with_user=True)
+        PlayerRatingFactory(player=PlayerFactory(name='Unrated', with_user=True))
+        _rated(climber, 1510.0)
+
+        assert list(ratings.players_between(ALL_TIME_SINGLES, climber, 1500.0, 1520.0)) == []
+
+    def test_only_reads_the_scopes_own_table(self):
+        climber = PlayerFactory(name='Climber', with_user=True)
+        season = SeasonFactory()
+        _rated(PlayerFactory(name='Doubles', with_user=True), 1510.0, format='doubles')
+        _rated(PlayerFactory(name='Seasonal', with_user=True), 1510.0, season=season)
+        all_time = PlayerFactory(name='AllTime', with_user=True)
+        _rated(all_time, 1510.0)
+
+        assert list(ratings.players_between(ALL_TIME_SINGLES, climber, 1500.0, 1520.0)) == [all_time]
 
 
 @pytest.mark.django_db
@@ -192,15 +274,12 @@ class TestNotifyLeaderboardOvertakes:
     def test_notifies_the_player_who_was_passed(self):
         p1, p2 = verified_player('Ada'), verified_player('Bob')
         bystander = verified_player('Cleo')
-        match = MatchFactory(player1=p1, player2=p2, best_of=3)
-        play_out(match)
-        confirm_match(match)
-        match.refresh_from_db()
+        match = confirmed_singles(p1, p2)
 
-        entry = EloHistory.objects.get(match=match, player=p1)
+        change = _change(match, p1)
+        assert change.glicko_new_rating > change.glicko_old_rating
         # Park the bystander strictly inside the winner's climb.
-        bystander.elo_rating = entry.old_rating + 1
-        bystander.save()
+        _rated(bystander, change.glicko_old_rating + 1)
 
         with patch('pingpong.push.send_to_user', return_value=1) as send:
             reached = notifications.notify_leaderboard_overtakes(match)
@@ -209,18 +288,48 @@ class TestNotifyLeaderboardOvertakes:
         assert send.call_args.kwargs['kind'] == NotificationKind.LEADERBOARD_OVERTAKE
         assert 'Ada' in send.call_args.kwargs['body']
 
+    def test_uses_the_matchs_season_table(self):
+        p1, p2 = verified_player('Ada'), verified_player('Bob')
+        in_season, all_time_only = verified_player('Cleo'), verified_player('Dora')
+        season = SeasonFactory()
+        match = confirmed_singles(
+            p1, p2, club=season.club, date_played=_noon(season.starts_on)
+        )
+        change = _change(match, p1, season=season)
+        _rated(in_season, change.glicko_old_rating + 1, season=season)
+        _rated(all_time_only, change.glicko_old_rating + 1)
+
+        with patch('pingpong.push.send_to_user', return_value=1):
+            reached = notifications.notify_leaderboard_overtakes(match)
+
+        assert reached == {in_season.pk}
+
     def test_never_notifies_the_match_participants(self):
         # They are already getting a match-result push; two buzzes for one
         # game is how people mute an app.
         p1, p2 = verified_player('Ada'), verified_player('Bob')
-        match = MatchFactory(player1=p1, player2=p2, best_of=3)
-        play_out(match)
-        confirm_match(match)
-        match.refresh_from_db()
+        match = confirmed_singles(p1, p2)
 
-        entry = EloHistory.objects.get(match=match, player=p1)
-        p2.elo_rating = entry.old_rating + 1
-        p2.save()
+        change = _change(match, p1)
+        PlayerRating.all_objects.filter(player=p2, season=None, format='singles').update(
+            glicko_rating=change.glicko_old_rating + 1
+        )
+
+        with patch('pingpong.push.send_to_user', return_value=1) as send:
+            reached = notifications.notify_leaderboard_overtakes(match)
+
+        assert reached == set()
+        assert not send.called
+
+    def test_a_skipped_projection_passes_nobody(self):
+        p1, p2 = verified_player('Ada'), verified_player('Bob')
+        bystander = verified_player('Cleo')
+        match = confirmed_singles(p1, p2)
+        change = _change(match, p1)
+        _rated(bystander, change.glicko_old_rating + 1)
+        RatingChange.objects.filter(match=match, player=p1).update(
+            glicko_old_rating=None, glicko_new_rating=None, glicko_change=None
+        )
 
         with patch('pingpong.push.send_to_user', return_value=1) as send:
             reached = notifications.notify_leaderboard_overtakes(match)

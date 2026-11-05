@@ -1,15 +1,11 @@
-"""The seasons cutover in the UI (KAN-48 / S4.3, KAN-50 / S4.4).
+"""The seasons UI (KAN-48 / S4.3, KAN-50 / S4.4) under Glicko-2 (KAN-73).
 
-Two promises, one per flag position:
-
-* **Flag off, nothing changes.** The leaderboard, match detail, the dashboard
-  and the profile render from the legacy combined `Player.elo_*` fields
-  exactly as before, with the same cache keys.
-* **Flag on, ratings are per format and per season.** The leaderboard defaults
-  to the active club's current season, offers all-time explicitly, ranks one
-  format's `PlayerRating` rows, shows unrated players as unrated (never as
-  1500), and marks provisional ratings with a threshold read from `elo.py`.
-  The "if agreed" preview is the number that confirmation writes.
+Ratings are per format and per season. The leaderboard defaults to the active
+club's current season, offers all-time explicitly, ranks one format's
+`PlayerRating` rows by `glicko_rating`, shows unrated players as unrated
+(never as 1500), and marks provisional ratings with a threshold read from
+`glicko_adapter.PROVISIONAL_RD` at call time. The "if agreed" preview is the
+number that confirmation writes.
 """
 import datetime
 
@@ -20,8 +16,9 @@ from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
 
-from pingpong import elo, ratings
-from pingpong.models import RatingChange, Side
+from pingpong import cache_utils, glicko_adapter, ratings
+from pingpong.models import RatingChange
+from pingpong.rating_pipeline import DOUBLES, SINGLES, RatingScope
 
 from .conftest import (
     ClubFactory,
@@ -37,11 +34,6 @@ from .conftest import (
 from .test_views import _login_client
 
 LEADERBOARD = "pingpong:leaderboard"
-
-
-@pytest.fixture
-def seasons_on(settings):
-    settings.FEATURE_FLAGS = {**settings.FEATURE_FLAGS, "seasons": True}
 
 
 def _member(club, **kwargs):
@@ -66,6 +58,18 @@ def _club_with_current_season():
     return club, season
 
 
+def _rated(player, glicko_rating, *, rd=60.0, **kwargs):
+    """A rated PlayerRating row, last rated today (so its RD is not inflated)."""
+    return PlayerRatingFactory(
+        player=player,
+        glicko_rating=glicko_rating,
+        rd=rd,
+        volatility=0.06,
+        last_rated_on=timezone.now().date(),
+        **kwargs,
+    )
+
+
 def _finished(winner, loser, *, club, **kwargs):
     """A completed 3-0 singles match in `club`, not yet confirmed."""
     match = MatchFactory(player1=winner, player2=loser, best_of=5, club=club, **kwargs)
@@ -80,78 +84,10 @@ def _rows(response):
 
 
 # ---------------------------------------------------------------------------
-# Flag off: exactly as before
+# The leaderboard
 # ---------------------------------------------------------------------------
 
 @pytest.mark.django_db
-class TestFlagOffIsUnchanged:
-    def test_leaderboard_reads_the_legacy_combined_rating(self):
-        club, _season = _club_with_current_season()
-        user, me = _member(club)
-        _, them = _member(club)
-        confirm_match(_finished(me, them, club=club))
-        me.refresh_from_db()
-
-        resp = _login_client(user).get(reverse(LEADERBOARD))
-
-        assert resp.context["rating_scope"] is None
-        assert _rows(resp)[me.pk]["elo_rating"] == me.elo_rating
-        content = resp.content.decode()
-        assert 'id="date_filter"' in content
-        assert "data-rating-status" not in content
-        assert 'id="rating-help"' not in content
-        assert "/pingpong/seasons/" not in content
-
-    def test_cache_key_keeps_its_pre_seasons_shape(self):
-        from pingpong.views import LeaderboardView
-
-        view = LeaderboardView()
-        assert view._leaderboard_cache_key(
-            "all", "all", "", "", "10", system=ratings.ELO
-        ) == (
-            "leaderboard_0_all_all___10"
-        )
-
-    def test_match_detail_preview_is_the_legacy_projection(self):
-        club, _season = _club_with_current_season()
-        user, me = _member(club)
-        _, them = _member(club)
-        match = _finished(me, them, club=club)
-
-        ctx = _login_client(user).get(reverse("pingpong:match_detail", args=[match.pk])).context
-
-        assert ctx["rating_scope"] is None
-        assert ctx["side1_elo_delta"] == elo.projected_elo_changes(match).side1_change
-        assert ctx["elo_is_pending"] is True
-
-    def test_dashboard_preview_is_the_legacy_projection(self):
-        club, _season = _club_with_current_season()
-        user, me = _member(club)
-        _, them = _member(club)
-        match = _finished(me, them, club=club)
-
-        rows = _login_client(user).get(reverse("pingpong:dashboard")).context[
-            "pending_confirmations"
-        ]
-
-        assert rows[0]["elo_if_true"] == elo.projected_elo_change_for(match, me)
-
-    def test_profile_has_no_format_ratings(self):
-        club, _season = _club_with_current_season()
-        user, me = _member(club)
-
-        resp = _login_client(user).get(reverse("pingpong:player_detail", args=[me.pk]))
-
-        assert resp.context["format_ratings"] is None
-        assert 'id="rating-help"' not in resp.content.decode()
-
-
-# ---------------------------------------------------------------------------
-# Flag on: the leaderboard
-# ---------------------------------------------------------------------------
-
-@pytest.mark.django_db
-@pytest.mark.usefixtures("seasons_on")
 class TestSeasonLeaderboard:
     def test_defaults_to_the_current_season_and_singles(self):
         club, season = _club_with_current_season()
@@ -163,9 +99,9 @@ class TestSeasonLeaderboard:
 
         scope = resp.context["rating_scope"]
         assert scope.season == season
-        assert scope.format == elo.SINGLES
+        assert scope.format == SINGLES
         season_row = me.ratings.get(season=season, format="singles")
-        assert _rows(resp)[me.pk]["elo_rating"] == season_row.rating
+        assert _rows(resp)[me.pk]["rating"] == round(season_row.glicko_rating)
         assert _rows(resp)[me.pk]["total_matches"] == 1
         assert _rows(resp)[me.pk]["wins"] == 1
         assert _rows(resp)[them.pk]["losses"] == 1
@@ -173,52 +109,55 @@ class TestSeasonLeaderboard:
     def test_all_time_is_an_explicit_choice(self):
         club, season = _club_with_current_season()
         user, me = _member(club)
-        PlayerRatingFactory(player=me, club=club, season=None, rating=1720, matches=30)
-        PlayerRatingFactory(player=me, club=club, season=season, rating=1610, matches=2)
+        _, other = _member(club)
+        _rated(me, 1720, club=club, season=None, matches=30)
+        _rated(me, 1610, club=club, season=season, matches=2)
+        # A second rated player, so the season table is not on its day-one fallback.
+        _rated(other, 1500, club=club, season=season, matches=2)
 
         client = _login_client(user)
         default = client.get(reverse(LEADERBOARD))
         all_time = client.get(reverse(LEADERBOARD), {"season": "all"})
 
-        assert _rows(default)[me.pk]["elo_rating"] == 1610
+        assert _rows(default)[me.pk]["rating"] == 1610
         assert all_time.context["rating_scope"].season is None
-        assert _rows(all_time)[me.pk]["elo_rating"] == 1720
+        assert _rows(all_time)[me.pk]["rating"] == 1720
         assert 'value="all"' in default.content.decode()
 
     def test_a_past_season_reads_its_live_rows(self):
         club, _current = _club_with_current_season()
         past = SeasonFactory(club=club, name="Spring")
         user, me = _member(club)
-        PlayerRatingFactory(player=me, club=club, season=past, rating=1555, matches=4)
+        _rated(me, 1555, club=club, season=past, matches=4)
 
         resp = _login_client(user).get(reverse(LEADERBOARD), {"season": past.pk})
 
         assert resp.context["rating_scope"].season == past
-        assert _rows(resp)[me.pk]["elo_rating"] == 1555
+        assert _rows(resp)[me.pk]["rating"] == 1555
 
     def test_format_selects_that_formats_rows_not_a_filtered_shared_number(self):
         club, season = _club_with_current_season()
         user, me = _member(club)
-        PlayerRatingFactory(player=me, club=club, season=season, format="singles", rating=1600)
-        PlayerRatingFactory(player=me, club=club, season=season, format="doubles", rating=1420)
+        _rated(me, 1600, club=club, season=season, format="singles")
+        _rated(me, 1420, club=club, season=season, format="doubles")
 
         client = _login_client(user)
-        singles = client.get(reverse(LEADERBOARD), {"format": "singles"})
-        doubles = client.get(reverse(LEADERBOARD), {"format": "doubles"})
+        singles = client.get(reverse(LEADERBOARD), {"season": season.pk, "format": "singles"})
+        doubles = client.get(reverse(LEADERBOARD), {"season": season.pk, "format": "doubles"})
 
-        assert _rows(singles)[me.pk]["elo_rating"] == 1600
-        assert _rows(doubles)[me.pk]["elo_rating"] == 1420
-        assert doubles.context["rating_scope"].format == elo.DOUBLES
+        assert _rows(singles)[me.pk]["rating"] == 1600
+        assert _rows(doubles)[me.pk]["rating"] == 1420
+        assert doubles.context["rating_scope"].format == DOUBLES
 
     def test_unrated_players_are_shown_as_unrated_not_1500(self):
         club, season = _club_with_current_season()
         user, me = _member(club)
         _, newcomer = _member(club, name="Newcomer")
-        PlayerRatingFactory(player=me, club=club, season=season, rating=1530)
+        _rated(me, 1530, club=club, season=season)
         # Played last season, nothing yet this season.
-        PlayerRatingFactory(player=newcomer, club=club, season=None, rating=1650, matches=25)
+        _rated(newcomer, 1650, club=club, season=None, matches=25)
 
-        resp = _login_client(user).get(reverse(LEADERBOARD))
+        resp = _login_client(user).get(reverse(LEADERBOARD), {"season": season.pk})
 
         assert newcomer.pk not in _rows(resp)
         assert [p.pk for p in resp.context["unrated_players"]] == [newcomer.pk]
@@ -245,43 +184,43 @@ class TestSeasonLeaderboard:
         )
 
         assert resp.status_code == 200
-        assert resp.context["rating_scope"] == elo.RatingScope(season, elo.SINGLES)
+        assert resp.context["rating_scope"] == RatingScope(season, SINGLES)
         assert resp.context["top_x"] == "10"
 
     def test_no_current_season_defaults_to_all_time(self):
         club = ClubFactory()
         user, me = _member(club)
-        PlayerRatingFactory(player=me, club=club, season=None, rating=1588)
+        _rated(me, 1588, club=club, season=None)
 
         resp = _login_client(user).get(reverse(LEADERBOARD))
 
         assert resp.context["rating_scope"].season is None
-        assert _rows(resp)[me.pk]["elo_rating"] == 1588
+        assert _rows(resp)[me.pk]["rating"] == 1588
 
     def test_top_x_limits_rated_rows(self):
         club, season = _club_with_current_season()
         user, _me = _member(club)
         for n in range(12):
-            PlayerRatingFactory(player=PlayerFactory(club=club), club=club, season=season, rating=1500 + n)
+            _rated(PlayerFactory(club=club), 1500 + n, club=club, season=season)
 
         resp = _login_client(user).get(reverse(LEADERBOARD))
 
-        ranked = [row["elo_rating"] for row in resp.context["player_stats"]]
+        ranked = [row["rating"] for row in resp.context["player_stats"]]
         assert ranked == sorted(ranked, reverse=True)
         assert len(ranked) == 10
 
     def test_the_htmx_fragment_honours_the_params(self):
         club, season = _club_with_current_season()
         user, me = _member(club)
-        PlayerRatingFactory(player=me, club=club, season=None, format="doubles", rating=1490)
+        _rated(me, 1490, club=club, season=None, format="doubles")
 
         resp = _login_client(user).get(
             reverse(LEADERBOARD), {"season": "all", "format": "doubles"}, HTTP_HX_REQUEST="true"
         )
 
         assert [t.name for t in resp.templates][0] == "pingpong/_leaderboard_season_results.html"
-        assert resp.context["rating_scope"] == elo.RatingScope(None, elo.DOUBLES)
-        assert _rows(resp)[me.pk]["elo_rating"] == 1490
+        assert resp.context["rating_scope"] == RatingScope(None, DOUBLES)
+        assert _rows(resp)[me.pk]["rating"] == 1490
         assert 'id="leaderboard-results"' in resp.content.decode()
 
     def test_links_to_the_season_archive(self):
@@ -295,7 +234,9 @@ class TestSeasonLeaderboard:
 
     def test_the_filters_are_rendered_widgets_not_option_loops(self):
         club, season = _club_with_current_season()
-        user, _me = _member(club)
+        user, me = _member(club)
+        _rated(me, 1500, club=club, season=season)
+        _rated(PlayerFactory(club=club), 1510, club=club, season=season)
 
         content = _login_client(user).get(reverse(LEADERBOARD)).content.decode()
 
@@ -305,26 +246,19 @@ class TestSeasonLeaderboard:
 
 
 @pytest.mark.django_db
-@pytest.mark.usefixtures("seasons_on")
 class TestSeasonLeaderboardCache:
     def test_season_and_format_change_the_key(self):
-        from pingpong.views import LeaderboardView
-
         club, season = _club_with_current_season()
-        view = LeaderboardView()
+        cache.clear()
         keys = {
-            view._leaderboard_cache_key(
-                "all", "all", "", "", "10", rating_scope=elo.RatingScope(s, f),
-                system=ratings.ELO,
-            )
+            cache_utils.leaderboard_key(RatingScope(s, f), "10")
             for s in (season, None)
-            for f in (elo.SINGLES, elo.DOUBLES)
+            for f in (SINGLES, DOUBLES)
         }
         assert len(keys) == 4
-        assert view._leaderboard_cache_key(
-            "all", "all", "", "", "10", rating_scope=elo.RatingScope(season, elo.SINGLES),
-            system=ratings.ELO,
-        ) == f"leaderboard_0_season{season.pk}_singles_10"
+        assert cache_utils.leaderboard_key(RatingScope(season, SINGLES), "10") == (
+            f"leaderboard_0_g2_season{season.pk}_singles_10"
+        )
 
     def test_hit_and_miss_produce_identical_context(self):
         club, season = _club_with_current_season()
@@ -341,7 +275,7 @@ class TestSeasonLeaderboardCache:
 
         for key in (
             "player_stats", "unrated_players", "rating_scope", "biggest_mover",
-            "top_x", "provisional_matches", "scope_label",
+            "top_x", "scope_label",
         ):
             assert miss[key] == hit[key], key
         assert miss["player_stats"][0]["status"] == ratings.PROVISIONAL
@@ -359,7 +293,6 @@ class TestSeasonLeaderboardCache:
 
 
 @pytest.mark.django_db
-@pytest.mark.usefixtures("seasons_on")
 class TestSeasonMovement:
     def test_movement_is_within_the_selected_season(self):
         club, season = _club_with_current_season()
@@ -370,8 +303,8 @@ class TestSeasonMovement:
         season_change = RatingChange.objects.get(player=me, rating__season=season)
         all_time_change = RatingChange.objects.get(player=me, rating__season__isnull=True)
         # Make the two scopes disagree, so the test can tell which one was read.
-        RatingChange.objects.filter(pk=season_change.pk).update(rating_change=7)
-        RatingChange.objects.filter(pk=all_time_change.pk).update(rating_change=23)
+        RatingChange.objects.filter(pk=season_change.pk).update(glicko_change=7)
+        RatingChange.objects.filter(pk=all_time_change.pk).update(glicko_change=23)
 
         client = _login_client(user)
         assert _rows(client.get(reverse(LEADERBOARD)))[me.pk]["movement"] == 7
@@ -417,10 +350,9 @@ class TestSeasonMovement:
 
 
 @pytest.mark.django_db
-@pytest.mark.usefixtures("seasons_on")
 class TestSeasonLeaderboardQueryCount:
-    """The legacy table loads every confirmed match into Python. The season
-    table must not: its query count may not grow with match history."""
+    """The season table aggregates in the database: its query count may not
+    grow with match history."""
 
     def _count(self, client):
         cache.clear()
@@ -443,94 +375,104 @@ class TestSeasonLeaderboardQueryCount:
         many = self._count(client)
 
         assert many == few
-        assert few <= 16
+        # 17: the 16 of the pre-KAN-73 Elo season table plus the day-one
+        # `season_table_is_empty` COUNT, which only the Glicko path ran before.
+        assert few <= 17
 
 
 # ---------------------------------------------------------------------------
-# Flag on: provisional and unrated (KAN-50)
+# Provisional and unrated (KAN-50; RD-based since KAN-71)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.django_db
-@pytest.mark.usefixtures("seasons_on")
 class TestProvisionalMarker:
-    def _status_on_leaderboard(self, experience, **params):
+    def _status_on_leaderboard(self, rd, experience=30):
+        """My status on the current-season table: the season row has `rd`,
+        the all-time row carries `experience` matches."""
         club, season = _club_with_current_season()
         user, me = _member(club)
-        PlayerRatingFactory(player=me, club=club, season=None, matches=experience)
-        PlayerRatingFactory(player=me, club=club, season=season, matches=1)
-        resp = _login_client(user).get(reverse(LEADERBOARD), params)
+        _rated(me, 1500, rd=40, club=club, season=None, matches=experience)
+        _rated(me, 1500, rd=rd, club=club, season=season, matches=1)
+        resp = _login_client(user).get(reverse(LEADERBOARD), {"season": season.pk})
         return _rows(resp)[me.pk]["status"], resp.content.decode()
 
-    def test_below_the_threshold_is_provisional(self):
-        status, content = self._status_on_leaderboard(elo.PROVISIONAL_MATCHES - 1)
+    def test_above_the_threshold_is_provisional(self):
+        status, content = self._status_on_leaderboard(glicko_adapter.PROVISIONAL_RD + 1)
         assert status == ratings.PROVISIONAL
         assert 'data-rating-status="provisional"' in content
         assert 'id="rating-help"' in content
 
     def test_at_the_threshold_the_marker_is_gone(self):
-        status, content = self._status_on_leaderboard(elo.PROVISIONAL_MATCHES)
+        status, content = self._status_on_leaderboard(glicko_adapter.PROVISIONAL_RD)
         assert status == ratings.ESTABLISHED
         assert 'data-rating-status="provisional"' not in content
 
-    def test_experience_is_all_time_so_a_new_season_does_not_reset_it(self):
-        """One match this season, thirty all-time: established."""
-        status, _ = self._status_on_leaderboard(30)
-        assert status == ratings.ESTABLISHED
-
-    def test_the_threshold_is_read_from_elo(self, monkeypatch):
-        monkeypatch.setattr(elo, "PROVISIONAL_MATCHES", 5)
-        status, content = self._status_on_leaderboard(6)
-        assert status == ratings.ESTABLISHED
-        monkeypatch.setattr(elo, "PROVISIONAL_MATCHES", 50)
+    def test_experience_is_all_time_so_a_new_season_does_not_make_you_new(self):
+        """One match this season, thirty all-time: a wide RD reads 'returning'."""
+        status, _ = self._status_on_leaderboard(300, experience=30)
+        assert (status, status.reason) == (ratings.PROVISIONAL, "returning")
         cache.clear()
-        status, content = self._status_on_leaderboard(30)
+        status, _ = self._status_on_leaderboard(300, experience=1)
+        assert (status, status.reason) == (ratings.PROVISIONAL, "new")
+
+    def test_the_threshold_is_read_from_glicko_adapter(self, monkeypatch):
+        monkeypatch.setattr(glicko_adapter, "PROVISIONAL_RD", 50.0)
+        status, content = self._status_on_leaderboard(60)
         assert status == ratings.PROVISIONAL
-        assert "50 rated matches" in content
+        assert "wider than 50" in content
+        monkeypatch.setattr(glicko_adapter, "PROVISIONAL_RD", 200.0)
+        cache.clear()
+        status, _ = self._status_on_leaderboard(150)
+        assert status == ratings.ESTABLISHED
 
     def test_the_marker_follows_the_constant_on_a_cache_hit_too(self, monkeypatch):
         club, season = _club_with_current_season()
         user, me = _member(club)
-        PlayerRatingFactory(player=me, club=club, season=season, matches=8)
-        PlayerRatingFactory(player=me, club=club, season=None, matches=8)
+        _rated(me, 1500, rd=150, club=club, season=season, matches=8)
+        _rated(me, 1500, rd=150, club=club, season=None, matches=8)
         client = _login_client(user)
-        assert _rows(client.get(reverse(LEADERBOARD)))[me.pk]["status"] == ratings.PROVISIONAL
+        params = {"season": season.pk}
+        assert _rows(client.get(reverse(LEADERBOARD), params))[me.pk]["status"] == ratings.PROVISIONAL
 
-        monkeypatch.setattr(elo, "PROVISIONAL_MATCHES", 8)
+        monkeypatch.setattr(glicko_adapter, "PROVISIONAL_RD", 150.0)
 
-        assert _rows(client.get(reverse(LEADERBOARD)))[me.pk]["status"] == ratings.ESTABLISHED
+        assert _rows(client.get(reverse(LEADERBOARD), params))[me.pk]["status"] == ratings.ESTABLISHED
 
     def test_the_marker_is_a_word_not_a_colour(self):
-        _, content = self._status_on_leaderboard(1)
+        _, content = self._status_on_leaderboard(300, experience=1)
         marker = content.split('data-rating-status="provisional"', 1)[1].split("</span>", 1)[0]
         assert "Provisional" in marker
         assert "ball" not in content.split('data-rating-status="provisional"', 1)[0][-200:]
 
 
 @pytest.mark.django_db
-@pytest.mark.usefixtures("seasons_on")
 class TestProfileRatings:
     def test_each_format_shows_season_and_all_time_with_its_state(self):
         club, season = _club_with_current_season()
         user, me = _member(club)
-        PlayerRatingFactory(player=me, club=club, season=None, format="singles", rating=1640, matches=3)
-        PlayerRatingFactory(player=me, club=club, season=season, format="singles", rating=1580, matches=3)
-        PlayerRatingFactory(player=me, club=club, season=None, format="doubles", rating=1700, matches=40)
+        _rated(me, 1640, rd=200, club=club, season=None, format="singles", matches=3)
+        _rated(me, 1580, rd=200, club=club, season=season, format="singles", matches=3)
+        _rated(me, 1700, rd=50, club=club, season=None, format="doubles", matches=40)
 
         resp = _login_client(user).get(reverse("pingpong:player_detail", args=[me.pk]))
 
         by_format = {f["format"]: f for f in resp.context["format_ratings"]["formats"]}
-        assert by_format["singles"]["season"] == {"rating": 1580, "status": ratings.PROVISIONAL}
-        assert by_format["singles"]["all_time"] == {"rating": 1640, "status": ratings.PROVISIONAL}
+
+        def shown(cell):
+            return cell["rating"], cell["status"]
+
+        assert shown(by_format["singles"]["season"]) == (1580, ratings.PROVISIONAL)
+        assert shown(by_format["singles"]["all_time"]) == (1640, ratings.PROVISIONAL)
         # Established in doubles all-time, but no doubles match this season.
-        assert by_format["doubles"]["season"] == {"rating": None, "status": ratings.UNRATED}
-        assert by_format["doubles"]["all_time"] == {"rating": 1700, "status": ratings.ESTABLISHED}
+        assert shown(by_format["doubles"]["season"]) == (None, ratings.UNRATED)
+        assert shown(by_format["doubles"]["all_time"]) == (1700, ratings.ESTABLISHED)
 
         content = resp.content.decode()
         assert 'data-rating-status="provisional"' in content
         assert 'data-rating-status="unrated"' in content
         assert 'id="rating-help"' in content
         assert 'href="#rating-help"' in content
-        assert f"{elo.PROVISIONAL_MATCHES} rated matches" in content
+        assert f"wider than {round(glicko_adapter.PROVISIONAL_RD)}" in content
 
     def test_a_player_who_never_played_is_unrated_everywhere(self):
         club, _season = _club_with_current_season()
@@ -552,57 +494,58 @@ class TestProfileRatings:
 
 
 # ---------------------------------------------------------------------------
-# Flag on: the preview is the write
+# The preview is the write
 # ---------------------------------------------------------------------------
 
 @pytest.mark.django_db
-@pytest.mark.usefixtures("seasons_on")
 class TestPreviewEqualsWrite:
     def _season_change(self, match, player, season):
         return RatingChange.objects.get(
             match=match, player=player, rating__season=season, rating__format="singles"
-        ).rating_change
+        ).glicko_change
 
     def test_match_detail_preview_is_what_confirmation_writes(self):
         club, season = _club_with_current_season()
         user, me = _member(club)
         _, them = _member(club)
-        # Give the two players different histories so the season seed and the
-        # legacy combined rating disagree -- otherwise any scope would pass.
-        PlayerRatingFactory(player=me, club=club, season=None, rating=1400, matches=30)
-        PlayerRatingFactory(player=them, club=club, season=None, rating=1700, matches=5)
+        # Give the two players different all-time histories so the season seed
+        # and the all-time state disagree -- otherwise either scope would pass.
+        _rated(me, 1400, rd=50, club=club, season=None, matches=30)
+        _rated(them, 1700, rd=50, club=club, season=None, matches=5)
         match = _finished(me, them, club=club)
         url = reverse("pingpong:match_detail", args=[match.pk])
         client = _login_client(user)
 
         before = client.get(url).context
-        assert before["rating_scope"] == elo.RatingScope(season, elo.SINGLES)
-        assert before["elo_is_pending"] is True
-        assert before["side1_elo_delta"] != elo.projected_elo_changes(match).side1_change
+        assert before["rating_scope"] == RatingScope(season, SINGLES)
+        assert before["delta_is_pending"] is True
+        all_time = ratings.match_deltas(match, RatingScope(None, SINGLES))
+        assert before["side1_delta"] != all_time[0]
 
         confirm_match(match)
 
-        assert before["side1_elo_delta"] == self._season_change(match, me, season)
-        assert before["side2_elo_delta"] == self._season_change(match, them, season)
+        assert before["side1_delta"] == self._season_change(match, me, season)
+        assert before["side2_delta"] == self._season_change(match, them, season)
         after = client.get(url).context
-        assert after["elo_is_pending"] is False
-        assert after["side1_elo_delta"] == before["side1_elo_delta"]
+        assert after["delta_is_pending"] is False
+        assert after["side1_delta"] == before["side1_delta"]
         assert "Singles" in after["scope_label"] and season.name in after["scope_label"]
 
     def test_dashboard_preview_is_what_confirmation_writes(self):
         club, season = _club_with_current_season()
         user, me = _member(club)
         _, them = _member(club)
-        PlayerRatingFactory(player=me, club=club, season=None, rating=1450, matches=12)
+        _rated(me, 1450, rd=80, club=club, season=None, matches=12)
         match = _finished(them, me, club=club)
 
         rows = _login_client(user).get(reverse("pingpong:dashboard")).context[
             "pending_confirmations"
         ]
-        previewed = rows[0]["elo_if_true"]
+        previewed = rows[0]["delta_if_true"]
         confirm_match(match)
 
         assert previewed == self._season_change(match, me, season)
+        assert previewed < 0
 
     def test_a_match_outside_every_season_previews_the_all_time_format_scope(self):
         club = ClubFactory()
@@ -613,7 +556,7 @@ class TestPreviewEqualsWrite:
         ctx = _login_client(user).get(reverse("pingpong:match_detail", args=[match.pk])).context
         confirm_match(match)
 
-        assert ctx["rating_scope"] == elo.RatingScope(None, elo.SINGLES)
+        assert ctx["rating_scope"] == RatingScope(None, SINGLES)
         written = RatingChange.objects.get(match=match, player=me, rating__season__isnull=True)
-        assert ctx["side1_elo_delta"] == written.rating_change
-        assert Side.ONE  # sides resolved via _viewer_context, not template branches
+        assert ctx["side1_delta"] == written.glicko_change
+        assert written.glicko_change > 0

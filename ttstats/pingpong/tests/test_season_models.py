@@ -214,9 +214,9 @@ class TestSeasonAdminBackdatedWarning:
 
         season, messages = self._add(club, today - timedelta(days=10), today + timedelta(days=80))
 
-        warning = [m for m in messages if "recalculate_elo" in m]
+        warning = [m for m in messages if "recalculate_ratings" in m]
         assert len(warning) == 1
-        assert f"python manage.py recalculate_elo --season {season.pk}" in warning[0]
+        assert f"python manage.py recalculate_ratings --season {season.pk}" in warning[0]
         assert "2 confirmed matches" in warning[0]
 
     def test_no_warning_without_confirmed_matches_in_range(self):
@@ -226,7 +226,7 @@ class TestSeasonAdminBackdatedWarning:
 
         _, messages = self._add(club, today - timedelta(days=10), today + timedelta(days=80))
 
-        assert not [m for m in messages if "recalculate_elo" in m]
+        assert not [m for m in messages if "recalculate_ratings" in m]
 
     def test_no_warning_for_another_clubs_matches(self):
         club = ClubFactory()
@@ -235,7 +235,7 @@ class TestSeasonAdminBackdatedWarning:
 
         _, messages = self._add(club, today - timedelta(days=10), today + timedelta(days=80))
 
-        assert not [m for m in messages if "recalculate_elo" in m]
+        assert not [m for m in messages if "recalculate_ratings" in m]
 
     def test_no_warning_for_a_future_season(self):
         club = ClubFactory()
@@ -244,18 +244,16 @@ class TestSeasonAdminBackdatedWarning:
 
         _, messages = self._add(club, today + timedelta(days=1), today + timedelta(days=90))
 
-        assert not [m for m in messages if "recalculate_elo" in m]
+        assert not [m for m in messages if "recalculate_ratings" in m]
 
 
 @pytest.mark.django_db
 class TestSeasonsFlag:
-    def test_declared_and_off_by_default(self):
-        from django.conf import settings
-
+    def test_retired_seasons_are_always_on_so_the_flag_is_not_declared(self):
         from .. import flags
 
-        assert "seasons" in settings.FEATURE_FLAGS
-        assert flags.is_enabled("seasons") is False
+        assert "seasons" not in flags.all_flags()
+        assert "glicko2" not in flags.all_flags()
 
 
 @pytest.fixture

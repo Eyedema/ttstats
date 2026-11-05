@@ -1,19 +1,26 @@
-"""The PlayerRating backfill (KAN-47): deterministic, idempotent, reversible."""
-import importlib
-from datetime import date, datetime, timedelta, timezone as dt_timezone
+"""Rebuilding PlayerRating/RatingChange from the history (`rating_replay`).
+
+Migration 0040's backfill is a frozen no-op since KAN-73; what remains is
+`rebuild_player_ratings`, which `recalculate_ratings` runs: deterministic,
+equal to the live write, and keeping the frozen Elo history.
+"""
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
-from django.apps import apps as global_apps
 from django.db import connection
 from django.db.migrations.executor import MigrationExecutor
 
-from ..elo_replay import rebuild_player_ratings
-from ..models import EloHistory, Player, PlayerRating, RatingChange, Side
-from .conftest import ClubFactory, GameFactory, MatchFactory, PlayerFactory, SeasonFactory
+from ..models import Player, PlayerRating, RatingChange, Side
+from ..rating_replay import ELO_HISTORY_FIELDS, rebuild_player_ratings
+from .conftest import (
+    ClubFactory,
+    GameFactory,
+    MatchFactory,
+    PlayerFactory,
+    SeasonFactory,
+)
 
-backfill_migration = importlib.import_module("pingpong.migrations.0040_backfill_player_ratings")
-
-BASE = datetime(2026, 1, 1, 12, tzinfo=dt_timezone.utc)
+BASE = datetime(2026, 1, 1, 12, tzinfo=UTC)
 
 
 def _play(side1, side2, *, day, club=None, winner=Side.ONE):
@@ -45,19 +52,28 @@ def _key(row):
     return tuple((v is None, v if v is not None else 0) for v in row)
 
 
+def _rounded(row):
+    return tuple(round(v, 6) if isinstance(v, float) else v for v in row)
+
+
 def _snapshot():
     ratings = PlayerRating.all_objects.values_list(
-        "player_id", "club_id", "season_id", "format", "rating", "peak", "matches"
+        "player_id", "club_id", "season_id", "format", "matches",
+        "glicko_rating", "rd", "volatility", "last_rated_on",
     )
     changes = RatingChange.objects.values_list(
         "match_id", "player_id", "rating__season_id", "rating__format",
-        "old_rating", "new_rating", "rating_change", "k_factor",
+        "glicko_old_rating", "glicko_new_rating", "glicko_change",
+        "glicko_rd_before", "glicko_rd_after", *ELO_HISTORY_FIELDS,
     )
-    return sorted(ratings, key=_key), sorted(changes, key=_key)
+    return (
+        sorted((_rounded(r) for r in ratings), key=_key),
+        sorted((_rounded(c) for c in changes), key=_key),
+    )
 
 
 @pytest.mark.django_db
-class TestBackfill:
+class TestRebuild:
     def test_rebuild_reproduces_what_the_live_pipeline_wrote(self):
         _history()
         live = _snapshot()
@@ -67,52 +83,62 @@ class TestBackfill:
 
         assert _snapshot() == live
 
-    def test_running_the_migration_twice_is_idempotent(self):
+    def test_rebuilding_twice_is_idempotent(self):
         _history()
 
-        backfill_migration.backfill(global_apps, None)
+        rebuild_player_ratings()
         first = _snapshot()
-        backfill_migration.backfill(global_apps, None)
+        rebuild_player_ratings()
 
         assert _snapshot() == first
 
-    def test_legacy_fields_and_elo_history_are_untouched(self):
-        _history()
-        legacy = sorted(Player.objects.values_list("pk", "elo_rating", "elo_peak", "matches_for_elo"))
-        history = EloHistory.objects.count()
-
-        backfill_migration.backfill(global_apps, None)
-        backfill_migration.unbackfill(global_apps, None)
-
-        assert sorted(Player.objects.values_list("pk", "elo_rating", "elo_peak", "matches_for_elo")) == legacy
-        assert EloHistory.objects.count() == history
-        assert not PlayerRating.all_objects.exists()
-
-    def test_singles_only_history_matches_legacy_exactly(self):
-        """The acceptance criterion, on the backfill: a player who has only
-        ever played singles (against singles-only opponents) has an all-time
-        singles rating equal to today's value."""
-        eve, fay = PlayerFactory(), PlayerFactory()
-        for day in range(25):
-            _play([eve], [fay], day=day, winner=Side.ONE if day % 4 else Side.TWO)
-        PlayerRating.all_objects.all().delete()
-
-        backfill_migration.backfill(global_apps, None)
-
-        for player in (eve, fay):
-            player.refresh_from_db()
-            row = PlayerRating.all_objects.get(player=player, season=None, format="singles")
-            assert (row.rating, row.peak, row.matches) == (
-                player.elo_rating, player.elo_peak, player.matches_for_elo
-            )
-
     def test_a_deleted_player_takes_their_rows_with_them(self):
-        a, b, c, d = _history()
+        _a, b, _c, _d = _history()
         b.delete()
 
-        backfill_migration.backfill(global_apps, None)
+        rebuild_player_ratings()
 
         assert not PlayerRating.all_objects.filter(player_id=b.pk).exists()
+
+    def test_frozen_elo_columns_survive_a_rebuild(self):
+        """Pre-KAN-73 rows carry Elo history in `RatingChange.elo_*`; a rebuild
+        deletes and re-creates the rows, and must carry those values onto the
+        rebuilt row for the same match, player, season and format."""
+        _history()
+        frozen = {}
+        for rc in RatingChange.objects.select_related("rating").order_by("pk"):
+            values = {
+                "elo_old_rating": 1400 + rc.pk,
+                "elo_new_rating": 1410 + rc.pk,
+                "elo_change": 10 + rc.pk % 7,
+                "elo_k_factor": 32.0 + rc.pk % 3,
+            }
+            RatingChange.objects.filter(pk=rc.pk).update(**values)
+            key = (rc.match_id, rc.player_id, rc.rating.season_id, rc.rating.format)
+            frozen[key] = tuple(values.values())
+        assert any(k[2] is not None for k in frozen)  # season rows are covered
+        assert any(k[3] == "doubles" for k in frozen)
+        old_pks = set(RatingChange.objects.values_list("pk", flat=True))
+
+        rebuild_player_ratings(chunk_size=7)
+
+        rebuilt = {
+            (match_id, player_id, season_id, fmt): tuple(values)
+            for match_id, player_id, season_id, fmt, *values in RatingChange.objects.values_list(
+                "match_id", "player_id", "rating__season_id", "rating__format",
+                *ELO_HISTORY_FIELDS,
+            )
+        }
+        assert not old_pks & set(RatingChange.objects.values_list("pk", flat=True))  # re-created
+        assert rebuilt == frozen
+
+    def test_rows_without_elo_history_stay_null_after_a_rebuild(self):
+        _history()
+
+        rebuild_player_ratings()
+
+        assert RatingChange.objects.exists()
+        assert not RatingChange.objects.filter(elo_old_rating__isnull=False).exists()
 
 
 def _migrate_to(target):
@@ -135,15 +161,9 @@ def at_leaf():
 
 @pytest.mark.django_db(transaction=True)
 class TestRatingMigrationsAreTwoWay:
-    def test_backfill_forward_reverse_and_forward_again(self, at_leaf):
+    def test_the_rating_tables_reverse_and_a_rebuild_restores_them(self, at_leaf):
         _history()
         live = _snapshot()
-
-        _migrate_to("0039_player_rating")
-        assert not PlayerRating.all_objects.exists()
-
-        _migrate_to("0040_backfill_player_ratings")
-        assert _snapshot() == live
 
         _migrate_to("0038_season")
         with connection.cursor() as cursor:
@@ -153,4 +173,8 @@ class TestRatingMigrationsAreTwoWay:
         assert Player.objects.count() == 4
 
         _migrate_to(_leaf())
+        # 0040 is a frozen no-op: reapplying the chain leaves the tables empty,
+        # and a rebuild (what `recalculate_ratings` runs) restores them.
+        assert not PlayerRating.all_objects.exists()
+        rebuild_player_ratings()
         assert _snapshot() == live

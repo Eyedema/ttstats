@@ -12,11 +12,12 @@ import pytest
 from django.template import Context, Template
 from django.test import RequestFactory
 from django.urls import reverse
+from django.utils import timezone
 
 from pingpong.context_processors import TAB_FOR_URL_NAME, pingpong_context
 from pingpong.templatetags.nav_tags import nav_active
 
-from .conftest import PlayerFactory, UserFactory
+from .conftest import PlayerFactory, PlayerRatingFactory, UserFactory
 from .test_views import _login_client, _verified_user_with_player
 
 SPRITE = "pingpong/templates/pingpong/_icons.html"
@@ -113,18 +114,46 @@ class TestNavContext:
 
     def test_rank_counts_players_above_you(self):
         me = PlayerFactory(with_user=True, name="Me")
-        me.elo_rating = 1500
-        me.save()
+        _rated(me, 1500)
         for rating in (1700, 1600):
-            other = PlayerFactory()
-            other.elo_rating = rating
-            other.save()
+            _rated(PlayerFactory(), rating)
+        _rated(PlayerFactory(), 1400)
 
         request = RequestFactory().get("/")
         request.user = me.user
         request.resolver_match = type("R", (), {"url_name": "dashboard"})()
 
-        assert pingpong_context(request)["nav_player_rank"] == 3
+        ctx = pingpong_context(request)
+        assert ctx["nav_player_rank"] == 3
+        assert ctx["nav_rating"] == 1500
+        assert ctx["nav_rd"] is not None
+
+    def test_an_unrated_player_has_no_reading(self):
+        me = PlayerFactory(with_user=True, name="Me")
+        _rated(PlayerFactory(), 1700)
+
+        request = RequestFactory().get("/")
+        request.user = me.user
+        request.resolver_match = type("R", (), {"url_name": "dashboard"})()
+
+        ctx = pingpong_context(request)
+        assert ctx["nav_rating"] is None
+        assert ctx["nav_rd"] is None
+        assert ctx["nav_player_rank"] is None
+
+
+def _rated(player, rating, rd=60):
+    """An all-time singles Glicko row for `player`."""
+    return PlayerRatingFactory(
+        player=player,
+        season=None,
+        format="singles",
+        matches=10,
+        glicko_rating=rating,
+        rd=rd,
+        volatility=0.06,
+        last_rated_on=timezone.now().date(),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -133,6 +162,28 @@ class TestNavContext:
 
 @pytest.mark.django_db
 class TestRenderedNavigation:
+    def test_the_nav_shows_the_rating_and_its_uncertainty(self):
+        user, me = _verified_user_with_player()
+        _rated(me, 1543, rd=61)
+        body = _login_client(user).get(reverse("pingpong:dashboard")).content.decode()
+
+        readings = re.findall(r"data-nav-rating[^>]*>(.*?)</span>\s*</span>", body, re.S)
+        assert readings
+        for reading in readings:
+            assert "1543" in reading
+            assert re.search(r"±\d+", reading)
+            assert "Elo" not in reading
+
+    def test_an_unrated_player_shows_no_number(self):
+        user, _ = _verified_user_with_player()
+        body = _login_client(user).get(reverse("pingpong:dashboard")).content.decode()
+
+        readings = re.findall(r"data-nav-rating[^>]*>(.*?)</span>", body, re.S)
+        assert readings
+        for reading in readings:
+            assert not re.search(r"\d", reading)
+            assert "Elo" not in reading
+
     def test_tab_bar_lists_the_four_destinations(self):
         user, _ = _verified_user_with_player()
         body = _login_client(user).get(reverse("pingpong:dashboard")).content.decode()

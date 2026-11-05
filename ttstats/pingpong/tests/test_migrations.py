@@ -45,6 +45,21 @@ def _tables():
         return set(connection.introspection.table_names(cursor))
 
 
+def _create_player(at, **fields):
+    """A Player created through the *historical* model at migration `at`.
+
+    The current model no longer declares columns that older schemas have as
+    NOT NULL without a database default (KAN-73 dropped `Player.elo_rating`
+    and friends), so it cannot insert at an old state. Returns the current
+    model's instance, which reads fine: its columns are a subset.
+    """
+    from pingpong.models import Player
+
+    executor = MigrationExecutor(connection)
+    old_player = executor.loader.project_state((APP, at)).apps.get_model(APP, "Player")
+    return Player._base_manager.get(pk=old_player._base_manager.create(**fields).pk)
+
+
 def _leaf():
     """The app's real latest migration, not the tenancy HEAD constant."""
     executor = MigrationExecutor(connection)
@@ -140,8 +155,8 @@ class TestBackfillMigrationIsTwoWay:
         # of the runbook and before step 3.
         _migrate_to(BEFORE_BACKFILL)
 
-        p1 = Player.objects.create(name="Ada")
-        p2 = Player.objects.create(name="Bob")
+        p1 = _create_player(BEFORE_BACKFILL, name="Ada")
+        p2 = _create_player(BEFORE_BACKFILL, name="Bob")
         match = Match.all_objects.create(best_of=5)
         set_match_sides(match, [p1], [p2])
         before = (Player.objects.count(), Match.all_objects.count())
@@ -160,10 +175,10 @@ class TestBackfillMigrationIsTwoWay:
         """Every club FK is PROTECT, so the reverse has to null them all before
         it can delete the club. Getting the order wrong is a ProtectedError
         mid-rollback, which is the worst possible moment for one."""
-        from pingpong.models import Club, Location, Player
+        from pingpong.models import Club, Location
 
         _migrate_to(BEFORE_BACKFILL)
-        Player.objects.create(name="Ada")
+        _create_player(BEFORE_BACKFILL, name="Ada")
         Location.objects.create(name="Court 1")
 
         _migrate_to(HEAD)
@@ -200,12 +215,10 @@ class TestTheChainSurvivesADatabaseWithUsersInIt:
         every one of them null.
         """
         from django.contrib.auth.models import User
+        from django.db.models.signals import post_save
 
         from pingpong.models import Location, Match, Player
         from pingpong.services import set_match_sides
-
-        from django.db.models.signals import post_save
-
         from pingpong.signals import create_user_profile
 
         location = Location.objects.create(name="Court 1")
@@ -218,10 +231,10 @@ class TestTheChainSurvivesADatabaseWithUsersInIt:
         try:
             for i in range(3):
                 user = User.objects.create_user(f"chainuser{i}", password="x")
-                players.append(Player.objects.create(name=f"Chain {i}", user=user))
+                players.append(_create_player(BEFORE_BACKFILL, name=f"Chain {i}", user_id=user.pk))
         finally:
             post_save.connect(create_user_profile, sender=User)
-        players.append(Player.objects.create(name="Chain guest"))
+        players.append(_create_player(BEFORE_BACKFILL, name="Chain guest"))
 
         for i in range(0, 4, 2):
             match = Match.all_objects.create(best_of=5, location=location)
@@ -316,3 +329,31 @@ class TestSeasonMigrationIsTwoWay:
         _migrate_to(_leaf())
         assert "pingpong_season" in _tables()
         assert {"season_no_overlap_insert", "season_no_overlap_update"} <= _sqlite_triggers()
+
+
+BEFORE_RETIRE_ELO = "0045_ratingchange_glicko_history"
+RETIRE_ELO = "0046_retire_elo"
+
+
+@pytest.mark.django_db(transaction=True)
+class TestRetireEloMigration:
+    """KAN-73: the derived Elo columns go, the Elo audit trail is renamed."""
+
+    def test_head_has_no_derived_elo_columns(self):
+        assert not {"elo_rating", "elo_peak", "matches_for_elo"} & _columns("pingpong_player")
+        assert not {"rating", "peak"} & _columns("pingpong_playerrating")
+        rc = _columns("pingpong_ratingchange")
+        assert {"elo_old_rating", "elo_new_rating", "elo_change", "elo_k_factor"} <= rc
+        assert not {"old_rating", "new_rating", "rating_change", "k_factor"} & rc
+        assert "pingpong_elohistory" in _tables()  # frozen, kept
+
+    def test_reverses_and_reapplies_on_an_empty_rating_table(self, at_head):
+        _migrate_to(BEFORE_RETIRE_ELO)
+        assert {"elo_rating", "elo_peak", "matches_for_elo"} <= _columns("pingpong_player")
+        assert {"old_rating", "new_rating", "rating_change", "k_factor"} <= _columns(
+            "pingpong_ratingchange"
+        )
+
+        _migrate_to(RETIRE_ELO)
+        assert "elo_rating" not in _columns("pingpong_player")
+        assert "elo_old_rating" in _columns("pingpong_ratingchange")

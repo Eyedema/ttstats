@@ -1,7 +1,7 @@
 """Season rollover (KAN-51, S4.6): freeze, archive, start the next, tell everyone.
 
 The core guarantee is that a frozen table never changes: not on a late
-confirmation, not on a re-run, not after a full `recalculate_elo`.
+confirmation, not on a re-run, not after a full `recalculate_ratings`.
 """
 from datetime import date, datetime, timedelta, timezone as dt_timezone
 from io import StringIO
@@ -51,7 +51,7 @@ def _on(day, hour=12):
 
 
 def _play(side1, side2, *, day, club, winner=Side.ONE):
-    """A finished match on `day`. Unverified players auto-confirm, so Elo applies."""
+    """A finished match on `day`. Unverified players auto-confirm, so ratings apply."""
     match = MatchFactory(
         team1_players=side1, team2_players=side2, is_double=len(side1) > 1,
         date_played=_on(day), club=club,
@@ -82,7 +82,7 @@ def _snapshot():
     return sorted(
         SeasonStanding.all_objects.values_list(
             "season_id", "format", "player_id", "player_name",
-            "rank", "rating", "matches", "wins", "losses",
+            "rank", "rating", "rating_system", "rd", "matches", "wins", "losses",
         )
     )
 
@@ -205,9 +205,15 @@ class TestFreeze:
         table = _table(season)
         assert [row[0] for row in table] == ["Ann", "Cat", "Bob"]
         assert [row[1] for row in table] == [1, 2, 3]
-        assert table[0][2:] == (ratings[a.pk].rating, 2, 2, 0)
-        assert table[1][2:] == (ratings[c.pk].rating, 2, 1, 1)
-        assert table[2][2:] == (ratings[b.pk].rating, 2, 0, 2)
+        assert table[0][2:] == (round(ratings[a.pk].glicko_rating), 2, 2, 0)
+        assert table[1][2:] == (round(ratings[c.pk].glicko_rating), 2, 1, 1)
+        assert table[2][2:] == (round(ratings[b.pk].glicko_rating), 2, 0, 2)
+        # Frozen as Glicko-2, with the RD shown on the freeze day: the stored
+        # RD grown by the idle days since each player's last match.
+        for standing in SeasonStanding.all_objects.filter(season=season):
+            assert standing.rating_system == "glicko2"
+            assert standing.rd is not None
+            assert standing.rd > ratings[standing.player_id].rd
 
     def test_both_formats_are_frozen_separately(self):
         club = ClubFactory()
@@ -485,7 +491,6 @@ class TestSuccessorAheadOfTime:
         assert Season.all_objects.filter(club=bad).count() == 1
         assert Season.all_objects.filter(club=good).count() == 2
 
-    @override_settings(FEATURE_FLAGS={"seasons": True})
     def test_a_match_on_the_first_day_gets_season_ratings_and_shows_applied(self):
         """The KAN-9 review reproduction: a match confirmed on ends_on + 1."""
         club = ClubFactory()
@@ -504,10 +509,10 @@ class TestSuccessorAheadOfTime:
         client.force_login(a.user)
         ctx = client.get(reverse("pingpong:match_detail", args=[match.pk])).context
         assert ctx["rating_scope"].season_id == nxt.pk
-        assert ctx["elo_is_pending"] is False
-        assert ctx["side1_elo_delta"] == RatingChange.objects.get(
+        assert ctx["delta_is_pending"] is False
+        assert ctx["side1_delta"] == RatingChange.objects.get(
             match=match, player=a, rating__season=nxt
-        ).rating_change
+        ).glicko_change
 
 
 # ---------------------------------------------------------------------------
@@ -576,7 +581,6 @@ class TestNotifications:
         confirm_match(match)
         return season, a, b
 
-    @override_settings(FEATURE_FLAGS={"seasons": True})
     def test_each_ranked_player_is_told_once_with_every_format(self, _quiet_notifications):
         push, mail = _quiet_notifications
         club = ClubFactory()
@@ -595,7 +599,6 @@ class TestNotifications:
         assert told[c.pk]["standings"] == [("Doubles", 1)]
         assert told[a.pk]["url"] == f"/pingpong/seasons/{season.pk}/"
 
-    @override_settings(FEATURE_FLAGS={"seasons": True})
     def test_push_preferred_and_email_for_whoever_push_missed(self, _quiet_notifications):
         push, mail = _quiet_notifications
         season, a, b = self._season_with_verified_pair()
@@ -605,7 +608,6 @@ class TestNotifications:
 
         assert [call.args[0].pk for call in mail.call_args_list] == [b.pk]
 
-    @override_settings(FEATURE_FLAGS={"seasons": True})
     def test_unverified_addresses_are_not_emailed(self, _quiet_notifications):
         push, mail = _quiet_notifications
         club = ClubFactory()
@@ -618,7 +620,6 @@ class TestNotifications:
         assert push.call_count == 2
         assert mail.call_count == 0
 
-    @override_settings(FEATURE_FLAGS={"seasons": True})
     def test_a_crash_after_archiving_still_notifies_on_the_next_run(self, _quiet_notifications):
         push, mail = _quiet_notifications
         season, a, b = self._season_with_verified_pair()
@@ -633,7 +634,6 @@ class TestNotifications:
 
         assert sorted(call.args[0].pk for call in push.call_args_list) == sorted([a.pk, b.pk])
 
-    @override_settings(FEATURE_FLAGS={"seasons": True})
     def test_only_unclaimed_players_are_told_again(self, _quiet_notifications):
         push, mail = _quiet_notifications
         season, a, b = self._season_with_verified_pair()
@@ -644,19 +644,6 @@ class TestNotifications:
         assert [call.args[0].pk for call in push.call_args_list].count(a.pk) == 2
         assert [call.args[0].pk for call in push.call_args_list].count(b.pk) == 1
 
-    def test_with_the_seasons_flag_off_nobody_is_told(self, _quiet_notifications):
-        push, mail = _quiet_notifications
-        season, a, b = self._season_with_verified_pair()
-
-        _run()
-
-        assert push.call_count == 0 and mail.call_count == 0
-        # ...and turning the flag on later does not dig up an old season.
-        with override_settings(FEATURE_FLAGS={"seasons": True}):
-            _run()
-        assert push.call_count == 0
-
-    @override_settings(FEATURE_FLAGS={"seasons": True})
     def test_a_player_without_an_account_is_skipped(self, _quiet_notifications):
         push, mail = _quiet_notifications
         club = ClubFactory()
@@ -687,11 +674,11 @@ class TestFrozenTablesNeverChange:
 
         _run()
         frozen = _table(season)
-        rating_before = PlayerRating.all_objects.get(player=b, season=season).rating
+        rating_before = PlayerRating.all_objects.get(player=b, season=season).glicko_rating
 
         confirm_match(late)
 
-        assert PlayerRating.all_objects.get(player=b, season=season).rating > rating_before
+        assert PlayerRating.all_objects.get(player=b, season=season).glicko_rating > rating_before
         assert _table(season) == frozen
 
     def test_a_live_match_across_the_boundary_does_not_alter_the_table(self):
@@ -712,7 +699,7 @@ class TestFrozenTablesNeverChange:
         assert PlayerRating.all_objects.get(player=b, season=season).matches == 2
         assert _table(season) == frozen
 
-    def test_an_archived_table_survives_a_full_recalculate_elo(self):
+    def test_an_archived_table_survives_a_full_recalculate_ratings(self):
         club = ClubFactory()
         _q1(club)
         a, b, c = (_verified_player(club) for _ in range(3))
@@ -723,7 +710,7 @@ class TestFrozenTablesNeverChange:
         frozen = _snapshot()
         confirm_match(late)
 
-        call_command("recalculate_elo", stdout=StringIO())
+        call_command("recalculate_ratings", stdout=StringIO())
 
         assert _snapshot() == frozen
 

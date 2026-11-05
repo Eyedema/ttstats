@@ -5,7 +5,7 @@ A faithful implementation of Mark Glickman, "Example of the Glicko-2 system"
 the docstrings refer to that paper.
 
 Numbers in, numbers out: no Django, no models, no notion of match, player or
-side, and no import of ``elo.py``. The per-match policy (one game per rating
+side, and no import of the rating pipeline. The per-match policy (one game per rating
 period, idle-time inflation, seasons) lives in the Django adapter; see
 ``docs/decisions/kan-63-glicko2.md``. Policy constants (tau, the rating-period
 length, the season RD floor) are deliberately absent: tau is a required

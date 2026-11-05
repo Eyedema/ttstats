@@ -4,10 +4,9 @@ paths:
   - "ttstats/pingpong/signals.py"
   - "ttstats/pingpong/services.py"
   - "ttstats/pingpong/achievements.py"
-  - "ttstats/pingpong/elo.py"
-  - "ttstats/pingpong/elo_parity.py"
-  - "ttstats/pingpong/elo_replay.py"
-  - "ttstats/pingpong/management/commands/recalculate_elo.py"
+  - "ttstats/pingpong/rating_pipeline.py"
+  - "ttstats/pingpong/rating_replay.py"
+  - "ttstats/pingpong/management/commands/recalculate_ratings.py"
   - "ttstats/pingpong/match_state.py"
   - "ttstats/pingpong/notifications.py"
   - "ttstats/pingpong/tests/test_match_save_performance.py"
@@ -15,7 +14,7 @@ paths:
 
 # The match-completion write path
 
-Saving the winning Game fans out through three `post_save` receivers, the Elo
+Saving the winning Game fans out through three `post_save` receivers, the rating
 pipeline and eleven achievement checkers. Its query count must stay **flat in
 the players' match history**: `tests/test_match_save_performance.py` pins both
 a ceiling and the slope, and the slope is the one that matters.
@@ -54,13 +53,9 @@ a ceiling and the slope, and the slope is the one that matters.
   `notify_match_confirmed` claims the match with a conditional `.update()`.
   Never set the field by hand.
 
-## Elo parity and replay
+## Replay
 
-- **`elo_replay.py` is the only history traversal**: confirmed (`is_confirmed`)
+- **`rating_replay.py` is the only history traversal**: confirmed (`is_confirmed`)
   matches with a winner, not live, ordered `date_played, created_at, pk`,
-  streamed in chunks. The harness and `recalculate_elo` both use it; a second
-  ordering is how two honest rebuilds disagree.
-- **`elo_parity.py` keeps a frozen copy of the legacy arithmetic on purpose.**
-  The reference must never call into `elo`. `manage.py elo_parity` must pass after every
-  change to `elo.py`; an intentional change edits the reference in the same
-  commit and says so.
+  streamed in chunks. `recalculate_ratings` uses it; a second ordering is how
+  two honest rebuilds disagree.

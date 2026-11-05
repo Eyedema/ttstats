@@ -11,7 +11,7 @@ from .models import (
     FeatureFlagOverride, Game, Match, MatchConfirmation, NotificationPreference,
     Player, ScheduledMatch, UserProfile,
 )
-from .elo import update_player_elo
+from .rating_pipeline import apply_match_ratings
 from .services import link_championship_entries
 
 
@@ -114,10 +114,10 @@ def handle_match_completion(sender, instance, created, **kwargs):
     #    recompute() persists with a queryset update, so no signal re-entry.
     instance.recompute()
 
-    # 4. Update Elo ratings (only runs if confirmed)
-    update_player_elo(instance)
+    # 4. Update ratings (only runs if confirmed)
+    apply_match_ratings(instance)
 
-    # 5. Check achievements (after Elo is updated)
+    # 5. Check achievements (after ratings are updated)
     if instance.is_confirmed and instance.winner_side:
         all_players = list(instance.all_players)
         for p in all_players:
@@ -132,8 +132,8 @@ def handle_match_completion(sender, instance, created, **kwargs):
 
 
 @receiver(post_save, sender=Match)
-def update_elo_on_confirmation(sender, instance, created, **kwargs):
-    """Update Elo ratings when match is confirmed"""
+def update_ratings_on_confirmation(sender, instance, created, **kwargs):
+    """Update ratings when match is confirmed"""
     # Skip if this is being triggered by handle_match_completion
     # (to avoid double-processing when winner is just set)
     if getattr(instance, "_winner_just_set", False):
@@ -141,14 +141,14 @@ def update_elo_on_confirmation(sender, instance, created, **kwargs):
 
     # IMPORTANT: Refresh instance to ensure we have the latest confirmation
     # field values from the database. This fixes the issue where manual
-    # confirmations via the match_confirm view don't trigger Elo updates.
+    # confirmations via the match_confirm view don't trigger rating updates.
     instance.refresh_from_db()
 
     if instance.is_live:
         return
 
-    # Try to update Elo (has guards inside, safe to call anytime)
-    update_player_elo(instance)
+    # Try to update ratings (has guards inside, safe to call anytime)
+    apply_match_ratings(instance)
 
     # Same here: notify_match_confirmed is a no-op unless this is the first
     # time the match reached "confirmed, Elo applied".
@@ -157,8 +157,8 @@ def update_elo_on_confirmation(sender, instance, created, **kwargs):
 
 
 @receiver(post_save, sender=MatchConfirmation)
-def update_elo_on_match_confirmation(sender, instance, created, **kwargs):
-    """Update Elo ratings when a player confirms a match"""
+def update_ratings_on_match_confirmation(sender, instance, created, **kwargs):
+    """Update ratings when a player confirms a match"""
     if created:
         match = instance.match
 
@@ -168,10 +168,10 @@ def update_elo_on_match_confirmation(sender, instance, created, **kwargs):
         # Refresh the denormalized fields (no signal re-entry -- see recompute)
         match.recompute()
 
-        # Try to update Elo for the match (has guards inside, safe to call anytime)
-        update_player_elo(match)
+        # Try to update ratings for the match (has guards inside, safe to call anytime)
+        apply_match_ratings(match)
 
-        # Check achievements (after Elo is updated)
+        # Check achievements (after ratings are updated)
         if match.is_confirmed and match.winner_side:
             all_players = list(match.all_players)
             for p in all_players:
@@ -227,16 +227,3 @@ def invalidate_feature_flag_override(sender, instance, **kwargs):
     from . import flags
 
     flags.invalidate_override(instance.name, instance.user_id)
-
-    # Flipping what a user's pages read (the rating system, or whether seasons
-    # exist at all) retires the cached leaderboards of that user's clubs.
-    if instance.name in ("glicko2", "seasons"):
-        from .cache_utils import invalidate_leaderboard
-        from .models import ClubMembership
-
-        clubs = [
-            m.club
-            for m in ClubMembership.objects.filter(user_id=instance.user_id).select_related("club")
-        ]
-        for club in clubs or [None]:
-            invalidate_leaderboard(club=club)
