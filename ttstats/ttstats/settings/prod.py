@@ -26,8 +26,29 @@ DATABASES = {
         'PASSWORD': os.environ.get('DB_PASSWORD'),
         'HOST': os.environ.get('DB_HOST', 'db'),
         'PORT': os.environ.get('DB_PORT', '5432'),
+        # Keep a worker's connection open between requests instead of paying
+        # a Postgres connect + auth on every one. Gunicorn runs 3 *sync*
+        # workers (docker/django/entrypoint.sh), one thread each, so this holds
+        # at most 3 idle connections plus whatever a cron job opens -- far
+        # under max_connections. Switching to gevent/threaded workers would
+        # make it one connection per greenlet/thread: revisit this then.
+        # DB_CONN_MAX_AGE=0 restores Django's close-after-every-request.
+        'CONN_MAX_AGE': int(os.environ.get('DB_CONN_MAX_AGE', '60')),
+        # A reused connection is pinged at the start of each request, so one
+        # the server dropped (a db restart) costs a reconnect, not a 500.
+        'CONN_HEALTH_CHECKS': True,
     }
 }
+
+# Sessions: read from Redis, fall back to the database (the record). Saves the
+# django_session query on every authenticated request, and a Redis flush --
+# `cache_control --clear` included -- logs nobody out.
+#
+# Only with a shared cache. Without REDIS_URL the cache is LocMemCache, one per
+# worker: a session written on one worker would be read stale from another's
+# memory, and a logout would leave it alive there.
+if REDIS_URL:
+    SESSION_ENGINE = 'django.contrib.sessions.backends.cached_db'
 # Security settings for production
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 SECURE_SSL_REDIRECT = True
