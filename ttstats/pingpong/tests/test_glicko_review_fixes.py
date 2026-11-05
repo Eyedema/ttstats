@@ -13,10 +13,10 @@ from django.core.cache import cache
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
+from ttstats.middleware import REQUEST_LOCAL_ATTRS, _thread_locals
 
 from pingpong import cache_utils, flags, glicko2, ratings
 from pingpong.models import FeatureFlagOverride, PlayerRating, RatingChange
-from ttstats.middleware import REQUEST_LOCAL_ATTRS, _thread_locals
 
 from .conftest import (
     ClubFactory,
