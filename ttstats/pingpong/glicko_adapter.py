@@ -47,6 +47,37 @@ DEFAULT_PARAMS = GlickoParams(
     season_rd_floor=100.0,
 )
 
+# Display RD above which a rating is "provisional" under Glicko (KAN-71).
+# PLACEHOLDER: tuned after KAN-68 against the DISPLAY RD (inflated to today).
+PROVISIONAL_RD = 110.0
+
+# The RatingChange columns holding the Glicko history (migration 0045).
+HISTORY_FIELDS = (
+    "glicko_old_rating",
+    "glicko_new_rating",
+    "glicko_change",
+    "glicko_rd_before",
+    "glicko_rd_after",
+)
+
+
+def history_values(update):
+    """The RatingChange Glicko columns for a `GlickoUpdate` (all None when missing).
+
+    `glicko_change` uses the same rounding as the preview's per-side change.
+    `glicko_rd_before` is the *inflated* pre-match RD, what the match was rated at.
+    """
+    if update is None:
+        return dict.fromkeys(HISTORY_FIELDS)
+    return {
+        "glicko_old_rating": update.old.rating,
+        "glicko_new_rating": update.new.rating,
+        "glicko_change": _rounded_change(update.new.rating, update.old.rating),
+        "glicko_rd_before": update.inflated.rd,
+        "glicko_rd_after": update.new.rd,
+    }
+
+
 # The fields a PlayerRating (or RatingState) carries as the shadow.
 SHADOW_FIELDS = ("glicko_rating", "rd", "volatility", "last_rated_on")
 

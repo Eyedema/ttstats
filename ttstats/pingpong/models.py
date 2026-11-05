@@ -2214,6 +2214,13 @@ class RatingChange(models.Model):
     new_rating = models.IntegerField()
     rating_change = models.IntegerField()
     k_factor = models.FloatField()
+    # Glicko-2 history (KAN-71), written beside the Elo columns; NULL when the
+    # projection was skipped or the row predates the backfill.
+    glicko_old_rating = models.FloatField(null=True, blank=True)
+    glicko_new_rating = models.FloatField(null=True, blank=True)
+    glicko_change = models.IntegerField(null=True, blank=True)
+    glicko_rd_before = models.FloatField(null=True, blank=True)  # inflated to the match day
+    glicko_rd_after = models.FloatField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -2258,6 +2265,9 @@ class SeasonStanding(models.Model):
     matches = models.PositiveIntegerField()
     wins = models.PositiveIntegerField()
     losses = models.PositiveIntegerField()
+    # Which system `rating` was frozen under (KAN-71); `rd` is set for Glicko.
+    rating_system = models.CharField(max_length=10, default="elo")
+    rd = models.FloatField(null=True, blank=True)
     notified_at = models.DateTimeField(null=True, blank=True, editable=False)
     created_at = models.DateTimeField(auto_now_add=True)
 

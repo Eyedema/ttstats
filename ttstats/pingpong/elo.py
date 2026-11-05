@@ -389,22 +389,37 @@ class LiveBook(RatingBook):
     """
 
     def __init__(self, match, season=None, *, lock=False):
-        from .models import PlayerRating
-
         super().__init__()
         self.season = season
         self.created = []
         side1, side2 = match.sides()
-        ids = [p.pk for p in side1 + side2]
+        self._load([p.pk for p in side1 + side2], match_format(match), season, lock)
+
+    @classmethod
+    def for_players(cls, player_ids, season, fmt):
+        """A read-only book for these players, without a match (KAN-71).
+
+        Same rows, same single query as the match constructor; used to read a
+        Glicko state for a win-probability on a scheduled or hypothetical
+        pairing. Never `flush` it.
+        """
+        book = cls.__new__(cls)
+        RatingBook.__init__(book)
+        book.season = season
+        book.created = []
+        book._load(list(player_ids), fmt, season, False)
+        return book
+
+    def _load(self, ids, fmt, season, lock):
+        from .models import PlayerRating
+
         season_q = Q(season__isnull=True)
         if season is not None:
             season_q |= Q(season=season)
-        # all_objects: filtered by this match's own players, so transitively
-        # club-scoped (KAN-24 audit), and a write must never be hidden by the
-        # viewer's active club.
-        qs = PlayerRating.all_objects.filter(
-            season_q, player_id__in=ids, format=match_format(match)
-        )
+        # all_objects: filtered by these players, so transitively club-scoped
+        # (KAN-24 audit), and a write must never be hidden by the viewer's
+        # active club.
+        qs = PlayerRating.all_objects.filter(season_q, player_id__in=ids, format=fmt)
         if lock:
             qs = qs.select_for_update()
         for r in qs:
@@ -453,6 +468,7 @@ class LiveBook(RatingBook):
                 new_rating=c.new,
                 rating_change=c.change,
                 k_factor=c.k,
+                **glicko_adapter.history_values(c.glicko),
             )
             for c in changes
         ])

@@ -603,12 +603,24 @@ class TestMigration:
         assert set(FIELDS) <= _columns("pingpong_playerrating")
 
 
-class TestNothingReadsTheShadow:
-    """The shadow is inert: no view, template, cache or serializer touches it."""
+class TestGlickoColumnsHaveOneReadSide:
+    """Glicko columns are read only by the read layer (KAN-71), never ad hoc.
+
+    Replaces the KAN-67 "nothing reads the shadow" test: the cutover made the
+    columns real, so the invariant is now that every *reader* is `ratings.py`
+    (or `season_rollover.py`, which freezes them); views, templates, caches
+    and notifications go through it. The write side is listed separately.
+    """
 
     # Repo-relative paths, never basenames, so a same-named or sibling file
     # (e.g. the management command) is not silently exempted.
-    ALLOWED = frozenset(
+    READERS = frozenset(
+        {
+            "ttstats/pingpong/ratings.py",
+            "ttstats/pingpong/season_rollover.py",
+        }
+    )
+    WRITE_SIDE = frozenset(
         {
             "ttstats/pingpong/elo.py",
             "ttstats/pingpong/elo_replay.py",
@@ -624,9 +636,13 @@ class TestNothingReadsTheShadow:
         }
     )
 
-    def test_no_application_code_reads_it(self):
+    def test_only_the_read_layer_and_the_write_side_touch_them(self):
         root = Path(__file__).resolve().parent.parent
-        pattern = re.compile(r"glicko_rating|\bvolatility\b|last_rated_on")
+        pattern = re.compile(
+            r"glicko_rating|\bvolatility\b|last_rated_on|glicko_old_rating"
+            r"|glicko_new_rating|glicko_change|glicko_rd_before|glicko_rd_after"
+        )
+        allowed = self.READERS | self.WRITE_SIDE
         offenders = []
         for path in root.rglob("*"):
             rel = path.relative_to(root)
@@ -634,12 +650,17 @@ class TestNothingReadsTheShadow:
                 path.suffix not in {".py", ".html", ".js", ".txt"}
                 or "migrations" in rel.parts
                 or "tests" in rel.parts
-                or f"ttstats/pingpong/{rel.as_posix()}" in self.ALLOWED
+                or f"ttstats/pingpong/{rel.as_posix()}" in allowed
             ):
                 continue
             if pattern.search(path.read_text(errors="ignore")):
                 offenders.append(str(rel))
         assert offenders == []
+
+    def test_the_allow_list_names_real_files(self):
+        root = Path(__file__).resolve().parent.parent.parent.parent
+        for rel in self.READERS | self.WRITE_SIDE:
+            assert (root / rel).is_file(), rel
 
 
 @pytest.mark.django_db

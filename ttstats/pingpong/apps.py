@@ -6,4 +6,5 @@ class PingpongConfig(AppConfig):
 
     def ready(self) -> None:
         import pingpong.signals  # noqa
+        import pingpong.flags  # noqa: F401  (registers the system check)
         return super().ready()

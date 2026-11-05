@@ -24,6 +24,8 @@ paths:
   - "ttstats/pingpong/tests/test_season*.py"
   - "ttstats/pingpong/tests/test_ratings.py"
   - "ttstats/pingpong/tests/test_glicko_shadow.py"
+  - "ttstats/pingpong/migrations/0045_ratingchange_glicko_history.py"
+  - "ttstats/pingpong/tests/test_glicko_read.py"
   - "ttstats/pingpong/tests/test_glicko_parameters.py"
   - "ttstats/pingpong/tests/test_glicko_dry_run_diff.py"
   - "ttstats/pingpong/management/commands/recalculate_elo.py"
@@ -87,8 +89,10 @@ The contract is `docs/decisions/kan-9-seasons.md`; these are the rules it implie
 ## Glicko-2 shadow (KAN-67)
 
 - **`glicko_rating`, `rd`, `volatility`, `last_rated_on` on `PlayerRating` are
-  an inert shadow: written, never read** (a test greps for readers). They
-  replace Elo only at the cutover (`docs/decisions/kan-63-glicko2.md`).
+  written beside Elo and read only through `ratings.py`** (KAN-71, below); the
+  grep test in `test_glicko_shadow.py` allow-lists the readers
+  (`ratings.py`, `season_rollover.py`) and the write side. They replace Elo only
+  at the cutover (`docs/decisions/kan-63-glicko2.md`).
 - **One book, one traversal.** The shadow rides `apply_format_scopes`
   (`glicko=params`) on the same rows, so it adds no queries; the live path
   passes `glicko_adapter.DEFAULT_PARAMS`, the replay passes what it is given.
@@ -138,6 +142,40 @@ The contract is `docs/decisions/kan-9-seasons.md`; these are the rules it implie
   zero-sum and a high-RD player moves more than an established opponent, so a
   uniform level shift with an unchanged ranking is expected (see the "Rating
   sum" line).
+
+## Glicko read path (KAN-71 / KAN-72)
+
+The plan is `docs/decisions/kan-63-cutover-plan.md`.
+
+- **`ratings.system(user)` is `GLICKO` only with `seasons` AND `glicko2` on**,
+  else `ELO`; `system(None)` (jobs) reads settings. Every `ratings.py` read
+  takes `system` as a **required keyword**, so a forgotten call site raises.
+  The `rating_system` context key (context processor) is the one source for
+  nav and page.
+- **Glicko history is on `RatingChange`** (`glicko_old_rating`, `glicko_new_rating`,
+  `glicko_change`, `glicko_rd_before` = the inflated pre-match RD, `glicko_rd_after`),
+  NULL when the projection was skipped. `EloHistory` is frozen. `LiveBook.flush`
+  and `RatingWriter` write them via `glicko_adapter.history_values` (the writer
+  checks the model has the fields: 0040 runs on a historical model).
+  `SeasonStanding` carries `rating_system` and `rd`.
+- **Views emit neutral keys** (`rating`, `rd`, `peak`, `status`, `status_reason`,
+  `side1_delta`, `delta_is_pending`, `nav_rating`, `nav_rd`, `rating_chart_*`);
+  the Elo-named keys stay for the Elo path and carry the shown system's value.
+- **Display RD is inflated to today** (`ratings.display_rd`, the only reader of
+  "now"); caches store `rd`, `volatility`, `last_rated_on`, never a verdict.
+  `rating_status` returns a `str` subclass with `.reason` (`new` / `returning`);
+  provisional is the display RD above `glicko_adapter.PROVISIONAL_RD`, read at call time.
+- **Preview == written**: `projected_change_for` / `match_deltas` use
+  `glicko_adapter.projected_glicko_changes`; a confirmed match shows its stored
+  `RatingChange` (NULL = 0, never a re-projection). `win_probability` uses
+  stored pre-match values, else `glicko_reading` via `LiveBook.for_players`.
+- **Day one**: under Glicko the default leaderboard scope falls back to
+  all-time while the season has fewer than 2 rated players (`fell_back_to_all_time`);
+  an explicit `season` is kept. A NULL Glicko row is unrated.
+- **Push and rollover**: the system is resolved per recipient (gated by
+  `flags.glicko_may_be_shown()` to keep the match-save query count flat);
+  `season_rollover` freezes under `system(None)`.
+- Unconverted gap: achievements stay on Elo (copy only) until KAN-73.
 
 ## The seasons UI (S4.3 / S4.4)
 

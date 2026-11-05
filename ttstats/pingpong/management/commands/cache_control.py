@@ -6,6 +6,7 @@ from pingpong.cache_utils import (
     get_cache_stats,
     get_cache_stats_by_club,
     invalidate_all_caches,
+    invalidate_all_leaderboards,
 )
 
 
@@ -17,6 +18,11 @@ class Command(BaseCommand):
             '--clear',
             action='store_true',
             help='Clear all caches',
+        )
+        parser.add_argument(
+            '--bump-leaderboard',
+            action='store_true',
+            help='Bump every club\'s leaderboard generation (run after flipping a rating flag)',
         )
         parser.add_argument(
             '--stats',
@@ -34,6 +40,10 @@ class Command(BaseCommand):
             self.stdout.write('Clearing all caches...')
             invalidate_all_caches()
             self.stdout.write(self.style.SUCCESS('All caches cleared'))
+
+        elif options['bump_leaderboard']:
+            count = invalidate_all_leaderboards()
+            self.stdout.write(self.style.SUCCESS(f'Bumped {count} leaderboard generation(s)'))
 
         elif options['stats']:
             self.stdout.write('Cache Statistics:')
@@ -71,4 +81,4 @@ class Command(BaseCommand):
                 self.stdout.write(self.style.ERROR(f'Cache error: {e}'))
 
         else:
-            self.stdout.write(self.style.WARNING('Use --clear, --stats, or --test'))
+            self.stdout.write(self.style.WARNING('Use --clear, --bump-leaderboard, --stats, or --test'))

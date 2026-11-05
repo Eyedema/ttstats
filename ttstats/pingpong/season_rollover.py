@@ -37,7 +37,7 @@ from django.db.models import Count, Exists, Max, OuterRef
 from django.urls import reverse
 from django.utils import timezone
 
-from . import emails, flags, notifications, seasons
+from . import emails, flags, notifications, ratings, seasons
 from .models import (
     MatchParticipant,
     Player,
@@ -195,22 +195,39 @@ def _wins_and_played(season, fmt):
 
 
 def _freeze(season):
-    """Write the season's final table, every format. Returns rows written."""
+    """Write the season's final table, every format. Returns rows written.
+
+    The system is `ratings.system(None)` (the settings flags): under Glicko the
+    table is ranked by `glicko_rating`, rows with no Glicko state are left out,
+    and each standing is stamped with `rating_system` and its display `rd`
+    (inflated to the freeze day). The stamp is what lets the archive keep
+    labelling a past table correctly after a rollback.
+    """
+    system = ratings.system(None)
+    glicko = system == ratings.GLICKO
+    sort_field = "glicko_rating" if glicko else "rating"
+    today = timezone.now().date()
     written = 0
     for fmt in FORMAT_ORDER:
         results = _wins_and_played(season, fmt)
-        ratings = (
-            PlayerRating.all_objects.filter(season=season, format=fmt)
-            .select_related("player").order_by("-rating", "pk")
+        rows = PlayerRating.all_objects.filter(season=season, format=fmt)
+        if glicko:
+            rows = rows.filter(glicko_rating__isnull=False)
+        rows = (
+            rows.select_related("player").order_by(f"-{sort_field}", "pk")
             .iterator(chunk_size=STANDINGS_BATCH_SIZE)
         )
         batch = []
-        for rank, row in seasons.ranked(ratings, key=lambda r: r.rating):
+        for rank, row in seasons.ranked(rows, key=lambda r: getattr(r, sort_field)):
             wins, played = results.get(row.pk, (0, 0))
+            shown = ratings.display_rd(row, today) if glicko else None
             batch.append(SeasonStanding(
                 season=season, format=fmt, player=row.player,
-                player_name=str(row.player)[:100], rank=rank, rating=row.rating,
+                player_name=str(row.player)[:100], rank=rank,
+                rating=round(row.glicko_rating) if glicko else row.rating,
                 matches=row.matches, wins=wins, losses=played - wins,
+                rating_system=system,
+                rd=shown,
             ))
             if len(batch) >= STANDINGS_BATCH_SIZE:
                 SeasonStanding.all_objects.bulk_create(batch)

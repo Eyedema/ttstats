@@ -2,6 +2,7 @@
 paths:
   - "ttstats/pingpong/flags.py"
   - "ttstats/pingpong/templatetags/feature_tags.py"
+  - "ttstats/pingpong/ratings.py"
   - "ttstats/ttstats/settings/base.py"
 ---
 
@@ -26,3 +27,12 @@ Deliberately not django-waffle.
   without a code change.
 - Templates: `{% load feature_tags %}{% feature_enabled "x" as on %}` then
   `{% if on %}`, so a guarded block is **absent** from the response, not hidden.
+
+## `glicko2` (KAN-72)
+
+- Declared in `FEATURE_FLAGS` (default off). It only takes effect with `seasons`
+  also on: `ratings.system()` returns Glicko-2 for both, Elo otherwise. A system
+  check (`pingpong.W001`) warns when `glicko2` is on and `seasons` is off.
+- Override lookups load **all** of a user's overrides in one query
+  (`prefetch_overrides` does it for several users), so extra flags cost no extra
+  queries on a cold cache.

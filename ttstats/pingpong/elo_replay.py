@@ -283,6 +283,11 @@ class RatingWriter:
             list(glicko_adapter.SHADOW_FIELDS)
             if names.issuperset(glicko_adapter.SHADOW_FIELDS) else []
         )
+        try:
+            change_names = {f.name for f in change_model._meta.fields}
+        except TypeError:  # a stand-in model with no real fields
+            change_names = set()
+        self.history = change_names.issuperset(glicko_adapter.HISTORY_FIELDS)
         self.keep = keep or (lambda row: True)
         self.batch_size = batch_size
         self.pks = {}  # state key -> PlayerRating pk
@@ -321,6 +326,7 @@ class RatingWriter:
             self.change_model(
                 match_id=match_id, player_id=c.player_id, rating_id=self.pks[c.row.key],
                 old_rating=c.old, new_rating=c.new, rating_change=c.change, k_factor=c.k,
+                **(glicko_adapter.history_values(c.glicko) if self.history else {}),
             )
             for match_id, c in self.buffer
         ])

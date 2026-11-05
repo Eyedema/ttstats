@@ -33,12 +33,12 @@ directly under the table whenever either state is on screen.
       <span class="min-w-0 flex-1 py-3">
         {% player_link stat.player css="block truncate text-[18px] font-extrabold leading-tight tracking-[-0.02em] after:absolute after:inset-0 after:content-['']" %}
         <span class="flex flex-wrap items-center gap-x-1.5 text-[12px] font-semibold text-muted-foreground">
-          <span>{{ stat.total_matches }} played · {{ stat.wins }}–{{ stat.losses }} · peak {{ stat.elo_peak }}</span>
+          <span>{{ stat.total_matches }} played · {{ stat.wins }}–{{ stat.losses }} · peak {{ stat.peak }}</span>
           {% include 'pingpong/_rating_status.html' with status=stat.status %}
         </span>
       </span>
       <span class="flex-none px-4 py-3 text-right">
-        <span class="n block text-[24px]">{{ stat.elo_rating }}</span>
+        <span class="n block text-[24px]">{{ stat.rating }}</span>
         {% include 'pingpong/_movement.html' with movement=stat.movement size_class='text-[12px]' %}
       </span>
     </div>
@@ -57,7 +57,7 @@ directly under the table whenever either state is on screen.
         </span>
       </span>
       <span class="flex-none px-4 py-2.5 text-right">
-        <span class="n block text-[20px]">{{ stat.elo_rating }}</span>
+        <span class="n block text-[20px]">{{ stat.rating }}</span>
         {% include 'pingpong/_movement.html' with movement=stat.movement size_class='text-[11.5px]' %}
       </span>
     </div>
