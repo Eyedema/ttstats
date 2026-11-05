@@ -52,7 +52,7 @@ is two plain links, no JS.
         </span>
       </span>
       <span class="flex-none px-4 py-3 text-right">
-        <span class="n block text-[22px]" data-testid="standing-rating">{{ row.rating }}</span>
+        <span class="n block text-[22px]" data-testid="standing-rating" data-rating-system="{{ row.rating_system }}">{% if row.rating_system == 'glicko2' and row.rd %}{% include 'pingpong/_rating_value.html' with rating=row.rating rd=row.rd|floatformat:0 rating_system=row.rating_system %}{% else %}{% include 'pingpong/_rating_value.html' with rating=row.rating rd=None rating_system=row.rating_system %}{% endif %}</span>
       </span>
     </li>
     {% endfor %}

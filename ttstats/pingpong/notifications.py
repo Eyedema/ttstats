@@ -15,7 +15,7 @@ import logging
 from django.urls import reverse
 from django.utils import timezone
 
-from . import push
+from . import flags, push, ratings
 from .models import EloHistory, Match, NotificationKind, Player, Side
 
 logger = logging.getLogger(__name__)
@@ -66,6 +66,13 @@ def notify_match_result(match):
     if not history:
         return set()
 
+    # Glicko recipients read the RatingChange Glicko columns of the match's
+    # own season and format, resolved lazily (once) for the first of them.
+    glicko_readings = None
+    glicko_possible = flags.glicko_may_be_shown()
+    if glicko_possible:
+        flags.prefetch_overrides([user for _, user in _users_for(match.all_players)])
+
     url = reverse('pingpong:match_detail', args=[match.pk])
     winner_ids = {p.pk for p in match.players_on(match.winner_side)}
     reached = set()
@@ -74,16 +81,26 @@ def notify_match_result(match):
         if entry is None:
             continue
         won = player.pk in winner_ids
-        sign = '+' if entry.rating_change >= 0 else ''
+        outcome = f"{'You won' if won else 'You lost'} {match.side1_score}-{match.side2_score}."
+        if glicko_possible and ratings.system(user) == ratings.GLICKO:
+            if glicko_readings is None:
+                glicko_readings = ratings.applied_glicko_readings(
+                    match, ratings.display_scope(match)
+                )
+            reading = glicko_readings.get(player.pk)
+            if reading is None:
+                rating_text = ''
+            else:
+                new, change = reading
+                rating_text = f" Rating {round(new)} ({change or 0:+d})."
+        else:
+            sign = '+' if entry.rating_change >= 0 else ''
+            rating_text = f" Elo {entry.new_rating} ({sign}{entry.rating_change})."
         delivered = push.send_to_user(
             user,
             kind=NotificationKind.MATCH_RESULT,
             title='Match confirmed',
-            body=(
-                f"{'You won' if won else 'You lost'} "
-                f"{match.side1_score}-{match.side2_score}. "
-                f"Elo {entry.new_rating} ({sign}{entry.rating_change})."
-            ),
+            body=f"{outcome}{rating_text}",
             url=url,
             tag=f'match-result-{match.pk}',
         )
@@ -143,28 +160,58 @@ def notify_leaderboard_overtakes(match):
 
     Players who were in the match are excluded: they are already getting a
     match-result push, and two buzzes for one game is how people mute an app.
+    The ranking compared is each recipient's own system: Elo recipients are
+    passed on `Player.elo_rating`, Glicko recipients in the match's table.
     """
     participant_ids = {p.pk for p in match.all_players}
     reached = set()
+    glicko_possible = flags.glicko_may_be_shown()
+
+    def push_to(player, climber):
+        delivered = push.send_to_user(
+            player.user,
+            kind=NotificationKind.LEADERBOARD_OVERTAKE,
+            title='You just got passed',
+            body=f"{climber} moved ahead of you on the leaderboard.",
+            url=reverse('pingpong:leaderboard'),
+            # Per rival, so repeated overtakes by the same person collapse.
+            tag=f'overtake-{climber.pk}',
+        )
+        if delivered:
+            reached.add(player.pk)
 
     for entry in EloHistory.objects.filter(match=match).select_related('player'):
         climber = entry.player
         passed = players_passed_on_leaderboard(
             climber, entry.old_rating, entry.new_rating
-        ).exclude(pk__in=participant_ids)
-
+        ).exclude(pk__in=participant_ids).select_related('user')
         for player in passed:
-            delivered = push.send_to_user(
-                player.user,
-                kind=NotificationKind.LEADERBOARD_OVERTAKE,
-                title='You just got passed',
-                body=f"{climber} moved ahead of you on the leaderboard.",
-                url=reverse('pingpong:leaderboard'),
-                # Per rival, so repeated overtakes by the same person collapse.
-                tag=f'overtake-{climber.pk}',
-            )
-            if delivered:
-                reached.add(player.pk)
+            if not glicko_possible or ratings.system(player.user) == ratings.ELO:
+                push_to(player, climber)
+
+    if not glicko_possible:
+        return reached
+    glicko_recipients = None
+    side1, side2 = match.sides()
+    scope = ratings.display_scope(match)
+    for climber in (side1 if match.winner_side == Side.ONE else side2):
+        movement = ratings.glicko_movement(match, scope, climber)
+        if movement is None:
+            continue
+        passed = list(
+            ratings.players_between(scope, climber, *movement)
+            .exclude(pk__in=participant_ids)
+            .select_related('user')
+        )
+        # One query for every recipient's overrides, not one each.
+        flags.prefetch_overrides([p.user for p in passed])
+        for player in passed:
+            if glicko_recipients is None:
+                glicko_recipients = {}
+            if glicko_recipients.setdefault(
+                player.pk, ratings.system(player.user) == ratings.GLICKO
+            ):
+                push_to(player, climber)
 
     return reached
 

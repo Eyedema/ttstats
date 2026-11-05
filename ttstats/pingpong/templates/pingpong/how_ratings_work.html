@@ -1,0 +1,98 @@
+{% extends "pingpong/base.html" %}
+{% load icon_tags rating_tags %}
+
+{% block title %}How ratings work - TTStats{% endblock %}
+{% block nav_title %}How ratings work{% endblock %}
+
+{% comment %}
+The explainer behind the ± (KAN-71). Reachable only under Glicko-2: the view
+404s for an Elo viewer, so this copy can never describe the wrong numbers.
+Plain static prose: no JavaScript, nothing hidden. Thresholds come from
+rating_tags at call time.
+{% endcomment %}
+
+{% block content %}
+<div class="mx-auto max-w-3xl space-y-6" data-rating-system="{{ rating_system }}" data-testid="how-ratings-work">
+
+  <header>
+    <h1 class="text-display">How ratings work</h1>
+    <p class="mt-1 text-[13px] font-semibold text-muted-foreground">Short version: the number is your level, the ± is how sure we are.</p>
+  </header>
+
+  <ol class="space-y-4 text-[14px] font-semibold leading-relaxed">
+    <li>
+      <h2 class="text-heading">Your number and the ±</h2>
+      <p class="text-muted-foreground">
+        The number is our best estimate of your level. The <span class="n">±</span> next to it is how sure we are.
+        <span class="n">1532 ±48</span> means we think you are about 1532, give or take 48.
+      </p>
+    </li>
+    <li>
+      <h2 class="text-heading">Ranking uses the number alone</h2>
+      <p class="text-muted-foreground">
+        The table is ordered by the number. The ± never changes who is above whom.
+      </p>
+    </li>
+    <li>
+      <h2 class="text-heading">Every confirmed match is rated on its own</h2>
+      <p class="text-muted-foreground">
+        When a result is waiting for you, the "if agreed" figure is exactly what will be
+        written once everyone agrees, unless another of your matches is confirmed first. Nothing
+        moves until then.
+      </p>
+    </li>
+    <li>
+      <h2 class="text-heading">Not playing makes us less sure</h2>
+      <p class="text-muted-foreground">
+        The longer you are away, the wider the ± grows. Coming back, a player moves faster
+        until the ± narrows again.
+      </p>
+    </li>
+    <li>
+      <h2 class="text-heading">What the markers mean</h2>
+      <p class="text-muted-foreground">
+        A rating is marked when the ± is wider than {% provisional_rd %}.
+      </p>
+      <ul class="mt-2 space-y-2 text-muted-foreground">
+        <li>
+          <span class="label-cap inline-block border border-court-line px-1 leading-snug">Provisional</span>
+          Few rated matches yet, so each result moves this a lot.
+        </li>
+        <li>
+          <span class="label-cap inline-block border border-court-line px-1 leading-snug">Returning</span>
+          Not played for a while, so the next results count extra while it catches up.
+        </li>
+        <li>
+          <span class="label-cap inline-block border border-dashed border-court-line px-1 leading-snug">Unrated</span>
+          No rated match in that format yet, so there is no number.
+        </li>
+      </ul>
+    </li>
+    <li>
+      <h2 class="text-heading">Singles, doubles and seasons</h2>
+      <p class="text-muted-foreground">
+        Singles and doubles are rated separately. A new season starts from your all-time rating
+        in that format, pulled part of the way back toward {% rating_mean %}. A season's ±
+        starts at least {% season_rd_floor %} wide, so early results in a new season count for more.
+      </p>
+      <p class="mt-2 text-muted-foreground">
+        In doubles each player is rated against a composite of the two opponents, and keeps their
+        own ±, so partners can move by different amounts after the same match.
+      </p>
+    </li>
+    <li>
+      <h2 class="text-heading">Why your number changed</h2>
+      <p class="text-muted-foreground">
+        This is a new rating system, not a reset. Everyone's history was re-rated the same way,
+        so numbers moved and rankings largely held.
+      </p>
+    </li>
+  </ol>
+
+  <p>
+    <a href="{% url 'pingpong:leaderboard' %}" class="btn-quiet inline-flex min-h-[44px] items-center gap-2 text-[13px]">
+      {% icon "chart-column" size="sm" %} Back to the table
+    </a>
+  </p>
+</div>
+{% endblock %}

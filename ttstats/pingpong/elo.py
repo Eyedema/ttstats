@@ -24,7 +24,7 @@ from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.utils import timezone
 
-from . import seasons
+from . import glicko_adapter, seasons
 
 logger = logging.getLogger(__name__)
 
@@ -242,13 +242,17 @@ def projected_elo_changes(match, scope=LEGACY, *, book=None, base_k=None):
 class RatingState:
     """An in-memory rating row, shaped like PlayerRating."""
 
-    __slots__ = ("player_id", "club_id", "season_id", "format", "rating", "peak", "matches")
+    __slots__ = (
+        "player_id", "club_id", "season_id", "format", "rating", "peak", "matches",
+        "glicko_rating", "rd", "volatility", "last_rated_on",  # the KAN-67 shadow
+    )
 
     def __init__(self, player_id, club_id, season_id, format, rating):
         self.player_id, self.club_id = player_id, club_id
         self.season_id, self.format = season_id, format
         self.rating = self.peak = rating
         self.matches = 0
+        self.glicko_rating = self.rd = self.volatility = self.last_rated_on = None
 
     @property
     def key(self):
@@ -294,6 +298,7 @@ class FormatChange(NamedTuple):
     new: int
     change: int
     k: float
+    glicko: object = None  # the GlickoUpdate applied alongside, if any
 
 
 def format_scopes(match, season):
@@ -305,16 +310,47 @@ def format_scopes(match, season):
     return scopes
 
 
-def apply_format_scopes(match, book, season, *, base_k=None):
+def _plan_glicko(match, scope, book, params):
+    """The Glicko shadow projection for one scope, or None to skip it.
+
+    The only guarded step of the pipeline: a failure here is logged and costs
+    the shadow for this scope, never the Elo write.
+    """
+    if book is None:
+        # Outside the guard on purpose: building a book queries the database,
+        # and a swallowed query error would poison the surrounding atomic block.
+        raise ValueError("_plan_glicko needs a book; the guarded region must be pure")
+    try:
+        projection = glicko_adapter.project(match, scope, book, params)
+        if projection is not None and not projection.is_finite():
+            raise ValueError(f"non-finite Glicko result: {projection!r}")
+        return projection
+    except Exception:  # Glicko2Error is the expected case; any other is handled the same
+        logger.exception(
+            f"Glicko-2 shadow skipped for match {getattr(match, 'pk', None)} in {scope}"
+        )
+        return None
+
+
+def apply_format_scopes(match, book, season, *, base_k=None, glicko=None):
     """Project and apply every format scope of `match` to `book`, in memory.
 
     The shared step of the live write and the replay. All projections and all
     starting ratings are read **before** any row changes, so a season seed sees
     the all-time rating as it was before this match.
+
+    `glicko` is a `GlickoParams` (None = no shadow). The shadow rides the same
+    rows: its projections are planned before any mutation and applied after
+    the Elo arithmetic, which it never touches.
     """
     team1_players, team2_players = match.sides()
     plan = []
+    glicko_plan = {}
     for scope in format_scopes(match, season):
+        if glicko is not None:
+            projection = _plan_glicko(match, scope, book, glicko)
+            if projection is not None:
+                glicko_plan[scope] = projection
         change1, change2, k1, k2 = projected_elo_changes(match, scope, book=book, base_k=base_k)
         for players, delta, k in ((team1_players, change1, k1), (team2_players, change2, k2)):
             for p in players:
@@ -330,6 +366,17 @@ def apply_format_scopes(match, book, season, *, base_k=None):
         row.peak = max(row.peak, row.rating)
         row.matches += 1
         changes.append(FormatChange(row, p.pk, old, row.rating, delta, k))
+
+    if glicko_plan:
+        match_day = match.date_played
+        match_day = match_day.date() if hasattr(match_day, "hour") else match_day
+        by_row = {}
+        for scope, projection in glicko_plan.items():
+            for update in projection.updates:
+                row = book.row(update.player_id, scope.season_id, scope.format)
+                glicko_adapter.apply_glicko(row, update, match_day)
+                by_row[id(row)] = update
+        changes = [c._replace(glicko=by_row.get(id(c.row))) for c in changes]
     return changes
 
 
@@ -342,22 +389,37 @@ class LiveBook(RatingBook):
     """
 
     def __init__(self, match, season=None, *, lock=False):
-        from .models import PlayerRating
-
         super().__init__()
         self.season = season
         self.created = []
         side1, side2 = match.sides()
-        ids = [p.pk for p in side1 + side2]
+        self._load([p.pk for p in side1 + side2], match_format(match), season, lock)
+
+    @classmethod
+    def for_players(cls, player_ids, season, fmt):
+        """A read-only book for these players, without a match (KAN-71).
+
+        Same rows, same single query as the match constructor; used to read a
+        Glicko state for a win-probability on a scheduled or hypothetical
+        pairing. Never `flush` it.
+        """
+        book = cls.__new__(cls)
+        RatingBook.__init__(book)
+        book.season = season
+        book.created = []
+        book._load(list(player_ids), fmt, season, False)
+        return book
+
+    def _load(self, ids, fmt, season, lock):
+        from .models import PlayerRating
+
         season_q = Q(season__isnull=True)
         if season is not None:
             season_q |= Q(season=season)
-        # all_objects: filtered by this match's own players, so transitively
-        # club-scoped (KAN-24 audit), and a write must never be hidden by the
-        # viewer's active club.
-        qs = PlayerRating.all_objects.filter(
-            season_q, player_id__in=ids, format=match_format(match)
-        )
+        # all_objects: filtered by these players, so transitively club-scoped
+        # (KAN-24 audit), and a write must never be hidden by the viewer's
+        # active club.
+        qs = PlayerRating.all_objects.filter(season_q, player_id__in=ids, format=fmt)
         if lock:
             qs = qs.select_for_update()
         for r in qs:
@@ -395,7 +457,7 @@ class LiveBook(RatingBook):
                 existing.append(change.row)
         if existing:
             PlayerRating.all_objects.bulk_update(
-                existing, ["rating", "peak", "matches", "updated_at"]
+                existing, ["rating", "peak", "matches", "updated_at", *glicko_adapter.SHADOW_FIELDS]
             )
         RatingChange.objects.bulk_create([
             RatingChange(
@@ -406,6 +468,7 @@ class LiveBook(RatingBook):
                 new_rating=c.new,
                 rating_change=c.change,
                 k_factor=c.k,
+                **glicko_adapter.history_values(c.glicko),
             )
             for c in changes
         ])
@@ -548,7 +611,9 @@ def _apply_match(match):
         # The format scopes, computed in memory before anything is written.
         season = Season.for_day(match.club_id, match.date_played)
         book = LiveBook(match, season, lock=True)
-        format_changes = apply_format_scopes(match, book, season)
+        format_changes = apply_format_scopes(
+            match, book, season, glicko=glicko_adapter.DEFAULT_PARAMS
+        )
 
         # 5. APPLY UPDATES TO TEAM 1
         for p in team1_players:

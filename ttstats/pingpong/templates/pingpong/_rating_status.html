@@ -7,9 +7,13 @@ dashed outline and a different word, so it cannot be mistaken for provisional
 in greyscale either. Established renders nothing: the absence of a marker is
 the "this number has settled" state.
 
-The threshold is decided in ratings.rating_status() from
-elo.PROVISIONAL_MATCHES; this template only receives the verdict.
+The threshold is decided in ratings.rating_status() (elo.PROVISIONAL_MATCHES, or
+the display RD under Glicko-2); this template only receives the verdict.
+Under Glicko-2 a provisional rating has a `reason`: 'new' keeps the word
+Provisional, 'returning' (wide from idle time) says Returning. Same outline.
 
-Context: `status` ('provisional' | 'unrated' | 'established').
+Context: `status` ('provisional' | 'unrated' | 'established'), `reason`
+(optional), `last_played` (optional date: a Returning marker says since when),
+`rating_system`.
 {% endcomment %}
-{% if status == 'provisional' %}<span class="label-cap inline-block border border-court-line px-1 leading-snug" data-rating-status="provisional">Provisional</span>{% elif status == 'unrated' %}<span class="label-cap inline-block border border-dashed border-court-line px-1 leading-snug" data-rating-status="unrated">Unrated</span>{% endif %}
+{% if status == 'provisional' %}<span class="label-cap inline-block border border-court-line px-1 leading-snug" data-rating-status="provisional" data-rating-system="{{ rating_system }}"{% if reason %} data-rating-reason="{{ reason }}"{% endif %}>{% if reason == 'returning' %}Returning{% else %}Provisional{% endif %}</span>{% if reason == 'returning' and last_played %} <span class="text-[11px] font-semibold normal-case text-muted-foreground" data-rating-last-played>Not played since {{ last_played|date:"j M Y" }}</span>{% endif %}{% elif status == 'unrated' %}<span class="label-cap inline-block border border-dashed border-court-line px-1 leading-snug" data-rating-status="unrated" data-rating-system="{{ rating_system }}">Unrated</span>{% endif %}

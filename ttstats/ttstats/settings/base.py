@@ -228,6 +228,9 @@ FEATURE_FLAGS = {
     # every page renders exactly as before; the PlayerRating mirror is
     # written either way.
     'seasons': False,
+    # Glicko-2 as the displayed rating system (KAN-72). Only takes effect with
+    # `seasons` also on (ratings.system()); both systems keep being written.
+    'glicko2': False,
 }
 
 # Fraction of scoped querysets the canary inspects. 0.0 means never; the flag

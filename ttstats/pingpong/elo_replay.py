@@ -23,7 +23,7 @@ copy of it.
 from dataclasses import dataclass, field
 from typing import NamedTuple
 
-from . import elo, seasons
+from . import elo, glicko_adapter, seasons
 
 REPLAY_ORDER = ("date_played", "created_at", "pk")
 DEFAULT_CHUNK_SIZE = 500
@@ -230,11 +230,13 @@ class Replay:
     resolution, the same `apply_format_scopes` step.
     """
 
-    def __init__(self, seasons_by_club=None, player_clubs=None, *, base_k=None):
+    def __init__(self, seasons_by_club=None, player_clubs=None, *, base_k=None,
+                 glicko=None):
         self.legacy = LegacyReplay(base_k=base_k)
         self.seasons_by_club = seasons_by_club or {}
         self.book = MemoryBook(player_clubs or {})
         self.base_k = base_k
+        self.glicko = glicko  # GlickoParams, or None for no Glicko shadow
 
     def play(self, record):
         """Apply one match: (legacy `Change`s, `elo.FormatChange`s)."""
@@ -244,7 +246,9 @@ class Replay:
         season = seasons.resolve_season(
             record.date_played, self.seasons_by_club.get(record.club_id, ())
         )
-        return legacy_changes, elo.apply_format_scopes(record, self.book, season, base_k=self.base_k)
+        return legacy_changes, elo.apply_format_scopes(
+            record, self.book, season, base_k=self.base_k, glicko=self.glicko
+        )
 
 
 def scope_filter(*, season_id=None, fmt=None):
@@ -272,6 +276,18 @@ class RatingWriter:
     def __init__(self, rating_model, change_model, *, keep=None,
                  batch_size=DEFAULT_CHUNK_SIZE):
         self.rating_model, self.change_model = rating_model, change_model
+        # Migration 0040 runs this against the historical 0039 model, which
+        # has no Glicko columns; write them only where they exist.
+        names = {f.name for f in rating_model._meta.fields}
+        self.shadow_fields = (
+            list(glicko_adapter.SHADOW_FIELDS)
+            if names.issuperset(glicko_adapter.SHADOW_FIELDS) else []
+        )
+        try:
+            change_names = {f.name for f in change_model._meta.fields}
+        except TypeError:  # a stand-in model with no real fields
+            change_names = set()
+        self.history = change_names.issuperset(glicko_adapter.HISTORY_FIELDS)
         self.keep = keep or (lambda row: True)
         self.batch_size = batch_size
         self.pks = {}  # state key -> PlayerRating pk
@@ -299,6 +315,7 @@ class RatingWriter:
                 self.rating_model(
                     player_id=s.player_id, club_id=s.club_id, season_id=s.season_id,
                     format=s.format, rating=s.rating, peak=s.peak, matches=s.matches,
+                    **{f: getattr(s, f) for f in self.shadow_fields},
                 )
                 for s in new.values()
             ])
@@ -309,6 +326,7 @@ class RatingWriter:
             self.change_model(
                 match_id=match_id, player_id=c.player_id, rating_id=self.pks[c.row.key],
                 old_rating=c.old, new_rating=c.new, rating_change=c.change, k_factor=c.k,
+                **(glicko_adapter.history_values(c.glicko) if self.history else {}),
             )
             for match_id, c in self.buffer
         ])
@@ -326,10 +344,11 @@ class RatingWriter:
                 self.rating_model(
                     pk=self.pks[key], rating=s.rating, peak=s.peak,
                     matches=s.matches, updated_at=now,
+                    **{f: getattr(s, f) for f in self.shadow_fields},
                 )
                 for key, s in self.states.items()
             ],
-            ["rating", "peak", "matches", "updated_at"],
+            ["rating", "peak", "matches", "updated_at", *self.shadow_fields],
             batch_size=self.batch_size,
         )
         return len(self.states), self.changes_written
@@ -349,7 +368,7 @@ class RebuildResult(NamedTuple):
 
 
 def replay_history(*, models=None, keep=None, write_ratings=False,
-                   chunk_size=DEFAULT_CHUNK_SIZE, on_match=None):
+                   chunk_size=DEFAULT_CHUNK_SIZE, on_match=None, glicko=None):
     """Run the full history through a `Replay`; optionally write PlayerRating rows.
 
     `on_match(index, record, legacy_changes)` is called after each match, which
@@ -360,7 +379,7 @@ def replay_history(*, models=None, keep=None, write_ratings=False,
     seasons_by_club, player_clubs = load_context(
         season_model=models["season"], player_model=models["player"]
     )
-    replay = Replay(seasons_by_club, player_clubs)
+    replay = Replay(seasons_by_club, player_clubs, glicko=glicko)
     writer = (
         RatingWriter(models["rating"], models["change"], keep=keep, batch_size=chunk_size)
         if write_ratings else None
@@ -392,7 +411,7 @@ def delete_player_ratings(*, models=None, keep=None, chunk_size=DEFAULT_CHUNK_SI
 
 
 def rebuild_player_ratings(*, models=None, keep=None, chunk_size=DEFAULT_CHUNK_SIZE,
-                           on_match=None):
+                           on_match=None, glicko=None):
     """Delete and rebuild PlayerRating/RatingChange (all, or the rows `keep` selects).
 
     Replays the full history either way: a season row's seed depends on the
@@ -405,7 +424,7 @@ def rebuild_player_ratings(*, models=None, keep=None, chunk_size=DEFAULT_CHUNK_S
     models = models or default_models()
     delete_player_ratings(models=models, keep=keep, chunk_size=chunk_size)
     return replay_history(models=models, keep=keep, write_ratings=True,
-                          chunk_size=chunk_size, on_match=on_match)
+                          chunk_size=chunk_size, on_match=on_match, glicko=glicko)
 
 
 @dataclass(frozen=True)

@@ -92,6 +92,18 @@ def first_season_bounds(starts_on, months=DEFAULT_FIRST_SEASON_MONTHS):
     return starts_on, add_months(starts_on, months) - timedelta(days=1)
 
 
+def carry_over_seed_float(all_time_rating):
+    """The unrounded carry-over seed: `1500 + SEASON_CARRY_FACTOR * (R - 1500)`.
+
+    The one place the formula lives. The Glicko-2 shadow (KAN-67) seeds a
+    season row from this because its ratings are floats; `carry_over_seed`
+    rounds it for the integer Elo rating. `None` (unrated) is the mean.
+    """
+    if all_time_rating is None:
+        return float(RATING_MEAN)
+    return RATING_MEAN + SEASON_CARRY_FACTOR * (all_time_rating - RATING_MEAN)
+
+
 def carry_over_seed(all_time_rating):
     """The seed for a player's first season rating in a format.
 
@@ -100,8 +112,7 @@ def carry_over_seed(all_time_rating):
     """
     if all_time_rating is None:
         return RATING_MEAN
-    raw = RATING_MEAN + SEASON_CARRY_FACTOR * (all_time_rating - RATING_MEAN)
-    return math.floor(raw + 0.5)
+    return math.floor(carry_over_seed_float(all_time_rating) + 0.5)
 
 
 def is_due_for_rollover(ends_on, today):

@@ -1,4 +1,5 @@
 """seasons.py is pure: no Django, no database. These run without django_db."""
+import math
 from dataclasses import dataclass
 from datetime import date
 
@@ -9,6 +10,7 @@ from ..seasons import (
     ROLLOVER_GRACE_DAYS,
     SUCCESSOR_LEAD_DAYS,
     carry_over_seed,
+    carry_over_seed_float,
     competition_ranks,
     first_season_bounds,
     is_due_for_rollover,
@@ -181,3 +183,20 @@ class TestSeasonNameFor:
 
     def test_odd_dates_name_the_days(self):
         assert season_name_for(date(2026, 5, 3), date(2026, 5, 9)) == "3 May–9 May 2026"
+
+
+class TestCarryOverSeedFloat:
+    """The unrounded seed the Glicko-2 shadow uses (KAN-67); no database."""
+
+    @pytest.mark.parametrize("all_time, seed", [
+        (1700, 1600.0), (1301, 1400.5), (1500, 1500.0), (1800, 1650.0),
+    ])
+    def test_it_does_not_round(self, all_time, seed):
+        assert carry_over_seed_float(all_time) == seed
+
+    def test_unrated_starts_at_the_mean(self):
+        assert carry_over_seed_float(None) == 1500.0
+
+    @pytest.mark.parametrize("all_time", [1301, 1500, 1623, 1701.7, None])
+    def test_the_integer_seed_is_this_one_rounded_half_up(self, all_time):
+        assert carry_over_seed(all_time) == math.floor(carry_over_seed_float(all_time) + 0.5)

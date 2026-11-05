@@ -1,23 +1,47 @@
-{% load icon_tags %}
+{% load icon_tags rating_tags %}
 {% comment %}
 What "provisional" and "unrated" mean, and why singles and doubles are rated
 apart (KAN-50 / S4.4). A <details> that renders CLOSED with no JavaScript, so
 it cannot fail open and it never pushes the table below the fold.
 
-The numbers come from context (`provisional_matches` is
-elo.PROVISIONAL_MATCHES), never typed here.
+Per rating system (`rating_system`): Elo keeps its S4.4 copy; Glicko-2 explains
+the ± and the two reasons a rating is provisional, and links to the explainer.
+Thresholds come from rating_tags (read at call time), never typed here.
 {% endcomment %}
-<details id="rating-help" class="surface mt-4">
+<details id="rating-help" class="surface mt-4" data-rating-system="{{ rating_system }}">
   <summary class="flex min-h-[44px] cursor-pointer list-none items-center gap-2 px-3 py-2 text-[13px] font-extrabold">
     {% icon "info" size="sm" css="text-muted-foreground" %}
-    <span>Provisional and unrated, explained</span>
+    <span>{% if rating_system == 'glicko2' %}What the ± and the markers mean{% else %}Provisional and unrated, explained{% endif %}</span>
   </summary>
   <div class="space-y-2 border-t border-court-line p-3 text-[12.5px] font-semibold leading-relaxed text-muted-foreground">
+    {% if rating_system == 'glicko2' %}
+    <p>
+      The number is your estimated level. The <span class="n">±</span> beside it is how sure we are: a
+      small one means a settled rating, a large one means it can still move a lot.
+    </p>
     <p>
       <span class="label-cap inline-block border border-court-line px-1 leading-snug">Provisional</span>
-      means the player has fewer than {{ provisional_matches }} rated matches in that format, ever.
+      Few rated matches yet, so each result moves this a lot. It means the ± is wider than {% provisional_rd %}.
+    </p>
+    <p>
+      <span class="label-cap inline-block border border-court-line px-1 leading-snug">Returning</span>
+      Not played for a while, so the next results count extra while it catches up.
+    </p>
+    <p>
+      <span class="label-cap inline-block border border-dashed border-court-line px-1 leading-snug">Unrated</span>
+      No rated match in that format yet (this season, on a season table). There is simply no number yet.
+    </p>
+    <p>
+      <a href="{% url 'pingpong:how_ratings_work' %}" class="inline-flex min-h-[44px] items-center gap-2 font-extrabold text-bone underline" data-how-ratings-link>
+        {% icon "book-open" size="sm" %} How ratings work
+      </a>
+    </p>
+    {% else %}
+    <p>
+      <span class="label-cap inline-block border border-court-line px-1 leading-snug">Provisional</span>
+      means the player has fewer than {% provisional_matches %} rated matches in that format, ever.
       Until then each result moves their rating further than usual, so it finds their level quickly.
-      The marker disappears at {{ provisional_matches }}; nothing else about the rating changes when it does.
+      The marker disappears at {% provisional_matches %}; nothing else about the rating changes when it does.
     </p>
     <p>
       <span class="label-cap inline-block border border-dashed border-court-line px-1 leading-snug">Unrated</span>
@@ -30,5 +54,6 @@ elo.PROVISIONAL_MATCHES), never typed here.
       other. A new season starts from your all-time rating in that format, pulled part of the way back
       toward the middle, and does not make you provisional again.
     </p>
+    {% endif %}
   </div>
 </details>

@@ -21,6 +21,13 @@ const { applyProdCSP, expectDrawerClosed } = require('./helpers');
 const tabBar = (page) => page.getByRole('navigation', { name: 'Primary' });
 const tab = (page, name) => tabBar(page).getByRole('link', { name, exact: false });
 
+test('flag-off users never see an uncertainty or the explainer', async ({ page }) => {
+  await applyProdCSP(page);
+  await page.goto('/pingpong/leaderboard/');
+  expect(await page.locator('body').innerText()).not.toContain('±');
+  expect((await page.goto('/pingpong/ratings/')).status()).toBe(404);
+});
+
 const SCREENS = [
   ['/pingpong/', 'Today'],
   ['/pingpong/play/', 'Start something'],

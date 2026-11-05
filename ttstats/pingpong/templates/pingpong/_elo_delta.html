@@ -6,10 +6,13 @@ projection rather than a record. It still gets shown -- it is precisely the
 figure the viewer is being asked to accept -- but it says so, because a number
 that later turns out to be different is worse than no number at all.
 
-Context: `delta` (signed int), `pending` (bool).
+Under Glicko-2 (`rating_system`) the unit word is dropped: "+14 if agreed", the
+preview of exactly what will be written. Elo keeps "+14 Elo".
+
+Context: `delta` (signed int), `pending` (bool), `rating_system`.
 {% endcomment %}
 {% if delta %}
-<span class="n block text-[11.5px] font-semibold {% if delta > 0 %}text-confirmed{% else %}text-paddle{% endif %}">
-  {{ delta|stringformat:"+d" }} Elo{% if pending %} <span class="font-semibold text-muted-foreground">if agreed</span>{% endif %}
+<span data-rating-delta data-rating-system="{{ rating_system }}" class="n block text-[11.5px] font-semibold {% if delta > 0 %}text-confirmed{% else %}text-paddle{% endif %}">
+  {{ delta|stringformat:"+d" }}{% if rating_system != 'glicko2' %} Elo{% endif %}{% if pending %} <span class="font-semibold text-muted-foreground">if agreed</span>{% endif %}
 </span>
 {% endif %}

@@ -37,3 +37,17 @@ the single source of the namespace.
 - **`warm_cache` scopes by explicit filter, never by faking a request.** A
   command has no user, so managers run unfiltered; a club in thread-local alone
   would write each club's key with the whole database's numbers.
+- **Key shapes (KAN-71).** Elo keys keep their exact shape; Glicko adds `g2_`:
+  `leaderboard_key(scope, top_x, system)` = `{club}leaderboard_{gen}_{g2_}season{id|all}_{fmt}_{top}`,
+  `player_rank_key(player, system)` = `{club}{g2_}player_rank_{pk}` (Glicko holds the
+  nav reading), `rating_history_key(player, system)` = `{club}{g2_}rating_history_{pk}`.
+  `invalidate_match_caches` / `invalidate_player_caches` delete both variants.
+- **Saving or deleting a `glicko2` or `seasons` `FeatureFlagOverride` bumps that
+  user's clubs' leaderboard generation** (`signals.py`).
+  `cache_control --bump-leaderboard` bumps every club; run it after an env flag flip.
+- **Deploy step for the Glicko read cutover:** run
+  `manage.py cache_control --bump-leaderboard` after deploying. Elo seasons
+  leaderboard keys are byte-identical, so entries cached before the deploy lack
+  `rating`/`peak` and would be served as-is.
+- A club-on nav key is `club{player.club_id}:[g2_]player_rank_{pk}`, and the rank
+  inside it is counted in that same club.

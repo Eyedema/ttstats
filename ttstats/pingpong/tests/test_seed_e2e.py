@@ -81,3 +81,38 @@ class TestSeedE2EIsIdempotent:
 
         season.refresh_from_db()
         assert season.starts_on <= timezone.now().date() <= season.ends_on
+
+
+@pytest.mark.django_db
+class TestGlickoSeed:
+    def test_the_glicko_member_has_pipeline_written_state_and_a_pending_result(self):
+        from django.contrib.auth.models import User
+
+        from pingpong import ratings
+        from pingpong.models import RatingChange
+
+        _seed()
+
+        user = User.objects.get(username="e2e-glicko")
+        me = Player.objects.get(name="E2E Glicko Player")
+        row = PlayerRating.all_objects.get(player=me, season__isnull=True, format="singles")
+        assert ratings.system(user) == ratings.GLICKO
+        assert row.glicko_rating is not None and row.rd is not None
+        assert RatingChange.objects.filter(player=me, glicko_change__isnull=False).exists()
+        assert Match.all_objects.filter(participants__player=me, is_confirmed=False).count() == 1
+
+    def test_a_rerun_leaves_the_glicko_state_identical(self):
+        _seed()
+        first = list(
+            PlayerRating.all_objects.filter(player__name="E2E Glicko Player")
+            .values_list("season__name", "format", "glicko_rating", "rd")
+            .order_by("season__name", "format")
+        )
+
+        _seed()
+
+        assert first == list(
+            PlayerRating.all_objects.filter(player__name="E2E Glicko Player")
+            .values_list("season__name", "format", "glicko_rating", "rd")
+            .order_by("season__name", "format")
+        )

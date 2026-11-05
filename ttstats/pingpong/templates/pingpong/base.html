@@ -179,8 +179,8 @@
             </span>
             <span class="min-w-0 flex-1">
                 <span class="block truncate text-[16px] font-extrabold leading-tight">{{ nav_player.name }}</span>
-                <span class="n block text-[12px] font-semibold text-muted-foreground">
-                    {{ nav_player.elo_rating }} Elo{% if nav_player_rank %} · {{ nav_player_rank|ordinal }}{% endif %}
+                <span class="n block text-[12px] font-semibold text-muted-foreground" data-nav-rating data-rating-system="{{ rating_system }}">
+                    {% if rating_system == 'glicko2' %}{% if nav_rating %}{{ nav_rating }}{% if nav_rd %} <span aria-hidden="true">±{{ nav_rd }}</span><span class="sr-only"> give or take {{ nav_rd }}</span>{% endif %}{% endif %}{% else %}{{ nav_player.elo_rating }} Elo{% endif %}{% if nav_player_rank %} · {{ nav_player_rank|ordinal }}{% endif %}
                 </span>
             </span>
         </a>
@@ -267,7 +267,7 @@
                     </span>
                     <span class="min-w-0">
                         <span class="block truncate text-[16px] font-extrabold leading-tight">{{ nav_player.name }}</span>
-                        <span class="n block text-[12px] font-semibold text-muted-foreground">{{ nav_player.elo_rating }} Elo{% if nav_player_rank %} · {{ nav_player_rank|ordinal }}{% endif %}</span>
+                        <span class="n block text-[12px] font-semibold text-muted-foreground" data-nav-rating data-rating-system="{{ rating_system }}">{% if rating_system == 'glicko2' %}{% if nav_rating %}{{ nav_rating }}{% if nav_rd %} <span aria-hidden="true">±{{ nav_rd }}</span><span class="sr-only"> give or take {{ nav_rd }}</span>{% endif %}{% endif %}{% else %}{{ nav_player.elo_rating }} Elo{% endif %}{% if nav_player_rank %} · {{ nav_player_rank|ordinal }}{% endif %}</span>
                     </span>
                 </a>
                 {% else %}

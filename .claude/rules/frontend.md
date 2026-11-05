@@ -81,6 +81,17 @@ Four tabs -- **Today, Play, Table, Cups** -- plus a tiered drawer.
   `from:` selector to break). E2E runs it as `e2e-seasons`, the flag-on
   user; every other spec stays flag-off.
 
+## Rating components (KAN-71)
+
+- Under Glicko-2 show the number plus a muted `±n` and sr-only "give or take n"
+  (`_rating_value.html`); uncertainty is text, never opacity or colour alone.
+- Every rating component carries `data-rating-system`. No "Elo" copy under Glicko,
+  no "±" under Elo; `tests/test_glicko_ui.py` enforces both on the rendered pages.
+- Chart.js bands use two datasets with `fill`, the player hue (`player.hue_hex`),
+  axis colours read with `getComputedStyle` and passed as literal `rgb()`.
+- E2E: `e2e-glicko` user (`glicko.json`); centre a link before tapping it when a
+  fixed tab bar could cover it (`scrollIntoView({block:'center'})`).
+
 ## htmx
 
 - **Dual-mode view** (one URL, page or fragment): `is_htmx(request)` plus

@@ -73,6 +73,12 @@ test.describe('season leaderboard', () => {
     await expect(results.locator('[data-scope-label]')).toContainText('Singles · all-time');
   });
 
+  test('Elo seasons users see no uncertainty', async ({ page }) => {
+    await expect(page.locator('#leaderboard-results')).toHaveAttribute('data-rating-system', 'elo');
+    expect(await page.locator('main').innerText()).not.toContain('±');
+    await expect(page.locator('[data-how-ratings-link]')).toHaveCount(0);
+  });
+
   test('a player with no match this season is unrated, not 1500', async ({ page }) => {
     const unrated = page.locator('[data-unrated-list] li', { hasText: 'E2E Momentum' });
     await expect(unrated).toBeVisible();

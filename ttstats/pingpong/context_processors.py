@@ -4,9 +4,9 @@ from django.core.cache import cache
 from django.middleware.csrf import get_token
 from django.urls import reverse
 
-from . import cache_utils
+from . import cache_utils, ratings
 from .managers import scope_to_active_club
-from .models import Championship, Club, Match, Player
+from .models import Championship, Club, Match
 
 # --- The navigation spine ---------------------------------------------------
 # Nine identical sidebar links became four daily destinations in a bottom tab
@@ -49,6 +49,9 @@ def pingpong_context(request):
         'nav_player': None,
         'nav_player_rank': None,
         'live_championships_count': 0,
+        'rating_system': ratings.ELO,
+        'nav_rating': None,
+        'nav_rd': None,
     }
 
     resolver = getattr(request, 'resolver_match', None)
@@ -56,6 +59,10 @@ def pingpong_context(request):
 
     if not request.user.is_authenticated:
         return {**empty, 'nav_tab': nav_tab}
+
+    # One source for the nav and the page body, so they cannot disagree.
+    system = ratings.system(request.user)
+    empty['rating_system'] = system
 
     player = getattr(request.user, 'player', None)
     if not player:
@@ -96,11 +103,8 @@ def pingpong_context(request):
         ).count()
         cache.set(live_key, live_championships_count, 300)
 
-    rank_key = f'{prefix}player_rank_{player.pk}'
-    rank = cache.get(rank_key)
-    if rank is None:
-        rank = Player.objects.filter(elo_rating__gt=player.elo_rating).count() + 1
-        cache.set(rank_key, rank, 300)
+    reading = ratings.nav_reading(player, system=system)
+    rank = reading['rank']
 
     return {
         'pending_matches_count': pending_matches_count,
@@ -109,6 +113,11 @@ def pingpong_context(request):
         'nav_player': player,
         'nav_player_rank': rank,
         'live_championships_count': live_championships_count,
+        'rating_system': system,
+        # Neutral nav reading: Elo -> lifetime rating, RD None; Glicko ->
+        # season-else-all-time singles rating and its display RD.
+        'nav_rating': reading['rating'],
+        'nav_rd': reading['rd'],
     }
 
 

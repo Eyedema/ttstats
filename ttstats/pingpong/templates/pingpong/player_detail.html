@@ -1,7 +1,7 @@
 {% extends "pingpong/base.html" %}
 {% load static %}
 {% load icon_tags %}
-{% load player_tags %}
+{% load player_tags rating_tags %}
 
 {% block title %}{{ player }} - Table Tennis Tracker{% endblock %}
 {% block nav_title %}{{ player.name }}{% endblock %}
@@ -85,7 +85,7 @@
     1500 standing in for "no matches yet". The marker links to the
     explanation below, which says why the ratings split at all.
     {% endcomment %}
-    <section class="surface" data-format-ratings>
+    <section class="surface" data-format-ratings data-rating-system="{{ rating_system }}">
       <div class="grid grid-cols-[1fr_auto_auto] items-center gap-x-4 gap-y-2 p-4">
         <span class="label-cap">Format</span>
         <span class="label-cap text-right">{% if format_ratings.season %}{{ format_ratings.season.name }}{% else %}This season{% endif %}</span>
@@ -97,8 +97,8 @@
           {% if cell.status == 'unrated' %}
             <a href="#rating-help">{% include 'pingpong/_rating_status.html' with status=cell.status %}</a>
           {% else %}
-            <span class="n text-[20px]">{{ cell.rating }}</span>
-            {% if cell.status == 'provisional' %}<a href="#rating-help">{% include 'pingpong/_rating_status.html' with status=cell.status %}</a>{% endif %}
+            <span class="n text-[20px]">{% include 'pingpong/_rating_value.html' with rating=cell.rating rd=cell.rd %}</span>
+            {% if cell.status == 'provisional' %}<a href="#rating-help">{% include 'pingpong/_rating_status.html' with status=cell.status reason=cell.reason last_played=cell.last_played %}</a>{% endif %}
           {% endif %}
         </span>
         {% endfor %}
@@ -146,6 +146,31 @@
             </div>
         </div>
 
+        {% if rating_system == 'glicko2' %}
+        {% for entry in format_ratings.formats %}{% if entry.format == 'singles' %}
+        <div class="rounded-lg border bg-card p-4 md:p-6" data-rating-card data-rating-system="{{ rating_system }}">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="text-xs md:text-sm font-medium text-muted-foreground">Rating</p>
+                    <p class="text-xl md:text-2xl font-bold text-primary mt-1">{% if entry.all_time.rating %}{% include 'pingpong/_rating_value.html' with rating=entry.all_time.rating rd=entry.all_time.rd %}{% else %}&mdash;{% endif %}</p>
+                    <p class="text-xs text-muted-foreground mt-1">Singles, all time</p>
+                </div>
+                {% icon "trending-up" css="w-6 h-6 md:w-8 md:h-8 text-primary flex-shrink-0" %}
+            </div>
+        </div>
+
+        <div class="rounded-lg border bg-card p-4 md:p-6" data-rating-card data-rating-system="{{ rating_system }}">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="text-xs md:text-sm font-medium text-muted-foreground">Peak rating</p>
+                    <p class="text-xl md:text-2xl font-bold mt-1">{% if entry.all_time.peak %}{{ entry.all_time.peak }}{% else %}&mdash;{% endif %}</p>
+                    <p class="text-xs text-muted-foreground mt-1">Singles, all-time best</p>
+                </div>
+                {% icon "award" css="w-6 h-6 md:w-8 md:h-8 flex-shrink-0" %}
+            </div>
+        </div>
+        {% endif %}{% endfor %}
+        {% else %}
         <div class="rounded-lg border bg-card p-4 md:p-6">
             <div class="flex items-center justify-between">
                 <div>
@@ -167,6 +192,7 @@
                 {% icon "award" css="w-6 h-6 md:w-8 md:h-8 text-warning flex-shrink-0" %}
             </div>
         </div>
+        {% endif %}
 
         <div class="rounded-lg border bg-card p-4 md:p-6">
             <div class="flex items-center justify-between">
@@ -237,8 +263,16 @@
     </div>
     {% endif %}
 
-    <!-- Elo Rating Chart -->
-    {% if elo_chart_data %}
+    <!-- Rating chart -->
+    {% if rating_system == 'glicko2' and rating_chart_data %}
+    <div class="rounded-lg border bg-card p-4 md:p-6" data-rating-chart data-rating-system="{{ rating_system }}">
+        <h3 class="font-semibold text-base md:text-lg mb-1">Rating history</h3>
+        <p class="text-xs text-muted-foreground mb-4">Singles, all time. The shaded band is the ±: how sure we were after each match. <a href="{% url 'pingpong:how_ratings_work' %}" class="underline" data-how-ratings-link>How ratings work</a></p>
+        <div class="relative" style="height: 300px;">
+            <canvas id="ratingChart" role="img" aria-label="Rating history, singles, with the uncertainty band"></canvas>
+        </div>
+    </div>
+    {% elif rating_chart_data %}
     <div class="rounded-lg border bg-card p-4 md:p-6">
         <h3 class="font-semibold text-base md:text-lg mb-4">Elo Rating History</h3>
         <div class="relative" style="height: 300px;">
@@ -428,7 +462,7 @@
                     {% if item.achievement.tier != 'none' %}
                     <p class="text-xs text-muted-foreground capitalize">{{ item.achievement.get_tier_display }}</p>
                     {% endif %}
-                    <p class="text-xs text-muted-foreground mt-1">{{ item.achievement.description }}</p>
+                    <p class="text-xs text-muted-foreground mt-1">{{ item.achievement.description|neutral_rating_copy:rating_system }}</p>
                     {% if item.threshold > 1 %}
                     <div class="mt-2">
                         <div class="w-full bg-secondary rounded-full h-1.5">
@@ -738,9 +772,86 @@
     </div>
 </div>
 
-{% if elo_chart_data %}
-{{ elo_chart_labels|json_script:"elo-chart-labels" }}
-{{ elo_chart_data|json_script:"elo-chart-data" }}
+{% if rating_system == 'glicko2' and rating_chart_data %}
+{{ rating_chart_labels|json_script:"rating-chart-labels" }}
+{{ rating_chart_data|json_script:"rating-chart-data" }}
+{{ rating_chart_lower|json_script:"rating-chart-lower" }}
+{{ rating_chart_upper|json_script:"rating-chart-upper" }}
+{{ player.hue_hex|json_script:"rating-chart-hue" }}
+<script src="{% static 'pingpong/js/vendor/chart.umd.js' %}"></script>
+<script>
+(function() {
+    function read(id) { return JSON.parse(document.getElementById(id).textContent); }
+    var labels = read('rating-chart-labels');
+    var data = read('rating-chart-data');
+    var lower = read('rating-chart-lower');
+    var upper = read('rating-chart-upper');
+    var hue = read('rating-chart-hue');
+    var canvas = document.getElementById('ratingChart');
+    if (!canvas || typeof Chart === 'undefined') return;
+
+    // Chart.js resolves a CSS custom property to black, so axis and grid
+    // colours are READ from the resolved tokens and passed as literal rgb().
+    var root = getComputedStyle(document.documentElement);
+    function token(name, alpha) {
+        var triple = root.getPropertyValue(name).trim();
+        if (!triple) return 'rgb(148, 163, 184)';
+        return alpha === undefined
+            ? 'rgb(' + triple.split(/\s+/).join(', ') + ')'
+            : 'rgba(' + triple.split(/\s+/).join(', ') + ', ' + alpha + ')';
+    }
+    function hueRgba(hex, alpha) {
+        var h = hex.replace('#', '');
+        var n = parseInt(h, 16);
+        return 'rgba(' + ((n >> 16) & 255) + ', ' + ((n >> 8) & 255) + ', ' + (n & 255) + ', ' + alpha + ')';
+    }
+    var ink = token('--bone-muted');
+    var grid = token('--court-line', 0.9);
+    var still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    var small = window.innerWidth < 768;
+
+    new Chart(canvas.getContext('2d'), {
+        type: 'line',
+        data: {
+            labels: labels,
+            datasets: [
+                { label: 'Rating', data: data, borderColor: hue, backgroundColor: hue,
+                  borderWidth: 2, tension: 0.3, fill: false,
+                  pointBackgroundColor: hue, pointBorderColor: hue,
+                  pointRadius: small ? 2 : 3, pointHoverRadius: small ? 4 : 5, order: 0 },
+                { label: 'Upper (+RD)', data: upper, borderColor: 'rgba(0,0,0,0)', backgroundColor: hueRgba(hue, 0.18),
+                  pointRadius: 0, borderWidth: 0, tension: 0.3, fill: '+1', order: 1 },
+                { label: 'Lower (-RD)', data: lower, borderColor: 'rgba(0,0,0,0)', backgroundColor: 'rgba(0,0,0,0)',
+                  pointRadius: 0, borderWidth: 0, tension: 0.3, fill: false, order: 2 }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: still ? false : { duration: 400 },
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    filter: function(item) { return item.datasetIndex === 0; },
+                    callbacks: {
+                        label: function(ctx) {
+                            var i = ctx.dataIndex;
+                            return 'Rating: ' + ctx.parsed.y + ' (±' + Math.round((upper[i] - lower[i]) / 2) + ')';
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: { ticks: { color: ink, maxTicksLimit: small ? 5 : 10, maxRotation: 45 }, grid: { display: false } },
+                y: { ticks: { color: ink, precision: 0 }, grid: { color: grid } }
+            }
+        }
+    });
+})();
+</script>
+{% elif rating_chart_data %}
+{{ rating_chart_labels|json_script:"elo-chart-labels" }}
+{{ rating_chart_data|json_script:"elo-chart-data" }}
 <script src="{% static 'pingpong/js/vendor/chart.umd.js' %}"></script>
 <script>
 (function() {

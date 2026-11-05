@@ -227,3 +227,16 @@ def invalidate_feature_flag_override(sender, instance, **kwargs):
     from . import flags
 
     flags.invalidate_override(instance.name, instance.user_id)
+
+    # Flipping what a user's pages read (the rating system, or whether seasons
+    # exist at all) retires the cached leaderboards of that user's clubs.
+    if instance.name in ("glicko2", "seasons"):
+        from .cache_utils import invalidate_leaderboard
+        from .models import ClubMembership
+
+        clubs = [
+            m.club
+            for m in ClubMembership.objects.filter(user_id=instance.user_id).select_related("club")
+        ]
+        for club in clubs or [None]:
+            invalidate_leaderboard(club=club)
