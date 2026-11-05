@@ -259,7 +259,20 @@ drops `Player.elo_*` and `PlayerRating.rating/peak`. It also renames
 the retired flags' overrides. **Irreversible except by restore.**
 
 1. **Dump first** (see "Backup and restore"), name it `ttstats-pre-kan73-*`.
-   This dump is the only rollback.
+   This dump is the only rollback. Then a read-only check; both counts should
+   be 0. A non-zero first count is safe (the guard also reads `EloHistory`)
+   but those matches have no Glicko rows until a `recalculate_ratings` run.
+   A non-zero second count means confirmed matches that were never rated.
+   ```bash
+   dcp exec -T db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At' <<'SQL'
+   SELECT count(*) FROM pingpong_match m
+    WHERE EXISTS (SELECT 1 FROM pingpong_elohistory e WHERE e.match_id = m.id)
+      AND NOT EXISTS (SELECT 1 FROM pingpong_ratingchange r WHERE r.match_id = m.id);
+   SELECT count(*) FROM pingpong_match m
+    WHERE m.winner_side IS NOT NULL AND m.is_confirmed AND NOT m.is_live
+      AND NOT EXISTS (SELECT 1 FROM pingpong_ratingchange r WHERE r.match_id = m.id);
+   SQL
+   ```
 2. **Deploy** (merge to master). The entrypoint runs `migrate`, which applies
    0046.
 3. **Verify the replay** (read-only), and record the output and the peak memory
