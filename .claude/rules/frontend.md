@@ -9,6 +9,8 @@ paths:
   - "ttstats/pingpong/context_processors.py"
   - "tailwind.config.js"
   - "tests/e2e/**"
+  - "scripts/perf.mjs"
+  - "scripts/e2e_server.sh"
 ---
 
 # Frontend: templates, design system, htmx, CSP
@@ -175,3 +177,16 @@ tap that never registered.
 - `.chrome-blur` + `.chrome-edge-bottom` are the translucent nav surfaces. Any
   new frosted surface must be covered by the reduced-transparency block.
 - The mobile drawer enters and leaves from the left; keep the transforms mirrored.
+
+## Page weight and speed (KAN-119)
+
+- **The e2e server serves static the way prod does** (`settings/e2e.py`:
+  manifest + gzip storage, WhiteNoise, `runserver --nostatic`), so a template
+  naming a file missing from the manifest 500s in e2e as it would in prod.
+- **Byte budgets live in `tests/e2e/budgets.spec.js`** (WebKit, cold cache,
+  compressed bytes from `request.sizes()`). A story that makes a page lighter
+  tightens its row in the same commit; raising one needs a stated reason.
+- **`npm run perf`** (Chromium, CDP-throttled, median of 5, cold + warm) writes
+  `perf-report.md`; baseline and after-numbers go in
+  `docs/decisions/kan-119-performance.md`. The key-page list is shared:
+  `tests/e2e/perf-pages.js`.

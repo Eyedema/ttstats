@@ -19,10 +19,11 @@ npm run watch:css                                  # Rebuild CSS on template cha
 npm run icons                                      # Rebuild the inlined Lucide sprite (output is COMMITTED)
 python scripts/check_css_coverage.py               # Classes used in templates but absent from the build
 
-# End-to-end (real WebKit at iPhone size -- see the frontend-verification skill)
+# End-to-end (WebKit at iPhone size; see frontend-verification skill)
 npm run test:e2e                                   # All projects
 npm run test:e2e -- --project=iphone-safari        # One project
 npm run test:e2e:ui                                # Interactive debugging
+npm run perf                                       # Throttled page-speed report
 
 # Development
 docker compose -f compose.dev.yml up --build       # Start dev environment (includes the assets watcher)

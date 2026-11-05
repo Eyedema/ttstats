@@ -25,8 +25,9 @@ paths:
 - Docker: the `node:20-alpine AS assets` stage builds the CSS, and its
   `COPY --from=assets` must stay **after** `COPY ttstats/ .`. `compose.dev.yml`
   bind-mounts `./ttstats`, hence the separate `assets` watcher service.
-- **Static storage is `STORAGES`**, not `STATICFILES_STORAGE`. Only `prod.py`
-  uses WhiteNoise's manifest storage.
+- **Static storage is `STORAGES`**, not `STATICFILES_STORAGE`. `prod.py` and
+  `e2e.py` (the Playwright server: dev plus prod's static pipeline, hashed
+  URLs forced under DEBUG) use WhiteNoise's manifest storage; dev and tests don't.
 
 ## Vendored JavaScript
 

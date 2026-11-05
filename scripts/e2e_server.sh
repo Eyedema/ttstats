@@ -7,13 +7,21 @@
 #      a stale build would defeat the point.
 #   2. DATABASE_URL is cleared, so an exported Supabase URL can never point the
 #      suite at the clone of production.
+#   3. Static files are served the way prod serves them (settings/e2e.py):
+#      collectstatic through the hashing + gzip manifest storage, served by
+#      WhiteNoise. The byte budgets and `npm run perf` measure what a phone
+#      actually downloads, and a template referencing a file missing from the
+#      manifest 500s here exactly as it would in production.
+#
+# Env: E2E_DB / E2E_STATIC_ROOT let a second server (npm run perf, port 8126)
+# run beside the suite without sharing its database or STATIC_ROOT.
 set -euo pipefail
 
 PORT="${1:-8125}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-export DJANGO_SETTINGS_MODULE=ttstats.settings.dev
+export DJANGO_SETTINGS_MODULE=ttstats.settings.e2e
 unset DATABASE_URL || true
 
 # Throwaway VAPID keypair, committed on purpose.
@@ -28,7 +36,8 @@ export VAPID_PUBLIC_KEY="BFGG9T9Q89g2G_O5lR-iaNElVj-dJH1umtVTCoiI0a97c4PqSfebOzR
 export VAPID_PRIVATE_KEY="yvVjNtitD1wJSoyx7XSA3e7AiCJEKQQ5axvRBIP6ytI"
 export VAPID_ADMIN_EMAIL="mailto:e2e@example.invalid"
 
-E2E_DB="$REPO_ROOT/ttstats/e2e.sqlite3"
+E2E_DB="${E2E_DB:-$REPO_ROOT/ttstats/e2e.sqlite3}"
+export TTSTATS_STATIC_ROOT="${E2E_STATIC_ROOT:-$REPO_ROOT/ttstats/staticfiles_e2e}"
 export TTSTATS_SQLITE_NAME="$E2E_DB"
 
 # `build`, not `build:css`: the vendored htmx/Alpine bundles are gitignored
@@ -47,8 +56,11 @@ if [ ! -x "$PY" ]; then
   PY="$(command -v python3)"
 fi
 
+# --clear: a stale hashed copy of a file that has since changed must not linger.
+"$PY" manage.py collectstatic --noinput --clear >/dev/null
+
 rm -f "$E2E_DB"
 "$PY" manage.py migrate --noinput >/dev/null
 "$PY" manage.py seed_e2e
 
-exec "$PY" manage.py runserver "localhost:$PORT" --noreload
+exec "$PY" manage.py runserver "localhost:$PORT" --noreload --nostatic
