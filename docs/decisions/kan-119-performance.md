@@ -194,9 +194,6 @@ answered `content-encoding: gzip` (HTTP/2, gunicorn, 8312 B,
 The proxy passes gzip through untouched; after deploy the same request should
 show `content-encoding: br` (7234 B).
 
-_Pending: CONN_MAX_AGE / cached sessions / Server-Timing, prefetch, view
-transitions, pull-to-refresh._
-
 ### After S10.3 (KAN-123): Server-Timing, persistent connections, cached sessions
 
 2026-11-06, Chromium 151.0.7922.34, median of 5. "Before" is `0010354`
@@ -452,3 +449,34 @@ shell (only Gecko on desktop); prod's HTTP/2 (both requests share one
 connection there, so the unheld double-fetch would have been cheaper, but
 still a second download).
 
+
+## Final: epic KAN-119 against its success criteria
+
+Revision `fd43186` (all six stories merged), 2026-11-06, same Chromium,
+profile and method as the baseline. Median of 5.
+
+| Page | Cold FCP baseline → final | Δ | Cold total KB | Cold DCL |
+|---|---:|---:|---:|---:|
+| dashboard | 2068 → 1512 | −27% | 99.6 → 100.6 | 3071 → 2894 |
+| play | 2060 → 1480 | −28% | 99.1 → 100.0 | 3100 → 2868 |
+| leaderboard | 2072 → 1492 | −28% | 100.7 → 101.6 | 3073 → 2867 |
+| match detail | 2364 → 1532 | −35% | 170.9 → 162.5 | 4271 → 4159 |
+| match list | 2064 → 1492 | −28% | 101.5 → 102.5 | 3101 → 2895 |
+| player detail | 2372 → 1544 | −35% | 174.9 → 166.6 | 4264 → 4149 |
+| head-to-head | 2368 → 1544 | −35% | 173.2 → 164.9 | 4256 → 4171 |
+
+1. **≥ 25% faster time-to-visible-content on the four key pages: met**
+   (−27% to −35% cold FCP). Almost all of it is the deferred htmx (S10.2);
+   Brotli paid for the two new scripts (prefetch, pull-to-refresh) so light
+   pages end ~1 KB heavier than baseline and chart pages ~8 KB lighter.
+   Warm loads are bound by the one HTML round trip (~620 ms FCP, unchanged).
+   Tab navigation additionally gains ~115 ms tap→FCP with prefetch (S10.4).
+2. **Tab transition with no white flash: met** where the engine supports
+   cross-document view transitions (Safari 18.2+, Chrome 126+); Firefox
+   navigates as before (S10.5).
+3. **Page-weight budgets in CI: met** (`tests/e2e/budgets.spec.js`).
+
+To verify after deploy: `content-encoding: br` through the proxy (S10.2),
+one fewer query on logged-in pages once Redis serves sessions (S10.3), and
+a manual pass on a real iPhone and Android phone (prefetch, transitions,
+pull-to-refresh in the installed app).
