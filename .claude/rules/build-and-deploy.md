@@ -25,17 +25,24 @@ paths:
 - Docker: the `node:20-alpine AS assets` stage builds the CSS, and its
   `COPY --from=assets` must stay **after** `COPY ttstats/ .`. `compose.dev.yml`
   bind-mounts `./ttstats`, hence the separate `assets` watcher service.
-- **Static storage is `STORAGES`**, not `STATICFILES_STORAGE`. Only `prod.py`
-  uses WhiteNoise's manifest storage.
+- **Static storage is `STORAGES`**, not `STATICFILES_STORAGE`. `prod.py` and
+  `e2e.py` (the Playwright server: dev plus prod's static pipeline, hashed
+  URLs forced under DEBUG) use WhiteNoise's manifest storage; dev and tests don't.
+- **`brotli` in `requirements.txt` is what makes WhiteNoise write `.br`**
+  beside each `.gz` at `collectstatic`; without it static silently falls back
+  to gzip. Check: `curl -sI -H 'Accept-Encoding: br' .../static/<hashed>.css`
+  shows `content-encoding: br`.
 
 ## Vendored JavaScript
 
 - htmx, Alpine, Chart.js and Tom Select are served from `self`. `npm run vendor`
   copies builds into `static/pingpong/js/vendor/` and `css/vendor/` (gitignored).
   Versions are pinned in `package-lock.json`.
-- **Vendored files must ship their `.map` siblings.** Manifest storage
-  hard-fails `collectstatic` on a missing `sourceMappingURL` target, and
-  `entrypoint.sh` runs it under `set -e`, so this breaks the deploy.
+- **No source maps are vendored; the `sourceMappingURL` comment is stripped
+  instead.** Manifest storage hard-fails `collectstatic` on a missing map
+  target, and `entrypoint.sh` runs it under `set -e`, so a kept comment
+  without its map breaks the deploy. Sentry is server-side only and uploads
+  no maps. The script also deletes stale `.map` files from the vendor dirs.
 
 ## Environments
 
@@ -47,7 +54,11 @@ paths:
   `ttstats.settings.prod`. Production is the `db` service in `compose.prod.yml`;
   Supabase is only a dev clone.
 - Optional `.env.prod` vars (see `.env.prod.example`): `VAPID_*` for push,
-  `SENTRY_*` for Sentry. Unset, both are no-ops.
+  `SENTRY_*` for Sentry. Unset, both are no-ops. `DB_CONN_MAX_AGE` (default 60,
+  `0` = close per request) sets persistent connections, with `CONN_HEALTH_CHECKS`.
+- **Gunicorn runs 3 sync workers** (`entrypoint.sh`): at most 3 persistent
+  connections. Moving to gevent or threads multiplies that; revisit
+  `CONN_MAX_AGE` in the same change.
 - **CI/CD** (`.github/workflows/main.yml`): tests with coverage on push/PR; SSH
   deploy on master. `.py` changes gate tests, frontend extensions gate the asset
   build.

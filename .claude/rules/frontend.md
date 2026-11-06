@@ -9,6 +9,9 @@ paths:
   - "ttstats/pingpong/context_processors.py"
   - "tailwind.config.js"
   - "tests/e2e/**"
+  - "scripts/perf.mjs"
+  - "ttstats/ttstats/prefetch.py"
+  - "scripts/e2e_server.sh"
 ---
 
 # Frontend: templates, design system, htmx, CSP
@@ -101,7 +104,7 @@ Four tabs -- **Today, Play, Table, Cups** -- plus a tiered drawer.
 - Use `hx-push-url="true"` where a full submit used to be.
 - Tom Select hides the real `<select>`; re-dispatch a bubbling `change` from its
   `onChange`.
-- `<body>` carries `hx-headers` with the CSRF token. htmx loads before Alpine.
+- `<body>` carries `hx-headers` with the CSRF token.
 - **`from:` in `hx-trigger` takes a CSS selector.** `[value!='custom']` threw and
   killed the leaderboard's Period control. Event filters need `new Function()`,
   which the e2e `PROD_CSP` withholds.
@@ -175,3 +178,90 @@ tap that never registered.
 - `.chrome-blur` + `.chrome-edge-bottom` are the translucent nav surfaces. Any
   new frosted surface must be covered by the reduced-transparency block.
 - The mobile drawer enters and leaves from the left; keep the transforms mirrored.
+- **Page transitions are cross-document view transitions, CSS only** (KAN-125):
+  `@view-transition { navigation: auto }` in app.css; Safari 18.2+/Chrome 126+,
+  ignored by Firefox (today's behaviour). Both pages must opt in, so a page
+  opts out by re-declaring `navigation: none` (the scoreboard does, and clears
+  every name: nothing may sit between a tap and a point).
+- **Persistent chrome is named via `.vt-*` classes** (`app-header`,
+  `page-title`, `tab-bar`, `app-sidebar`, `app-drawer`, `nav-progress`).
+  A duplicate name aborts the transition; it is safe only because the
+  mobile and desktop chrome are `display:none` at each other's widths.
+  Solid bars hold the old snapshot and fade the new one over it, or WebKit
+  shows content through them mid-fade.
+- `::view-transition` paints the court token (no white flash in dark). Reduce
+  Motion re-declares `navigation: none` in the outside-every-layer block.
+- Specs: `view-transitions.*.spec.js`; `.android.spec.js` runs in the
+  local-only `android-chrome` (Pixel 7) and `android-firefox` projects.
+
+## Page weight and speed (KAN-119)
+
+- **The e2e server serves static the way prod does** (`settings/e2e.py`:
+  manifest + gzip storage, WhiteNoise, `runserver --nostatic`), so a template
+  naming a file missing from the manifest 500s in e2e as it would in prod.
+- **Byte budgets live in `tests/e2e/budgets.spec.js`** (WebKit, cold cache,
+  compressed bytes from `request.sizes()`). A story that makes a page lighter
+  tightens its row in the same commit; raising one needs a stated reason.
+- **`npm run perf`** (Chromium, CDP-throttled, median of 5, cold + warm) writes
+  `perf-report.md`; baseline and after-numbers go in
+  `docs/decisions/kan-119-performance.md`. The key-page list is shared:
+  `tests/e2e/perf-pages.js`.
+- **No parser-blocking script in `<head>`.** htmx and Alpine are both `defer`,
+  htmx first (defer keeps document order; Alpine's init must see htmx).
+  Nothing may touch `window.htmx` at parse time: wrap it in
+  `DOMContentLoaded` or listen for `htmx:*` events on `document`/`body`.
+  Guarded by `test_navigation.py::TestScriptLoading` and
+  `tests/e2e/script-loading.spec.js`.
+- **Static is pre-compressed as `.br` and `.gz`** (`brotli` installed, so
+  WhiteNoise writes both); HTML stays on `GZipMiddleware` (Brotli measured
+  ~9% smaller on the dashboard, ~1 KB: not worth a custom middleware).
+
+## Pull to refresh (KAN-126)
+
+`static/pingpong/js/pull_to_refresh.js`, plain JS, deferred from `base.html`.
+
+- **Standalone only**: `display-mode: standalone`/`fullscreen` or iOS's
+  `navigator.standalone`. A browser tab keeps its native gesture untouched.
+- While live it adds `html.ptr-on` (`overscroll-behavior-y: contain`), so a
+  native pull-to-refresh (Chrome Android; Firefox Android when the user has
+  enabled it) can't fire alongside ours.
+- **Off for the whole page** under any `[data-no-pull-refresh]`; that's how a
+  page opts out. The scoreboard root carries it: no listener at all, so a
+  tap is never eaten.
+- **Off per gesture** while `.overlay.is-open` exists (the drawer), while a
+  POST/`hx-post` form has had `input`/`change` and is still in the DOM, when
+  the touch starts in something scrolled off its top, or when the drag is
+  upward or mostly horizontal.
+- One non-passive `touchmove` (only `preventDefault()` stops the rubber band);
+  it returns at once unless a vertical pull is underway.
+- Offline (`navigator.onLine === false`): "No connection", no reload.
+  Reduced motion: `.is-static`, text only.
+- The indicator is created by the script (fails closed); its CSS is outside
+  `@layer` because Tailwind doesn't scan JS and would purge it. Its icons
+  (`refresh-cw`, `wifi-off`) are guarded by `TestIconSprite`.
+- Specs share `tests/e2e/pull-to-refresh-cases.js`: `*.pwa.spec.js`
+  (iPhone), `*.android.spec.js` (`android-chrome`, `android-firefox`), plus
+  `.reduced`/`.nojs`.
+
+## Tap-intent prefetch (KAN-124)
+
+- **`prefetch.js` fetches a tab's page on `touchstart`/`mousedown`** with
+  `Purpose: prefetch`; `ttstats/prefetch.py` marks only that response
+  `private, max-age=5` so the click's navigation is a cache hit. Normal
+  navigations stay uncacheable; a view's own `Cache-Control` wins.
+- **Allowlist: only `a[data-prefetch]`** (`_tab.html`, `_nav_row.html`). Every
+  opted-in URL must be an idempotent GET page. Opt a row out with
+  `data-no-prefetch` (`no_prefetch=True` on `_nav_row.html`; Admin does).
+- **Code denylist in `prefetch.js`**, whatever the markup says: `/live/`,
+  `confirm/`, `join/`, logout, admin, `/accounts/`, `/webauthn/`,
+  `edit|delete|start|register|unregister|convert|switch/`, non-`/pingpong/`,
+  cross-origin, `target`, `download`, the current page, Save-Data.
+- **Chromium joins an in-flight prefetch; WebKit and Gecko don't**, so on
+  those (no `navigator.userAgentData`) a click mid-prefetch is held until it
+  is cached. If the held navigation wasn't a cache hit (no HTTP cache, e.g.
+  Safari private), prefetching turns itself off for the tab's session.
+- **Playwright's default WebKit context has no HTTP cache.** Prove reuse in a
+  `launchPersistentContext` (as `prefetch.spec.js` does); evidence is the
+  shown document carrying `private, max-age=5`.
+- No hover prefetch: it widens the one stale case (prefetch, then a POST
+  redirecting to that URL inside 5 s) for pages the user may never open.

@@ -33,11 +33,18 @@ const PROD_CSP = [
 /** Serve every response with the production CSP. */
 async function applyProdCSP(page) {
   await page.route('**/*', async (route) => {
-    const response = await route.fetch();
-    await route.fulfill({
-      response,
-      headers: { ...response.headers(), 'content-security-policy': PROD_CSP },
-    });
+    try {
+      const response = await route.fetch();
+      await route.fulfill({
+        response,
+        headers: { ...response.headers(), 'content-security-policy': PROD_CSP },
+      });
+    } catch (err) {
+      // A deferred script or a prefetch (KAN-124) still in flight when the
+      // page navigates or the test ends: its response is gone, and nothing
+      // is waiting for it. Anything else is a real failure.
+      if (!/disposed|Test ended|closed/i.test(String(err))) throw err;
+    }
   });
 }
 

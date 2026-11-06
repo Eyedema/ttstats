@@ -1,5 +1,6 @@
 """Tests for the Live Scoreboard feature (KAN-4 epic)."""
 import json
+import re
 
 import pytest
 from django.urls import reverse
@@ -679,6 +680,18 @@ class TestScoreboardPage:
         # wake lock acquisition in client JS
         assert b"wakeLock" in resp.content
 
+    def test_scoreboard_opts_out_of_pull_to_refresh(self, auth_client):
+        """KAN-126: a pull on the scoreboard must never reload it mid-rally.
+
+        pull_to_refresh.js stands down for the whole page when any element
+        carries data-no-pull-refresh; the scoreboard root is that element.
+        """
+        match, p1, _ = _make_live_match()
+        client = auth_client(p1.user)
+        body = client.get(reverse("pingpong:live_scoreboard", args=[match.pk])).content.decode()
+        root = re.search(r'<div\s+id="scoreboard"[^>]*>', body)
+        assert root and "data-no-pull-refresh" in root.group(0)
+
     def test_non_scorekeeper_gets_403(self, auth_client):
         match, _, p2 = _make_live_match()
         client = auth_client(p2.user)
@@ -704,6 +717,17 @@ class TestScoreboardPage:
         assert reverse("pingpong:live_point", args=[match.pk]).encode() in resp.content
         assert reverse("pingpong:live_state", args=[match.pk]).encode() in resp.content
         assert reverse("pingpong:live_undo", args=[match.pk]).encode() in resp.content
+
+    def test_opts_out_of_page_transitions(self, auth_client):
+        """KAN-125: nothing may sit between a tap and a point. The browser
+        behaviour itself is asserted in tests/e2e/view-transitions.spec.js."""
+        match, p1, _ = _make_live_match()
+        resp = auth_client(p1.user).get(reverse("pingpong:live_scoreboard", args=[match.pk]))
+        head = resp.content.decode().split("</head>")[0]
+        assert "@view-transition { navigation: none; }" in head
+        assert "view-transition-name: none !important" in head
+        # The opt-out must come after app.css, or app.css's `auto` wins.
+        assert head.index("css/app.") < head.index("@view-transition")
 
 
 # ---------------------------------------------------------------------------

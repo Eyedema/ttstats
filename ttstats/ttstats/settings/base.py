@@ -42,6 +42,13 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
+    # `Server-Timing: app;dur=..., db;dur=...;desc="N queries"`. Below WhiteNoise
+    # so static hits skip it; above the rest so `app` times the whole request,
+    # gzip included. See ttstats/server_timing.py.
+    'ttstats.server_timing.ServerTimingMiddleware',
+    # `Cache-Control: private, max-age=5` on a tap-intent prefetch's HTML, so
+    # the navigation that follows reuses it (KAN-124). ttstats/prefetch.py.
+    'ttstats.prefetch.PrefetchCacheMiddleware',
     # Below WhiteNoise on purpose. WhiteNoise short-circuits static requests in
     # process_request and already serves its own pre-compressed .gz/.br
     # siblings, so a static hit never reaches this middleware and we don't

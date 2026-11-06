@@ -119,7 +119,7 @@ you are almost always after.
   {% include 'pingpong/_nav_row.html' with url=u icon_name='key' label='Passkeys' match_urls='passkey_management' %}
   {% if user.is_staff %}
     {% url 'admin:index' as u %}
-    {% include 'pingpong/_nav_row.html' with url=u icon_name='settings' label='Admin' %}
+    {% include 'pingpong/_nav_row.html' with url=u icon_name='settings' label='Admin' no_prefetch=True %}
   {% endif %}
 
   {% comment %}

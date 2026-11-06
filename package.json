@@ -10,7 +10,8 @@
     "build:css": "tailwindcss -i ttstats/pingpong/assets/app.css -o ttstats/pingpong/static/pingpong/css/app.css --minify",
     "watch:css": "tailwindcss -i ttstats/pingpong/assets/app.css -o ttstats/pingpong/static/pingpong/css/app.css --watch",
     "test:e2e": "playwright test",
-    "test:e2e:ui": "playwright test --ui"
+    "test:e2e:ui": "playwright test --ui",
+    "perf": "node scripts/perf.mjs"
   },
   "devDependencies": {
     "@fontsource/archivo": "^5.3.0",

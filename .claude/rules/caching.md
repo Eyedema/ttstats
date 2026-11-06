@@ -44,3 +44,15 @@ the single source of the namespace.
   that changes a cached rating payload's shape.
 - A club-on nav key is `club{player.club_id}:g2_player_rank_{pk}`, and the rank
   inside it is counted in that same club.
+
+## Sessions (`cached_db` in prod)
+
+- `prod.py` uses `cached_db` **only when `REDIS_URL` is set**. Over per-worker
+  LocMemCache a session goes stale across workers and a logout survives in
+  the other workers' memory.
+- Session keys sit in the `default` alias under Django's own
+  `django.contrib.sessions.cached_db` prefix, outside the `club*:` namespaces.
+- **`cache_control --clear` (`cache.clear()`, FLUSHDB on Redis) logs nobody
+  out**: the next read misses, falls back to the database and re-fills.
+  Passkey challenges and the active club survive it too
+  (`test_cached_db_sessions.py`).

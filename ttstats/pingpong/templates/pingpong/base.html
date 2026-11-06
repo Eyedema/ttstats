@@ -58,9 +58,13 @@
 
     <link rel="stylesheet" href="{% static 'pingpong/css/app.css' %}">
 
-    <!-- htmx must load before Alpine: Alpine's defer'd init should see any
-         markup htmx has already swapped in. -->
-    <script src="{% static 'pingpong/js/vendor/htmx.min.js' %}"></script>
+    {% comment %}
+    Both deferred, so neither blocks the parser (KAN-122). Deferred scripts run
+    in document order: htmx stays BEFORE Alpine, so Alpine's init sees any
+    markup htmx has already swapped in. Nothing may touch window.htmx at parse
+    time; use DOMContentLoaded or document-level htmx:* listeners.
+    {% endcomment %}
+    <script defer src="{% static 'pingpong/js/vendor/htmx.min.js' %}"></script>
 
     <!-- Alpine.js -->
     <script defer src="{% static 'pingpong/js/vendor/alpine.min.js' %}"></script>
@@ -85,6 +89,9 @@
          where it only re-asserts an existing subscription. -->
     {{ push_config|json_script:"push-config" }}
     <script defer src="{% static 'pingpong/js/push.js' %}"></script>
+    {# Installed-app pull to refresh; opt a page out with data-no-pull-refresh. #}
+    <script defer src="{% static 'pingpong/js/pull_to_refresh.js' %}"></script>
+    <script defer src="{% static 'pingpong/js/prefetch.js' %}"></script>
 
     {% block extra_css %}{% endblock %}
 </head>
@@ -164,7 +171,7 @@
     {# Desktop sidebar (lg+). Same menu file as the drawer, so the two     #}
     {# cannot drift.                                                       #}
     {# ------------------------------------------------------------------ #}
-    <aside class="hidden lg:fixed lg:inset-y-0 lg:left-0 lg:flex lg:w-64 lg:flex-col lg:overflow-y-auto
+    <aside class="vt-sidebar hidden lg:fixed lg:inset-y-0 lg:left-0 lg:flex lg:w-64 lg:flex-col lg:overflow-y-auto
                   border-r-2 border-court-line bg-court-raised">
         <a href="{% url 'pingpong:dashboard' %}" class="block border-b-2 border-court-line px-4 py-5">
             <p class="text-[10px] font-extrabold uppercase tracking-[0.14em] text-paddle">Table tennis</p>
@@ -196,7 +203,7 @@
     {# see-through without a solid fallback, and a nav bar is the last     #}
     {# place to spend legibility on an effect.                             #}
     {# ------------------------------------------------------------------ #}
-    <header class="fixed inset-x-0 top-0 z-30 border-b-2 border-court-line bg-court-raised pt-safe-top lg:hidden">
+    <header class="vt-header fixed inset-x-0 top-0 z-30 border-b-2 border-court-line bg-court-raised pt-safe-top lg:hidden">
         <div class="flex items-center gap-3 px-4 py-3">
             <button id="mobile-menu-open" type="button" aria-label="Open menu"
                     aria-expanded="false" aria-controls="mobile-menu-panel"
@@ -204,7 +211,7 @@
                 {% icon "menu" size="lg" %}
             </button>
             <span class="mr-auto min-w-0">
-                <span class="block truncate text-heading">{% block nav_title %}TTStats{% endblock %}</span>
+                <span class="vt-title block truncate text-heading">{% block nav_title %}TTStats{% endblock %}</span>
                 {% if active_club %}
                 {# Same reason as the sidebar kicker: the club must be legible #}
                 {# without opening the drawer, or every screen is ambiguous    #}
@@ -253,7 +260,7 @@
     {# one critical rule is inlined in <head> above. Fail closed, never    #}
     {# fail open.                                                          #}
     {# ------------------------------------------------------------------ #}
-    <div id="mobile-menu-scrim" class="overlay fixed inset-0 z-40 lg:hidden">
+    <div id="mobile-menu-scrim" class="vt-drawer overlay fixed inset-0 z-40 lg:hidden">
         <div class="overlay-scrim absolute inset-0"></div>
 
         <div id="mobile-menu-panel" role="dialog" aria-modal="true" aria-label="Menu"
