@@ -705,6 +705,17 @@ class TestScoreboardPage:
         assert reverse("pingpong:live_state", args=[match.pk]).encode() in resp.content
         assert reverse("pingpong:live_undo", args=[match.pk]).encode() in resp.content
 
+    def test_opts_out_of_page_transitions(self, auth_client):
+        """KAN-125: nothing may sit between a tap and a point. The browser
+        behaviour itself is asserted in tests/e2e/view-transitions.spec.js."""
+        match, p1, _ = _make_live_match()
+        resp = auth_client(p1.user).get(reverse("pingpong:live_scoreboard", args=[match.pk]))
+        head = resp.content.decode().split("</head>")[0]
+        assert "@view-transition { navigation: none; }" in head
+        assert "view-transition-name: none !important" in head
+        # The opt-out must come after app.css, or app.css's `auto` wins.
+        assert head.index("css/app.") < head.index("@view-transition")
+
 
 # ---------------------------------------------------------------------------
 # KAN-9: Side-switch prompt at midpoint of deciding game

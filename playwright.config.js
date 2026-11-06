@@ -24,6 +24,10 @@ const { defineConfig, devices } = require('@playwright/test');
  *                      variant, not the norm. A spec suite that only ever ran
  *                      in light mode would be testing the exception.
  *   - `desktop-chrome` the wide layout, so the sidebar path stays covered.
+ *   - `android-chrome` / `android-firefox`  Pixel 7 Chromium, and Gecko at a
+ *                      phone viewport with touch (Playwright's Firefox has no
+ *                      isMobile, so an approximation). `*.android.spec.js`;
+ *                      not in CI, which installs only WebKit.
  */
 const path = require('path');
 
@@ -62,6 +66,7 @@ module.exports = defineConfig({
         /.*\.reduced\.spec\.js/,
         /.*\.desktop\.spec\.js/,
         /.*\.dark\.spec\.js/,
+        /.*\.android\.spec\.js/,
         // The PWA specs need a live service worker; everything here needs it
         // gone. See the two `serviceWorkers` settings below.
         /pwa\.spec\.js/,
@@ -119,6 +124,28 @@ module.exports = defineConfig({
         ...devices['iPhone 13'],
         storageState: STORAGE_STATE,
         colorScheme: 'dark',
+      },
+    },
+    // Android. Not in CI's project list (CI installs only WebKit); run them
+    // locally when a change depends on the engine, e.g. view transitions.
+    {
+      name: 'android-chrome',
+      dependencies: ['setup'],
+      testMatch: /.*\.android\.spec\.js/,
+      use: { ...devices['Pixel 7'], storageState: STORAGE_STATE, serviceWorkers: 'block' },
+    },
+    {
+      // An approximation of Firefox for Android: Playwright's Firefox has no
+      // isMobile, so this is desktop Gecko at a phone viewport with touch.
+      name: 'android-firefox',
+      dependencies: ['setup'],
+      testMatch: /.*\.android\.spec\.js/,
+      use: {
+        browserName: 'firefox',
+        viewport: { width: 412, height: 839 },
+        hasTouch: true,
+        storageState: STORAGE_STATE,
+        serviceWorkers: 'block',
       },
     },
     {

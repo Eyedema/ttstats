@@ -247,4 +247,37 @@ That is not this story. `brotli` was installed in the shared virtualenv
 between the two runs (S10.2's work), so WhiteNoise started serving `.br`.
 S10.3 changes no bytes, so no budget row moves.
 
-_Pending: Brotli, defer htmx, prefetch, view transitions, pull-to-refresh._
+### After S10.5 (KAN-125): cross-document view transitions
+
+Revision: `feature/kan-125` on top of `6f6dbee`, 2026-11-06.
+
+**What changed.** `app.css` opts in with `@view-transition { navigation: auto }`
+and names the chrome (`app-header`, `page-title`, `tab-bar`, `app-sidebar`,
+plus `app-drawer` and `nav-progress` so they keep their z-order); the content
+(`root`) fades out in 120 ms and rises in over 180 ms. The scoreboard opts out
+with an inline `navigation: none` and clears every name; Reduce Motion
+re-declares `navigation: none`. No JavaScript, no new request.
+
+**Bytes.** `app.css` grows by ~300 B compressed (Brotli 7,192 -> 7,493 B,
+gzip 8,284 -> 8,590 B). The 8 KB CSS budget row still holds, so no row moves.
+
+**Timing.** Unchanged by construction: a cross-document transition starts
+after the new document's first render is ready, so TTFB, FCP and LCP measure
+the same document as before. It adds at most 180 ms of animation *after* the
+page is usable; perf.mjs (Chromium) is not re-run for this story.
+
+**Engine support** (MDN browser-compat-data, verified empirically with
+Playwright 1.62: WebKit 26.5, Chromium 151, Firefox build 1538):
+
+| Engine | Cross-document VT (`@view-transition`, `pagereveal`/`pageswap`, `types`) | Same-document `startViewTransition` |
+| --- | --- | --- |
+| Safari / iOS Safari | 18.2+ | 18+ |
+| Chrome / Chrome Android | 126+ | 111+ |
+| Firefox / Firefox Android | Nightly only ("preview") | 144+ |
+
+Firefox ignores the at-rule; `view-transition-name` parses but is inert without
+a transition. A screenshot of the leaderboard in Gecko at a phone viewport,
+with the old CSS and the new, differs only in the pulsing live dot, and no
+console error is raised: Firefox users get exactly today's navigation.
+
+_Pending: prefetch, pull-to-refresh._
