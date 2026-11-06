@@ -10,6 +10,7 @@ paths:
   - "tailwind.config.js"
   - "tests/e2e/**"
   - "scripts/perf.mjs"
+  - "ttstats/ttstats/prefetch.py"
   - "scripts/e2e_server.sh"
 ---
 
@@ -199,3 +200,26 @@ tap that never registered.
 - **Static is pre-compressed as `.br` and `.gz`** (`brotli` installed, so
   WhiteNoise writes both); HTML stays on `GZipMiddleware` (Brotli measured
   ~9% smaller on the dashboard, ~1 KB: not worth a custom middleware).
+
+## Tap-intent prefetch (KAN-124)
+
+- **`prefetch.js` fetches a tab's page on `touchstart`/`mousedown`** with
+  `Purpose: prefetch`; `ttstats/prefetch.py` marks only that response
+  `private, max-age=5` so the click's navigation is a cache hit. Normal
+  navigations stay uncacheable; a view's own `Cache-Control` wins.
+- **Allowlist: only `a[data-prefetch]`** (`_tab.html`, `_nav_row.html`). Every
+  opted-in URL must be an idempotent GET page. Opt a row out with
+  `data-no-prefetch` (`no_prefetch=True` on `_nav_row.html`; Admin does).
+- **Code denylist in `prefetch.js`**, whatever the markup says: `/live/`,
+  `confirm/`, `join/`, logout, admin, `/accounts/`, `/webauthn/`,
+  `edit|delete|start|register|unregister|convert|switch/`, non-`/pingpong/`,
+  cross-origin, `target`, `download`, the current page, Save-Data.
+- **Chromium joins an in-flight prefetch; WebKit and Gecko don't**, so on
+  those (no `navigator.userAgentData`) a click mid-prefetch is held until it
+  is cached. If the held navigation wasn't a cache hit (no HTTP cache, e.g.
+  Safari private), prefetching turns itself off for the tab's session.
+- **Playwright's default WebKit context has no HTTP cache.** Prove reuse in a
+  `launchPersistentContext` (as `prefetch.spec.js` does); evidence is the
+  shown document carrying `private, max-age=5`.
+- No hover prefetch: it widens the one stale case (prefetch, then a POST
+  redirecting to that URL inside 5 s) for pages the user may never open.

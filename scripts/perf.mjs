@@ -17,6 +17,12 @@
 //   npm run perf -- --runs 3
 //   npm run perf -- --pages dashboard,play
 //   PERF_BASE_URL=http://localhost:8126 npm run perf   # reuse a running server
+//   npm run perf -- --nav              # tab navigation: tap -> FCP, prefetch on/off
+//
+// --nav (KAN-124): page A is loaded (warm static cache, as when moving between
+// tabs), throttling goes on, then a real touch tap on a tab: touchstart, TAP_MS
+// held, touchend (-> click). Reported: tap -> FCP of page B, measured from the
+// touchstart, in three modes (NAV_MODES below) on the same build.
 import { spawn, execSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -45,8 +51,9 @@ const PROFILE = {
 };
 
 function parseArgs(argv) {
-  const args = { runs: 5, pages: null, out: path.join(REPO_ROOT, 'perf-report.md') };
+  const args = { runs: 5, pages: null, nav: false, out: path.join(REPO_ROOT, 'perf-report.md') };
   for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--nav') { args.nav = true; continue; }
     if (argv[i] === '--runs') args.runs = Number(argv[++i]);
     else if (argv[i] === '--pages') args.pages = argv[++i].split(',').map((s) => s.trim());
     else if (argv[i] === '--out') args.out = path.resolve(argv[++i]);
@@ -206,6 +213,108 @@ async function measure(browser, storageState, pagePath, mode) {
   return { ...timing, ttfb: documentTtfb, bytes, network, cached };
 }
 
+// ------------------------------------------------------------ navigation ---
+
+// Tab bar hops: from -> to. Every tab is a destination once.
+const NAV_HOPS = [
+  ['/pingpong/', '/pingpong/leaderboard/'],
+  ['/pingpong/leaderboard/', '/pingpong/championships/'],
+  ['/pingpong/championships/', '/pingpong/play/'],
+  ['/pingpong/play/', '/pingpong/'],
+];
+// A finger on glass: touchstart -> touchend. ~100 ms is a typical quick tap.
+const TAP_MS = 100;
+
+// off:  Save-Data on, prefetch.js stands down (the baseline).
+// join: Chromium as it is: the navigation joins the in-flight prefetch.
+// hold: navigator.userAgentData hidden, so prefetch.js takes the WebKit/Gecko
+//       path (click held until the prefetch is cached). Models the iPhone
+//       and Firefox gain on the one engine that can throttle.
+const NAV_MODES = ['off', 'join', 'hold'];
+
+async function measureNav(browser, storageState, from, to, mode) {
+  const context = await browser.newContext(contextOptions(storageState));
+  if (mode === 'off') {
+    await context.addInitScript(() => {
+      Object.defineProperty(navigator, 'connection', { value: { saveData: true }, configurable: true });
+    });
+  }
+  if (mode === 'hold') {
+    await context.addInitScript(() => {
+      Object.defineProperty(Navigator.prototype, 'userAgentData', { get: () => undefined, configurable: true });
+    });
+  }
+  const page = await context.newPage();
+  const cdp = await context.newCDPSession(page);
+  await cdp.send('Network.enable');
+  // Warm the static cache on B too, so only B's document crosses the wire.
+  await page.goto(to, { waitUntil: 'load' });
+  await page.goto(from, { waitUntil: 'load' });
+  await page.waitForLoadState('networkidle');
+  await cdp.send('Network.emulateNetworkConditions', PROFILE.conditions);
+
+  let docRequests = 0;
+  const target = new URL(to, BASE_URL).href;
+  // Did B's navigation itself go to the network? A navigation answered by
+  // the prefetch (from the HTTP cache, or joined in flight) does not.
+  cdp.on('Network.responseReceived', (e) => {
+    if (e.type !== 'Document' || e.response.url !== target) return;
+    if (e.response.fromDiskCache || e.response.fromPrefetchCache || e.response.fromServiceWorker) return;
+    docRequests += 1;
+  });
+
+  const box = await page.locator(`nav[aria-label="Primary"] a[href="${to}"]`).boundingBox();
+  const point = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  const tapAt = Date.now();
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [point] });
+  await new Promise((r) => setTimeout(r, TAP_MS));
+  await Promise.all([
+    page.waitForURL(target, { waitUntil: 'load' }),
+    cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }),
+  ]);
+  // FCP can be reported a frame after load; wait for it (bounded).
+  await page.waitForFunction(
+    () => performance.getEntriesByName('first-contentful-paint').length > 0,
+    null, { timeout: 5000 },
+  ).catch(() => {});
+  const t = await page.evaluate(() => {
+    const fcp = performance.getEntriesByName('first-contentful-paint')[0];
+    return { origin: performance.timeOrigin, fcp: fcp ? fcp.startTime : null };
+  });
+  await context.close();
+  return {
+    fcp: t.fcp === null ? null : t.origin + t.fcp - tapAt,
+    commitWait: t.origin - tapAt,
+    requests: docRequests,
+  };
+}
+
+async function runNav(browser, storageState, runs) {
+  const results = {};
+  for (let run = 1; run <= runs; run++) {
+    for (const [from, to] of NAV_HOPS) {
+      for (const mode of NAV_MODES) {
+        const r = await measureNav(browser, storageState, from, to, mode);
+        ((results[`${from} → ${to}`] ||= { off: [], join: [], hold: [] })[mode]).push(r);
+      }
+    }
+    console.error(`nav run ${run}/${runs} done`);
+  }
+  const lines = [
+    '### Tab navigation: tap → FCP of the next tab (warm static cache)',
+    '',
+    '| Hop | FCP off ms | FCP join ms (Δ) | FCP hold ms (Δ) | Navigation hit the network off/join/hold |',
+    '|---|---:|---:|---:|---:|',
+  ];
+  for (const [hop, r] of Object.entries(results)) {
+    const f = (m) => median(r[m].map((x) => x.fcp));
+    const n = (m) => median(r[m].map((x) => x.requests));
+    const off = f('off');
+    lines.push(`| ${hop} | ${ms(off)} | ${ms(f('join'))} (${ms(f('join') - off)}) | ${ms(f('hold'))} (${ms(f('hold') - off)}) | ${n('off')}/${n('join')}/${n('hold')} |`);
+  }
+  return lines.join('\n');
+}
+
 // ------------------------------------------------------------- reporting ---
 
 const median = (xs) => {
@@ -307,6 +416,24 @@ async function main() {
       loginPage.click('button[type="submit"]'),
     ]);
     const storageState = await loginContext.storageState();
+
+    if (args.nav) {
+      await loginContext.close();
+      const report = [
+        `## Tab navigation — median of ${args.runs} runs`,
+        '',
+        `- Revision: \`${gitRevision()}\`, ${new Date().toISOString().slice(0, 10)}`,
+        `- Chromium ${browser.version()}, iPhone 13 viewport, CDP network emulation: ${PROFILE.label}`,
+        `- Tap = touchstart, ${TAP_MS} ms, touchend. FCP is measured from the touchstart. Off = Save-Data (prefetch.js stands down); join = Chromium as is; hold = userAgentData hidden, so prefetch.js holds the click as on WebKit/Gecko.`,
+        '- "Navigation hit the network": 1 = the click\'s navigation fetched B itself; 0 = it was answered by the prefetch.',
+        '',
+        await runNav(browser, storageState, args.runs),
+        '',
+      ].join('\n');
+      console.log(report);
+      writeFileSync(args.out, report);
+      return;
+    }
 
     let pages = await resolvePages(loginPage);
     if (args.pages) pages = pages.filter((p) => args.pages.includes(p.name));

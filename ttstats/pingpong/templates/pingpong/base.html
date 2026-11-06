@@ -89,6 +89,7 @@
          where it only re-asserts an existing subscription. -->
     {{ push_config|json_script:"push-config" }}
     <script defer src="{% static 'pingpong/js/push.js' %}"></script>
+    <script defer src="{% static 'pingpong/js/prefetch.js' %}"></script>
 
     {% block extra_css %}{% endblock %}
 </head>
