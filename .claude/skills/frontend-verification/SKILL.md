@@ -102,6 +102,10 @@ is the throttled timing report (Chromium only, not part of the suite).
   developer sees is the variant. `palette.dark.spec.js` asserts the media
   query actually reached the page before asserting anything else.
 - **`iphone-pwa`** — the only project with service workers allowed (see below).
+- **`android-chrome`** / **`android-firefox`** — `*.android.spec.js`. Chromium
+  as a Pixel 7, and desktop Gecko at a phone viewport with touch (Playwright
+  has no Firefox mobile emulation, so this is the engine, not Fenix). Needs
+  `npx playwright install chromium firefox`.
 
 ## Traps this suite has already hit
 

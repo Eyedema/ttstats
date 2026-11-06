@@ -62,6 +62,7 @@ module.exports = defineConfig({
         /.*\.reduced\.spec\.js/,
         /.*\.desktop\.spec\.js/,
         /.*\.dark\.spec\.js/,
+        /.*\.android\.spec\.js/,
         // The PWA specs need a live service worker; everything here needs it
         // gone. See the two `serviceWorkers` settings below.
         /pwa\.spec\.js/,
@@ -119,6 +120,28 @@ module.exports = defineConfig({
         ...devices['iPhone 13'],
         storageState: STORAGE_STATE,
         colorScheme: 'dark',
+      },
+    },
+    {
+      // Chrome for Android, as far as Playwright can stand in for it:
+      // Chromium with the Pixel 7 profile (mobile viewport, touch, isMobile).
+      name: 'android-chrome',
+      dependencies: ['setup'],
+      testMatch: /.*\.android\.spec\.js/,
+      use: { ...devices['Pixel 7'], storageState: STORAGE_STATE },
+    },
+    {
+      // Firefox for Android, approximately: Playwright's Firefox has no
+      // isMobile, so this is desktop Gecko at a phone viewport with touch.
+      // It exercises the engine (touch events, CSS, CSP), not Fenix's shell.
+      name: 'android-firefox',
+      dependencies: ['setup'],
+      testMatch: /.*\.android\.spec\.js/,
+      use: {
+        browserName: 'firefox',
+        viewport: { width: 412, height: 915 },
+        hasTouch: true,
+        storageState: STORAGE_STATE,
       },
     },
     {
