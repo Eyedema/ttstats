@@ -284,6 +284,20 @@ class TestScriptLoading:
             assert re.search(r"\b(defer|async)\b", tag), tag
 
 
+@pytest.mark.django_db
+class TestViewTransitionNames:
+    """The persistent chrome carries the classes app.css names for
+    cross-document view transitions (KAN-125), each exactly once: a duplicate
+    view-transition-name aborts the transition. Browser behaviour is in
+    tests/e2e/view-transitions.*.spec.js."""
+
+    def test_each_chrome_class_renders_once(self):
+        user, _ = _verified_user_with_player()
+        body = _login_client(user).get(reverse("pingpong:dashboard")).content.decode()
+        for cls in ("vt-header", "vt-title", "vt-tab-bar", "vt-sidebar", "vt-drawer"):
+            assert len(re.findall(rf'class="[^"]*\b{cls}\b', body)) == 1, cls
+
+
 # ---------------------------------------------------------------------------
 # The icon sprite
 # ---------------------------------------------------------------------------

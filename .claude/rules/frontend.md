@@ -177,6 +177,21 @@ tap that never registered.
 - `.chrome-blur` + `.chrome-edge-bottom` are the translucent nav surfaces. Any
   new frosted surface must be covered by the reduced-transparency block.
 - The mobile drawer enters and leaves from the left; keep the transforms mirrored.
+- **Page transitions are cross-document view transitions, CSS only** (KAN-125):
+  `@view-transition { navigation: auto }` in app.css; Safari 18.2+/Chrome 126+,
+  ignored by Firefox (today's behaviour). Both pages must opt in, so a page
+  opts out by re-declaring `navigation: none` (the scoreboard does, and clears
+  every name: nothing may sit between a tap and a point).
+- **Persistent chrome is named via `.vt-*` classes** (`app-header`,
+  `page-title`, `tab-bar`, `app-sidebar`, `app-drawer`, `nav-progress`).
+  A duplicate name aborts the transition; it is safe only because the
+  mobile and desktop chrome are `display:none` at each other's widths.
+  Solid bars hold the old snapshot and fade the new one over it, or WebKit
+  shows content through them mid-fade.
+- `::view-transition` paints the court token (no white flash in dark). Reduce
+  Motion re-declares `navigation: none` in the outside-every-layer block.
+- Specs: `view-transitions.*.spec.js`; `.android.spec.js` runs in the
+  local-only `android-chrome` (Pixel 7) and `android-firefox` projects.
 
 ## Page weight and speed (KAN-119)
 
