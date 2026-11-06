@@ -326,4 +326,129 @@ a transition. A screenshot of the leaderboard in Gecko at a phone viewport,
 with the old CSS and the new, differs only in the pulsing live dot, and no
 console error is raised: Firefox users get exactly today's navigation.
 
-_Pending: prefetch._
+
+### After S10.4 (KAN-124): tap-intent prefetch
+
+2026-11-06, `feature/kan-124`. Chromium 151.0.7922.34, WebKit 26.5 and
+Firefox (Playwright 1.62.1 builds).
+
+**What shipped.** `pingpong/js/prefetch.js` (deferred, plain JS, no inline
+script) fetches an `a[data-prefetch]` page on `touchstart` (or `mousedown`)
+with `Purpose: prefetch`. `ttstats/prefetch.py` (`PrefetchCacheMiddleware`)
+marks only that response `Cache-Control: private, max-age=5`; every other
+HTML response stays uncacheable, and a view's own `Cache-Control` wins. The
+click's navigation is then answered from the HTTP cache. Allowlist: the four
+tabs and the menu rows (all idempotent GET pages; Admin opts out). Code
+denylist on top (`/live/`, `confirm/`, `join/`, logout, admin, `/accounts/`,
+`/webauthn/`, edit/delete/start/register/convert/switch), plus Save-Data.
+
+#### Spike: a / b / c in each engine
+
+Method: a proxy in front of the e2e server adding 400 ms per request and
+logging every document request; page = leaderboard, logged in; the prefetch
+response given `private, max-age=10` by the proxy (the speculation-rule and
+link rows without it). "Hits" = server requests for the target URL.
+Scripts were throwaway (not committed); the lasting checks are the e2e specs.
+
+| | WebKit (iOS Safari) | Chromium (Chrome Android) | Gecko (Firefox Android) |
+|---|---|---|---|
+| a) `<script type=speculationrules>` prefetch | `HTMLScriptElement.supports()` says **true**, but **nothing is fetched** (1 hit, the navigation). In WebKit trunk, disabled again in April 2026 for regressions; not on by default in any shipping Safari | works: 1 hit, `Sec-Purpose: prefetch`, nav commits in ~40 ms | not fetched (Mozilla: intent to prototype, May 2026) |
+| b1) `<link rel=prefetch>` | `relList.supports` false, not fetched | works, reused | works, reused |
+| b2) `fetch()` + `private, max-age`, **finished**, then tap | **reused only with a disk cache** (Playwright's ephemeral context has none: 2 hits; a persistent profile, as Safari and the PWA run: 1 hit) | reused | reused (memory cache, ephemeral too) |
+| b3) `fetch()` **in flight** (100 ms) then tap | **not joined**: 2 hits, slower than no prefetch (666 vs ~430 ms to commit) | **joined**: 1 hit, commits when the prefetch's headers land | **not joined**: 2 hits (561 ms) |
+| c) `hx-boost` + htmx `preload` | not tried (see below) | | |
+
+**Per engine, what ships:**
+
+- **iOS Safari / installed PWA (WebKit):** (b) with the held click. Reuse
+  proven in a persistent profile; tap → FCP gain modelled at −44 to −103 ms
+  (WebKit can't be throttled). Safari private browsing has no HTTP cache:
+  the first held tap costs the prefetch's duration, then it turns itself off.
+- **Chrome for Android (Chromium):** (b), click never held; the navigation
+  joins the in-flight prefetch. −114 to −119 ms measured on slow 4G.
+- **Firefox for Android (Gecko):** (b) with the held click, as WebKit (Gecko
+  doesn't join in flight either). Reuse proven at a phone viewport; gain as
+  the held model. Gecko does honour `<link rel=prefetch>`, but it is the same
+  finished-only reuse, so it would buy nothing over `fetch()`.
+
+**Why (b), and the shape of it.** (a) does nothing on iOS, the main target,
+and nothing on Firefox. (b) works in all three once the prefetch has
+finished. On slow 4G it never has: a tap's touchstart → click is ~100 ms and
+a page is ≥ 400 ms RTT + transfer, so the click always lands mid-prefetch. In
+Chromium that's fine (joined). In WebKit and Gecko it would be a double
+download, so `prefetch.js` holds that click (`preventDefault`) until the
+prefetch is in the cache, then `location.assign()`s: one request, and the
+navigation is a cache hit. Chromium is recognised by `navigator.userAgentData`
+(the only engine with it) and is never held. If a held navigation turns out
+not to be a cache hit (an engine with no HTTP cache: Safari private browsing,
+Playwright's default WebKit context), prefetching switches itself off for
+the tab's session (`sessionStorage`), so that user pays the extra wait once.
+Hit test: `deliveryType === 'cache'` (WebKit), `transferSize === 0`
+(Chromium, Gecko) or `encodedBodySize === 0` (WebKit reports ~300 B of
+cached headers as transferSize).
+
+A layered "speculation rules where supported + JS elsewhere" adds a header or
+rules file for an engine (Chromium) where the JS path already reuses in
+flight, and WebKit's `supports()` returning true while doing nothing would
+make the feature test lie. One mechanism everywhere; no double fetch anywhere.
+
+**(c) rejected without building it.** Boosted tabs swap `<body>` in place:
+inline scripts, Alpine init on swapped markup, Chart.js pages and history
+all need re-verifying, and KAN-125's cross-document view transitions only
+fire on real navigations, so every tab would lose them. (b) keeps real
+navigations, so transitions compose with it.
+
+**No hover prefetch.** A 65 ms mouseover prefetch would help desktop, which
+is on fast links, and it widens the one stale case: a prefetch, then within
+the 5 s a POST whose redirect lands on that URL (answered from the cache).
+With touchstart/mousedown the gap to the navigation is ~100 ms.
+
+#### Tap → FCP, slow 4G (Chromium, `npm run perf -- --nav`)
+
+iPhone 13 viewport, 400 kbit/s / 400 ms RTT, warm static cache, median of 5.
+Tap = CDP touchStart, 100 ms, touchEnd; FCP measured from the touchstart.
+Off = Save-Data (prefetch.js stands down); join = Chromium as shipped; hold =
+`navigator.userAgentData` hidden, so Chromium takes the WebKit/Gecko path:
+the closest model of an iPhone, since WebKit can't be throttled.
+
+| Hop | FCP off ms | join ms (Δ) | hold ms (Δ) | Navigation hit the network off/join/hold |
+|---|---:|---:|---:|---:|
+| Today → Table | 737 | 617 (−119) | 692 (−44) | 1/0/0 |
+| Table → Cups | 734 | 618 (−116) | 659 (−76) | 1/0/0 |
+| Cups → Play | 733 | 619 (−114) | 631 (−103) | 1/0/0 |
+| Play → Today | 735 | 619 (−116) | 654 (−81) | 1/0/0 |
+
+- **Chromium (Android Chrome): −114 to −119 ms**, i.e. the whole tap
+  duration, on every tab.
+- **Held path (model of iOS / Firefox): −44 to −103 ms.** Less than the tap,
+  because a held navigation starts only once the prefetch's whole body is in
+  the cache, where a joined one streams. Smaller pages gain more (Play, the
+  smallest page, nearly the full tap; Table, the largest, least).
+- Same request count as before: the click's navigation never reached the
+  network (0) with prefetch on.
+
+**Functional reuse in e2e** (one network fetch per navigation: the shown
+document carries `private, max-age=5`, which only a prefetch response has):
+WebKit/iPhone 13 in a persistent context (`prefetch.spec.js`), Chromium/Pixel
+7 and Gecko 412×915+touch (`prefetch.android.spec.js`, an approximation of
+Firefox Android: Playwright's Firefox has no mobile mode), desktop Chromium
+with mousedown (`prefetch.desktop.spec.js`). Proven to fail when the hold is
+removed (WebKit and Gecko then show a second, uncached render).
+
+**Composes with S10.5's view transitions.** Every prefetched tab tap is
+still a real cross-document navigation (joined in Chromium,
+`location.assign()` after a hold in WebKit), so `pagereveal` carries a
+transition: asserted on a reused navigation in Chromium/Pixel 7 and in
+persistent-profile WebKit. Gecko has no cross-document transitions.
+
+**Bytes.** `prefetch.js` is 2.6 KB on the wire (2,197 B Brotli body),
++1 request on every page; `budgets.spec.js` rows raised by exactly that
+(+3 KB js/total, +1 request), on top of KAN-125/126. Measured after all
+three: 38.7 / 8.0 / 101.6 KB, 11 requests on the dashboard; chart pages
+98.8 KB JS, 12 requests.
+
+**Not verified:** a real iPhone or Android device; Firefox for Android's
+shell (only Gecko on desktop); prod's HTTP/2 (both requests share one
+connection there, so the unheld double-fetch would have been cheaper, but
+still a second download).
+

@@ -21,22 +21,23 @@ const { resolvePages, bucketFor } = require('./perf-pages');
  * page made up to network idle (service workers are blocked in this project).
  */
 const BUDGETS = {
-  // Measured (WebKit, cold, Brotli) after KAN-125 + KAN-126 in the comment. Budgets
-  // are the KAN-122 rows (measured plus ~5%) raised by exactly what S10.6's
-  // pull_to_refresh.js costs on every page: +3 KB js/total (2.5 KB on the
-  // wire with headers), +1 request. Chart.js alone is ~60 KB compressed, so it
-  // cannot land on a page budgeted without it. CSS was raised 8 -> 8.5 by
-  // KAN-125: view transitions (+0.27 KB) left it at 7.97 KB, no headroom.
-  // S10.1 baseline (gzip) is in
+  // Measured (WebKit, cold, Brotli) after KAN-124/125/126 in the comment.
+  // Budgets are the KAN-122 rows (measured plus ~5%) raised by exactly what
+  // each later every-page addition costs: S10.6's pull_to_refresh.js (+3 KB
+  // js/total, 2.5 KB on the wire with headers, +1 request) and S10.4's
+  // prefetch.js (+3 KB js/total, 2.6 KB on the wire, +1 request). CSS was
+  // raised 8 -> 8.5 by KAN-125: view transitions (+0.27 KB) left it at
+  // 7.97 KB, no headroom. Chart.js alone is ~60 KB compressed, so it cannot
+  // land on a page budgeted without it. S10.1 baseline (gzip) is in
   // docs/decisions/kan-119-performance.md.
   //                  js KB      css KB     total KB      requests
-  dashboard:       { js: 39,  css: 8.5, total: 104, requests: 11 }, // 36.1 / 8.0 / 98.9 / 10
-  play:            { js: 39,  css: 8.5, total: 103, requests: 11 }, // 36.1 / 8.0 / 98.3 / 10
-  leaderboard:     { js: 39,  css: 8.5, total: 105, requests: 11 }, // 36.1 / 8.0 / 100 / 10
-  'match list':    { js: 39,  css: 8.5, total: 106, requests: 11 }, // 36.1 / 8.0 / 100.7 / 10
-  'match detail':  { js: 102, css: 8.5, total: 169, requests: 12 }, // 96.2 / 8.0 / 160.9 / 11
-  'player detail': { js: 102, css: 8.5, total: 173, requests: 12 }, // 96.2 / 8.0 / 164.9 / 11
-  'head-to-head':  { js: 102, css: 8.5, total: 172, requests: 12 }, // 96.2 / 8.0 / 163.1 / 11
+  dashboard:       { js: 42,  css: 8.5, total: 107, requests: 12 }, // 38.7 / 8.0 / 101.6 / 11
+  play:            { js: 42,  css: 8.5, total: 106, requests: 12 }, // 38.7 / 8.0 / 101.0 / 11
+  leaderboard:     { js: 42,  css: 8.5, total: 108, requests: 12 }, // 38.7 / 8.0 / 102.6 / 11
+  'match list':    { js: 42,  css: 8.5, total: 109, requests: 12 }, // 38.7 / 8.0 / 103.4 / 11
+  'match detail':  { js: 105, css: 8.5, total: 172, requests: 13 }, // 98.8 / 8.0 / 163.5 / 12
+  'player detail': { js: 105, css: 8.5, total: 176, requests: 13 }, // 38.7 / 8.0 / 101.0 / 11er detail
+  'head-to-head':  { js: 105, css: 8.5, total: 175, requests: 13 }, // 98.8 / 8.0 / 165.9 / 12
 };
 
 // WebKit, like Safari, only advertises Brotli over HTTPS. Prod is HTTPS, so
