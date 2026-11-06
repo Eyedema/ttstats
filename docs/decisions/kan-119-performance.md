@@ -323,6 +323,19 @@ Scripts were throwaway (not committed); the lasting checks are the e2e specs.
 | b3) `fetch()` **in flight** (100 ms) then tap | **not joined**: 2 hits, slower than no prefetch (666 vs ~430 ms to commit) | **joined**: 1 hit, commits when the prefetch's headers land | **not joined**: 2 hits (561 ms) |
 | c) `hx-boost` + htmx `preload` | not tried (see below) | | |
 
+**Per engine, what ships:**
+
+- **iOS Safari / installed PWA (WebKit):** (b) with the held click. Reuse
+  proven in a persistent profile; tap → FCP gain modelled at −44 to −103 ms
+  (WebKit can't be throttled). Safari private browsing has no HTTP cache:
+  the first held tap costs the prefetch's duration, then it turns itself off.
+- **Chrome for Android (Chromium):** (b), click never held; the navigation
+  joins the in-flight prefetch. −114 to −119 ms measured on slow 4G.
+- **Firefox for Android (Gecko):** (b) with the held click, as WebKit (Gecko
+  doesn't join in flight either). Reuse proven at a phone viewport; gain as
+  the held model. Gecko does honour `<link rel=prefetch>`, but it is the same
+  finished-only reuse, so it would buy nothing over `fetch()`.
+
 **Why (b), and the shape of it.** (a) does nothing on iOS, the main target,
 and nothing on Firefox. (b) works in all three once the prefetch has
 finished. On slow 4G it never has: a tap's touchstart → click is ~100 ms and
@@ -374,8 +387,8 @@ the closest model of an iPhone, since WebKit can't be throttled.
   duration, on every tab.
 - **Held path (model of iOS / Firefox): −44 to −103 ms.** Less than the tap,
   because a held navigation starts only once the prefetch's whole body is in
-  the cache, where a joined one streams. Smaller pages gain more (Play,
-  9 KB, nearly the full tap; Table, the largest, least).
+  the cache, where a joined one streams. Smaller pages gain more (Play, the
+  smallest page, nearly the full tap; Table, the largest, least).
 - Same request count as before: the click's navigation never reached the
   network (0) with prefetch on.
 
