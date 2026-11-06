@@ -13,6 +13,10 @@ sqlparse==0.5.5
 redis==5.0.1
 django-redis==5.4.0
 whitenoise==6.11.0
+# With brotli importable, WhiteNoise's Compressed* storage writes a .br beside
+# every .gz at collectstatic and serves it to `Accept-Encoding: br` (KAN-122).
+# Ships manylinux wheels for cp312, so --only-binary=:all: still holds.
+brotli==1.2.1
 pytest-cov
 pytest-xdist
 psycopg2-binary

@@ -49,7 +49,8 @@ alias dweb='docker compose -f compose.prod.yml exec -T web python manage.py'
   **not** run inside a deploy. It is a separate, manually invoked command, which
   is exactly why `backfill_clubs` exists alongside the data migration.
 - **`entrypoint.sh` runs `collectstatic` under `set -e`.** A vendored file
-  missing its `.map` sibling fails the *deploy*, not just the page. Confirm CI's
+  whose `sourceMappingURL` names a missing map fails the *deploy*, not just the
+  page (`vendor_assets.mjs` strips those comments since KAN-122). Confirm CI's
   asset build was green before starting a migration sequence.
 
 ### Snapshot procedure

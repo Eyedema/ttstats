@@ -1,12 +1,13 @@
 ---
 paths:
   - "ttstats/ttstats/sentry.py"
+  - "ttstats/ttstats/server_timing.py"
   - "ttstats/pingpong/observability.py"
   - "ttstats/ttstats/settings/prod.py"
   - "ttstats/pingpong/managers.py"
 ---
 
-# Observability: logs, tenancy canary, Sentry
+# Observability: logs, tenancy canary, Sentry, Server-Timing
 
 ## Request context on every log line
 
@@ -55,3 +56,18 @@ Init runs in `settings/prod.py` at **import time**, to catch boot failures.
   status + route). 403 is the one worth setting.
 - `DisallowedHost` is in `IGNORED_ERRORS`; `SuspiciousOperation` deliberately isn't.
 - **No browser SDK.** Adding one needs `connect-src` in `prod.py` and `PROD_CSP`.
+
+## Server-Timing on every rendered response
+
+`ServerTimingMiddleware` (`ttstats/server_timing.py`, all environments) adds
+`app;dur=<ms>, db;dur=<ms>;desc="<n> queries"`; `npm run perf` prints the medians.
+
+- **Directly below WhiteNoise** in `base.py`: static hits never reach it, and
+  `app` covers sessions, auth, the club lookup and gzip.
+- **Per request, per thread:** a fresh timer inside `connection.execute_wrapper`,
+  a context manager that removes itself even when the view raises. Never
+  register a wrapper globally.
+- An existing `Server-Timing` header is extended, not replaced. Streaming
+  responses report time-to-headers; queries run while the body streams are uncounted.
+- No `cache` entry: no hook is as cheap as `execute_wrapper`. Cost is ~3 us per
+  request + ~0.3 us per query.

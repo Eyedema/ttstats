@@ -498,6 +498,50 @@
   }
 }
 
+/* --- Pull to refresh (KAN-126) ------------------------------------------ */
+
+/* Created by pull_to_refresh.js, never rendered by the server, so without JS
+   there is nothing to fail open. It sits under the header (z-30) and slides
+   out from behind it by --ptr-y; reduced motion pins it in place
+   (.is-static) and only the text changes. Inert to taps throughout.
+
+   Outside @layer components on purpose: the class names only appear in JS,
+   which Tailwind does not scan, and a layered rule it cannot see is purged. */
+/* Only while ours is live: stops a browser's native pull-to-refresh (and the
+   chained overscroll glow) from doubling up with it. A browser tab never
+   gets this class, so its native gesture is untouched. */
+html.ptr-on { overscroll-behavior-y: contain; }
+
+.ptr {
+  position: fixed;
+  left: 50%;
+  top: calc(60px + env(safe-area-inset-top, 0px));
+  z-index: 25;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border: 2px solid rgb(var(--court-edge));
+  background: rgb(var(--court-overlay));
+  color: rgb(var(--bone));
+  font-size: 13px;
+  font-weight: 800;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transform: translate(-50%, calc(var(--ptr-y, 0px) - 100%));
+}
+
+.ptr.is-visible { opacity: 1; }
+.ptr.is-static { transform: translate(-50%, 0.5rem); }
+.ptr.is-settling { transition: transform 280ms cubic-bezier(0.2, 0.9, 0.3, 1), opacity 200ms; }
+.ptr svg { width: 1rem; height: 1rem; transform: rotate(var(--ptr-r, 0deg)); }
+.ptr.is-refreshing svg { animation: ptr-spin 700ms linear infinite; }
+
+@keyframes ptr-spin {
+  to { transform: rotate(360deg); }
+}
+
 @layer utilities {
   /* htmx swaps this class on during a request. */
   .htmx-indicator {
@@ -507,6 +551,81 @@
   .htmx-request .htmx-indicator {
     display: inline;
   }
+}
+
+/* --- Cross-document view transitions (KAN-125) ----------------------------
+   Same-origin page loads cross-fade instead of blinking, in browsers that
+   support it (Safari 18.2+, Chrome 126+); everywhere else this is ignored and
+   navigation is exactly what it was. Both pages must opt in, which is how the
+   scoreboard opts out: it re-declares `navigation: none` (scoreboard.html).
+
+   The chrome is named so it stays put while only the content moves. Names
+   must be unique per page: the header and tab bar are display:none at lg and
+   the sidebar below it, and display:none elements are not captured. The
+   drawer and progress bar are named so they keep their z-order over the
+   header during the swap instead of dropping under it with the root
+   snapshot; both simply fade out. */
+@view-transition {
+  navigation: auto;
+}
+
+.vt-header { view-transition-name: app-header; }
+.vt-title { view-transition-name: page-title; }
+.vt-tab-bar { view-transition-name: tab-bar; }
+.vt-sidebar { view-transition-name: app-sidebar; }
+.vt-drawer { view-transition-name: app-drawer; }
+.nav-progress { view-transition-name: nav-progress; }
+
+/* The court, not the UA's white, behind the snapshots: no flash in dark. */
+::view-transition {
+  background: theme('colors.court.DEFAULT');
+}
+
+::view-transition-group(*) {
+  animation-duration: 180ms;
+}
+
+/* Solid bars stay solid: the old bar holds at full opacity and the new one
+   fades in over it. The default two-way cross-fade leaves the bar briefly
+   see-through in WebKit, with the content showing under the tab labels. */
+::view-transition-old(app-header),
+::view-transition-old(tab-bar),
+::view-transition-old(app-sidebar) {
+  animation: none;
+}
+
+::view-transition-new(app-header),
+::view-transition-new(tab-bar),
+::view-transition-new(app-sidebar) {
+  mix-blend-mode: normal;
+}
+
+/* The title changes width page to page; draw both at natural size, pinned
+   left, rather than stretching the old text into the new box. */
+::view-transition-old(page-title),
+::view-transition-new(page-title) {
+  inline-size: auto;
+  block-size: 100%;
+  object-fit: none;
+  object-position: left center;
+}
+
+/* Content: out quickly, in with a short rise. Under 200ms in total so it
+   reads as acknowledgement, never as waiting. */
+::view-transition-old(root) {
+  animation: 120ms cubic-bezier(0.4, 0, 1, 1) both vt-fade-out;
+}
+
+::view-transition-new(root) {
+  animation: 180ms cubic-bezier(0, 0, 0.2, 1) both vt-rise-in;
+}
+
+@keyframes vt-fade-out {
+  to { opacity: 0; }
+}
+
+@keyframes vt-rise-in {
+  from { opacity: 0; transform: translateY(6px); }
 }
 
 /* Outside every @layer: these are user preferences and must win over both
@@ -531,6 +650,19 @@
 
   html {
     scroll-behavior: auto !important;
+  }
+
+  /* No page transition at all: an instant swap, as before KAN-125. `*`
+     does not reach the view-transition pseudos, hence the explicit
+     belt-and-braces rule for a browser that keeps the transition. */
+  @view-transition {
+    navigation: none;
+  }
+
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
   }
 }
 

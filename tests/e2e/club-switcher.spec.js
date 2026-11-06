@@ -80,10 +80,17 @@ test.describe('club switcher', () => {
       .locator('button[type="submit"]:not([aria-current="true"])')
       .first();
 
-    await Promise.all([page.waitForURL(/\/pingpong\/$/), inactive.click()]);
+    await inactive.click();
 
-    const after = await page.locator('header [data-active-club]').innerText();
-    expect(after).not.toBe(before);
+    // Retrying assertions, not waitForURL plus a one-shot read. The page is
+    // already at /pingpong/, so waitForURL resolved before the POST landed and
+    // the read raced the old header. Nor can the URL prove we landed on Today:
+    // applyProdCSP's route.fetch() follows the redirect itself, so the browser
+    // stays at /club/switch/ showing the dashboard. Assert on the content.
+    await expect(page.locator('header [data-active-club]')).not.toHaveText(before);
+    await expect(page.locator('main [data-flash]').filter({ hasText: 'Now viewing' }))
+      .toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Waiting on you' })).toBeVisible();
   });
 
   test('nothing is blocked under the production CSP', async ({ page }) => {

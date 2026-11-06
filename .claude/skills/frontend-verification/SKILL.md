@@ -84,7 +84,10 @@ npx playwright show-report             # last run's HTML report
 `scripts/e2e_server.sh` owns the server: it rebuilds the CSS (so the suite
 never runs against a stale stylesheet), migrates a **throwaway SQLite file**
 via `TTSTATS_SQLITE_NAME`, clears `DATABASE_URL` so it can never touch the
-Supabase clone of prod, and seeds a fixture with `manage.py seed_e2e`.
+Supabase clone of prod, seeds a fixture with `manage.py seed_e2e`, and serves
+static the way prod does (`settings/e2e.py`: collectstatic, hashed + gzipped,
+WhiteNoise). `budgets.spec.js` holds the page-weight budgets; `npm run perf`
+is the throttled timing report (Chromium only, not part of the suite).
 
 ### Projects, and why each exists
 
@@ -99,6 +102,10 @@ Supabase clone of prod, and seeds a fixture with `manage.py seed_e2e`.
   developer sees is the variant. `palette.dark.spec.js` asserts the media
   query actually reached the page before asserting anything else.
 - **`iphone-pwa`** — the only project with service workers allowed (see below).
+- **`android-chrome`** / **`android-firefox`** — `*.android.spec.js`. Chromium
+  as a Pixel 7, and desktop Gecko at a phone viewport with touch (Playwright
+  has no Firefox mobile emulation, so this is the engine, not Fenix). Needs
+  `npx playwright install chromium firefox`.
 
 ## Traps this suite has already hit
 

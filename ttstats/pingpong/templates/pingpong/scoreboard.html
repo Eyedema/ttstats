@@ -4,6 +4,21 @@
 {% block title %}Live Scoreboard{% endblock %}
 
 {% comment %}
+No page transition into or out of the scoreboard (KAN-125). A cross-document
+view transition needs both pages to opt in, so re-declaring `none` here makes
+entering and leaving an instant swap: nothing is snapshotted over the tap zones
+and the first tap is never held behind an animation. The names are cleared too,
+so the chrome hidden under the board is never captured. Inline because it is
+one page's override of app.css; prod's style-src allows it.
+{% endcomment %}
+{% block extra_css %}
+<style>
+  @view-transition { navigation: none; }
+  * { view-transition-name: none !important; }
+</style>
+{% endblock %}
+
+{% comment %}
 The live scoreboard: read from a metre away, driven one-handed.
 
 Two tap zones floor to ceiling -- the whole coloured half IS the button, so
@@ -28,6 +43,7 @@ POST queue, the no-alert error toast. Read its comments before touching it.
 {{ bootstrap|json_script:"scoreboard-bootstrap" }}
 <div
   id="scoreboard"
+  data-no-pull-refresh
   class="fixed inset-0 z-50 flex select-none flex-col bg-court text-bone"
   x-data="scoreboardApp()"
   x-init="init()"

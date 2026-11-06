@@ -59,3 +59,9 @@ tests/e2e/.auth/
 # screenshots taken from it. Both are regenerable and neither belongs in git.
 ttstats/demo.sqlite3
 design-screenshots/
+
+# Prod-like static for the e2e / perf servers, and the perf report
+ttstats/staticfiles_e2e/
+ttstats/staticfiles_perf/
+ttstats/perf.sqlite3
+perf-report.md
