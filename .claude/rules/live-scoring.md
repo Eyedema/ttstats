@@ -28,6 +28,12 @@ paths:
 - `GameForm.clean()` defers to it; the Alt+1..4 presets in `game_form.html` come
   from `common_final_scores()` via `json_script`.
 
+## The scoreboard opts out of pull to refresh
+
+`#scoreboard` carries `data-no-pull-refresh` (KAN-126): a reload mid-rally
+would lose taps, so `pull_to_refresh.js` attaches nothing there. Keep it on
+the root (`test_scoreboard.py::TestScoreboardPage`).
+
 ## The point log is the record; `live_state` never was
 
 `Match.live_state["events"]` is capped at `live_scoring.MAX_EVENTS`, exists only

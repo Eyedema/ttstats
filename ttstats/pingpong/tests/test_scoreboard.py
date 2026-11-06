@@ -1,5 +1,6 @@
 """Tests for the Live Scoreboard feature (KAN-4 epic)."""
 import json
+import re
 
 import pytest
 from django.urls import reverse
@@ -678,6 +679,18 @@ class TestScoreboardPage:
         assert b'addPoint(' in resp.content
         # wake lock acquisition in client JS
         assert b"wakeLock" in resp.content
+
+    def test_scoreboard_opts_out_of_pull_to_refresh(self, auth_client):
+        """KAN-126: a pull on the scoreboard must never reload it mid-rally.
+
+        pull_to_refresh.js stands down for the whole page when any element
+        carries data-no-pull-refresh; the scoreboard root is that element.
+        """
+        match, p1, _ = _make_live_match()
+        client = auth_client(p1.user)
+        body = client.get(reverse("pingpong:live_scoreboard", args=[match.pk])).content.decode()
+        root = re.search(r'<div\s+id="scoreboard"[^>]*>', body)
+        assert root and "data-no-pull-refresh" in root.group(0)
 
     def test_non_scorekeeper_gets_403(self, auth_client):
         match, _, p2 = _make_live_match()
