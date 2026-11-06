@@ -43,6 +43,7 @@ POST queue, the no-alert error toast. Read its comments before touching it.
 {{ bootstrap|json_script:"scoreboard-bootstrap" }}
 <div
   id="scoreboard"
+  data-no-pull-refresh
   class="fixed inset-0 z-50 flex select-none flex-col bg-court text-bone"
   x-data="scoreboardApp()"
   x-init="init()"

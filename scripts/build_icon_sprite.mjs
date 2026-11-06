@@ -41,8 +41,9 @@ const ICONS = [
   'clock', 'cloud-rain', 'external-link', 'eye', 'file-text', 'flame', 'funnel',
   'hash', 'history', 'info', 'key', 'keyboard', 'layout-dashboard',
   'layout-grid', 'lightbulb', 'list', 'lock', 'log-out', 'map-pin', 'menu',
-  'pause', 'pencil', 'play', 'plus', 'rotate-ccw', 'save', 'settings', 'smile',
-  'swords', 'trending-down', 'trending-up', 'triangle-alert', 'trophy',
+  'pause', 'pencil', 'play', 'plus', 'refresh-cw', 'rotate-ccw', 'save',
+  'settings', 'smile', 'swords', 'trending-down', 'trending-up',
+  'triangle-alert', 'trophy',
   'undo-2', 'user-plus', 'users', 'wifi-off', 'x', 'zap',
   // Achievement badge glyphs. These are chosen by *data* --
   // achievement_definitions.py stores a Lucide name per achievement -- so they

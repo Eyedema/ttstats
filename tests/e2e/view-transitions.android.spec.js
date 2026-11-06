@@ -18,6 +18,9 @@ const {
 
 const DARK_COURT = 'rgb(11, 18, 32)';
 
+// page.route (applyProdCSP) skips requests from a worker-controlled page.
+test.use({ serviceWorkers: 'block' });
+
 function engineHasCrossDocumentVT(projectName) {
   return projectName === 'android-chrome';
 }

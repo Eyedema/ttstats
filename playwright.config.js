@@ -126,26 +126,26 @@ module.exports = defineConfig({
         colorScheme: 'dark',
       },
     },
-    // Android. Not in CI's project list (CI installs only WebKit); run them
-    // locally when a change depends on the engine, e.g. view transitions.
     {
+      // Chrome for Android, as far as Playwright can stand in for it:
+      // Chromium with the Pixel 7 profile (mobile viewport, touch, isMobile).
       name: 'android-chrome',
       dependencies: ['setup'],
       testMatch: /.*\.android\.spec\.js/,
-      use: { ...devices['Pixel 7'], storageState: STORAGE_STATE, serviceWorkers: 'block' },
+      use: { ...devices['Pixel 7'], storageState: STORAGE_STATE },
     },
     {
-      // An approximation of Firefox for Android: Playwright's Firefox has no
+      // Firefox for Android, approximately: Playwright's Firefox has no
       // isMobile, so this is desktop Gecko at a phone viewport with touch.
+      // It exercises the engine (touch events, CSS, CSP), not Fenix's shell.
       name: 'android-firefox',
       dependencies: ['setup'],
       testMatch: /.*\.android\.spec\.js/,
       use: {
         browserName: 'firefox',
-        viewport: { width: 412, height: 839 },
+        viewport: { width: 412, height: 915 },
         hasTouch: true,
         storageState: STORAGE_STATE,
-        serviceWorkers: 'block',
       },
     },
     {

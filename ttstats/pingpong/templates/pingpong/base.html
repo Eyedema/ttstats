@@ -89,6 +89,8 @@
          where it only re-asserts an existing subscription. -->
     {{ push_config|json_script:"push-config" }}
     <script defer src="{% static 'pingpong/js/push.js' %}"></script>
+    {# Installed-app pull to refresh; opt a page out with data-no-pull-refresh. #}
+    <script defer src="{% static 'pingpong/js/pull_to_refresh.js' %}"></script>
 
     {% block extra_css %}{% endblock %}
 </head>

@@ -267,6 +267,15 @@ class TestScriptLoading:
         assert re.search(r"\bdefer\b", tags[alpine[0]])
         assert htmx[0] < alpine[0]
 
+    def test_pull_to_refresh_is_deferred_on_every_page(self):
+        """KAN-126. The page opts out with a marker, not by omitting the tag."""
+        user, _ = _verified_user_with_player()
+        body = _login_client(user).get(reverse("pingpong:dashboard")).content.decode()
+        tags = [t for t in self._script_tags(body) if "pull_to_refresh" in t]
+        assert len(tags) == 1
+        assert re.search(r"\bdefer\b", tags[0])
+        assert "data-no-pull-refresh" not in body
+
     def test_no_external_script_in_head_blocks_the_parser(self):
         user, _ = _verified_user_with_player()
         body = _login_client(user).get(reverse("pingpong:dashboard")).content.decode()
@@ -356,6 +365,20 @@ class TestIconSprite:
             used |= set(re.findall(r'\{%\s*icon\s+"([a-z0-9-]+)"', path.read_text()))
 
         assert used <= defined, f"missing from the sprite: {sorted(used - defined)}"
+
+    def test_every_icon_a_script_asks_for_is_in_the_sheet(self):
+        """pull_to_refresh.js builds its indicator from the sprite (KAN-126).
+
+        A name inside JS is invisible to the template scan above.
+        """
+        import pathlib
+        from django.conf import settings
+
+        js = (pathlib.Path(settings.BASE_DIR) / "pingpong/static/pingpong/js/pull_to_refresh.js").read_text()
+        defined = set(re.findall(r'id="i-([a-z0-9-]+)"', self._sprite()))
+        wanted = set(re.findall(r"#i-([a-z0-9-]+)", js)) | set(re.findall(r"'(wifi-off|refresh-cw)'", js))
+        assert {"refresh-cw", "wifi-off"} <= wanted
+        assert wanted <= defined, f"missing from the sprite: {sorted(wanted - defined)}"
 
     def test_every_achievement_icon_is_in_the_sheet(self):
         """Achievement glyphs are chosen by data, not by scanning templates.

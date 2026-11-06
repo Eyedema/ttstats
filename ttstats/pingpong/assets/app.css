@@ -498,6 +498,50 @@
   }
 }
 
+/* --- Pull to refresh (KAN-126) ------------------------------------------ */
+
+/* Created by pull_to_refresh.js, never rendered by the server, so without JS
+   there is nothing to fail open. It sits under the header (z-30) and slides
+   out from behind it by --ptr-y; reduced motion pins it in place
+   (.is-static) and only the text changes. Inert to taps throughout.
+
+   Outside @layer components on purpose: the class names only appear in JS,
+   which Tailwind does not scan, and a layered rule it cannot see is purged. */
+/* Only while ours is live: stops a browser's native pull-to-refresh (and the
+   chained overscroll glow) from doubling up with it. A browser tab never
+   gets this class, so its native gesture is untouched. */
+html.ptr-on { overscroll-behavior-y: contain; }
+
+.ptr {
+  position: fixed;
+  left: 50%;
+  top: calc(60px + env(safe-area-inset-top, 0px));
+  z-index: 25;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border: 2px solid rgb(var(--court-edge));
+  background: rgb(var(--court-overlay));
+  color: rgb(var(--bone));
+  font-size: 13px;
+  font-weight: 800;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transform: translate(-50%, calc(var(--ptr-y, 0px) - 100%));
+}
+
+.ptr.is-visible { opacity: 1; }
+.ptr.is-static { transform: translate(-50%, 0.5rem); }
+.ptr.is-settling { transition: transform 280ms cubic-bezier(0.2, 0.9, 0.3, 1), opacity 200ms; }
+.ptr svg { width: 1rem; height: 1rem; transform: rotate(var(--ptr-r, 0deg)); }
+.ptr.is-refreshing svg { animation: ptr-spin 700ms linear infinite; }
+
+@keyframes ptr-spin {
+  to { transform: rotate(360deg); }
+}
+
 @layer utilities {
   /* htmx swaps this class on during a request. */
   .htmx-indicator {

@@ -247,9 +247,52 @@ That is not this story. `brotli` was installed in the shared virtualenv
 between the two runs (S10.2's work), so WhiteNoise started serving `.br`.
 S10.3 changes no bytes, so no budget row moves.
 
+### After S10.6 (KAN-126): pull to refresh in the installed app
+
+2026-11-06, WebKit `budgets.spec.js`, cold, Brotli. Bytes only; S10.6 is not
+a speed change.
+
+| Item | Bytes |
+|---|---:|
+| `pull_to_refresh.js` raw | 5,788 |
+| ... Brotli body (gzip: 2,487) | 2,038 |
+| ... on the wire, headers included | 2,506 |
+| `app.css` (`.ptr`, `html.ptr-on`), measured CSS 7.5 → 7.7 KB | ~200 |
+| `refresh-cw` symbol in the inlined sprite (every HTML page, raw) | ~360 |
+
+Every page: JS +2.4 KB (33.7 → 36.1, chart pages 93.7 → 96.2), +1 request.
+`budgets.spec.js` rows raised by exactly that (+3 KB js/total, +1 request).
+
+**Engines.** Active only where there's no browser chrome to refresh with:
+`display-mode: standalone`/`fullscreen` (the manifest says `standalone`, no
+`display_override`) or iOS `navigator.standalone`. While active,
+`html.ptr-on` sets `overscroll-behavior-y: contain`, which both Chrome and
+Firefox honour as "no native pull-to-refresh", so ours never doubles up.
+
+- **iOS Safari, installed:** no native pull-to-refresh and no reload button.
+  The case the story exists for.
+- **Chrome for Android, installed (WebAPK):** no Chrome documentation says
+  standalone disables native pull-to-refresh, and developers report it still
+  firing in installed apps (Framework7 forum, 2020). We contain it rather
+  than rely on its absence. A Chrome *tab* is never touched.
+- **Firefox for Android:** native pull-to-refresh is a browser-wide setting,
+  default off for new installs since August 2023, and installed apps
+  have no refresh UI (Mozilla support); Mozilla closed a PWA-specific one as
+  WONTFIX (bug 1162150). Firefox honours `overscroll-behavior-y: contain`
+  (bug 1830981). Unverified: whether Fenix's installed web apps report
+  `display-mode: standalone`; if one reports `browser`, ours stays off and
+  the app is no worse than before.
+
+**Verified in e2e** (production CSP, synthesised touch): WebKit/iPhone 13
+(`iphone-pwa`, plus `iphone-reduced`, `iphone-no-js`), Chromium/Pixel 7
+(`android-chrome`) and Gecko at 412×915 with touch (`android-firefox`, an
+approximation: Playwright's Firefox has no mobile emulation). Each covers
+reload on a long pull, no-ops on a short or horizontal drag, the scoreboard,
+a dirty form, the open drawer, offline, and a non-installed tab.
+
 ### After S10.5 (KAN-125): cross-document view transitions
 
-Revision: `feature/kan-125` on top of `6f6dbee`, 2026-11-06.
+Revision: `feature/kan-125`, merged with S10.6 (`fc1870b`), 2026-11-06.
 
 **What changed.** `app.css` opts in with `@view-transition { navigation: auto }`
 and names the chrome (`app-header`, `page-title`, `tab-bar`, `app-sidebar`,
@@ -258,8 +301,11 @@ plus `app-drawer` and `nav-progress` so they keep their z-order); the content
 with an inline `navigation: none` and clears every name; Reduce Motion
 re-declares `navigation: none`. No JavaScript, no new request.
 
-**Bytes.** `app.css` grows by ~300 B compressed (Brotli 7,192 -> 7,493 B,
-gzip 8,284 -> 8,590 B). The 8 KB CSS budget row still holds, so no row moves.
+**Bytes.** `app.css` grows by ~270-300 B compressed. On top of S10.6:
+Brotli 7,404 -> 7,677 B, gzip 8,516 -> 8,810 B; measured on the wire (WebKit,
+headers included) 7.7 -> 8.0 KB on every page, totals +0.3 KB. That left the
+8 KB CSS row with no headroom (7.97 KB), so every CSS row is raised to 8.5 KB.
+No JS, no request.
 
 **Timing.** Unchanged by construction: a cross-document transition starts
 after the new document's first render is ready, so TTFB, FCP and LCP measure
@@ -280,4 +326,4 @@ a transition. A screenshot of the leaderboard in Gecko at a phone viewport,
 with the old CSS and the new, differs only in the pulsing live dot, and no
 console error is raised: Firefox users get exactly today's navigation.
 
-_Pending: prefetch, pull-to-refresh._
+_Pending: prefetch._
