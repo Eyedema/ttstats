@@ -15,7 +15,7 @@ so it works identically under production's CSP, with Alpine dead, and with the
 stylesheet missing.
 {% endcomment %}
 
-<nav aria-label="Primary" class="fixed inset-x-0 bottom-0 z-30 border-t-2 border-court-line bg-court-raised pb-safe-bottom lg:hidden">
+<nav aria-label="Primary" class="vt-tab-bar fixed inset-x-0 bottom-0 z-30 border-t-2 border-court-line bg-court-raised pb-safe-bottom lg:hidden">
   <div class="flex">
     {% url 'pingpong:dashboard' as u %}
     {% include 'pingpong/_tab.html' with url=u icon_name='layout-grid' label='Today' match_tab='today' %}

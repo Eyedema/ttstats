@@ -24,14 +24,10 @@ const { defineConfig, devices } = require('@playwright/test');
  *                      variant, not the norm. A spec suite that only ever ran
  *                      in light mode would be testing the exception.
  *   - `desktop-chrome` the wide layout, so the sidebar path stays covered.
- *   - `android-chrome` / `android-firefox`  the app's Android users (KAN-124/126).
- *                      Chromium with the Pixel 7 descriptor stands in for
- *                      Chrome for Android. Playwright's Firefox has no
- *                      isMobile, so `android-firefox` is desktop Gecko at a
- *                      phone viewport with touch: an approximation of Firefox
- *                      for Android (same engine, not the same shell). Both run
- *                      `*.android.spec.js`; not in CI, which installs only
- *                      WebKit (`npx playwright install chromium firefox`).
+ *   - `android-chrome` / `android-firefox`  Pixel 7 Chromium, and Gecko at a
+ *                      phone viewport with touch (Playwright's Firefox has no
+ *                      isMobile, so an approximation). `*.android.spec.js`;
+ *                      not in CI, which installs only WebKit.
  */
 const path = require('path');
 

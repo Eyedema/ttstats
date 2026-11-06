@@ -247,8 +247,6 @@ That is not this story. `brotli` was installed in the shared virtualenv
 between the two runs (S10.2's work), so WhiteNoise started serving `.br`.
 S10.3 changes no bytes, so no budget row moves.
 
-_Pending: Brotli, defer htmx, prefetch, view transitions, pull-to-refresh._
-
 ### After S10.6 (KAN-126): pull to refresh in the installed app
 
 2026-11-06, WebKit `budgets.spec.js`, cold, Brotli. Bytes only; S10.6 is not
@@ -291,6 +289,43 @@ Firefox honour as "no native pull-to-refresh", so ours never doubles up.
 approximation: Playwright's Firefox has no mobile emulation). Each covers
 reload on a long pull, no-ops on a short or horizontal drag, the scoreboard,
 a dirty form, the open drawer, offline, and a non-installed tab.
+
+### After S10.5 (KAN-125): cross-document view transitions
+
+Revision: `feature/kan-125`, merged with S10.6 (`fc1870b`), 2026-11-06.
+
+**What changed.** `app.css` opts in with `@view-transition { navigation: auto }`
+and names the chrome (`app-header`, `page-title`, `tab-bar`, `app-sidebar`,
+plus `app-drawer` and `nav-progress` so they keep their z-order); the content
+(`root`) fades out in 120 ms and rises in over 180 ms. The scoreboard opts out
+with an inline `navigation: none` and clears every name; Reduce Motion
+re-declares `navigation: none`. No JavaScript, no new request.
+
+**Bytes.** `app.css` grows by ~270-300 B compressed. On top of S10.6:
+Brotli 7,404 -> 7,677 B, gzip 8,516 -> 8,810 B; measured on the wire (WebKit,
+headers included) 7.7 -> 8.0 KB on every page, totals +0.3 KB. That left the
+8 KB CSS row with no headroom (7.97 KB), so every CSS row is raised to 8.5 KB.
+No JS, no request.
+
+**Timing.** Unchanged by construction: a cross-document transition starts
+after the new document's first render is ready, so TTFB, FCP and LCP measure
+the same document as before. It adds at most 180 ms of animation *after* the
+page is usable; perf.mjs (Chromium) is not re-run for this story.
+
+**Engine support** (MDN browser-compat-data, verified empirically with
+Playwright 1.62: WebKit 26.5, Chromium 151, Firefox build 1538):
+
+| Engine | Cross-document VT (`@view-transition`, `pagereveal`/`pageswap`, `types`) | Same-document `startViewTransition` |
+| --- | --- | --- |
+| Safari / iOS Safari | 18.2+ | 18+ |
+| Chrome / Chrome Android | 126+ | 111+ |
+| Firefox / Firefox Android | Nightly only ("preview") | 144+ |
+
+Firefox ignores the at-rule; `view-transition-name` parses but is inert without
+a transition. A screenshot of the leaderboard in Gecko at a phone viewport,
+with the old CSS and the new, differs only in the pulsing live dot, and no
+console error is raised: Firefox users get exactly today's navigation.
+
 
 ### After S10.4 (KAN-124): tap-intent prefetch
 
@@ -400,14 +435,20 @@ Firefox Android: Playwright's Firefox has no mobile mode), desktop Chromium
 with mousedown (`prefetch.desktop.spec.js`). Proven to fail when the hold is
 removed (WebKit and Gecko then show a second, uncached render).
 
+**Composes with S10.5's view transitions.** Every prefetched tab tap is
+still a real cross-document navigation (joined in Chromium,
+`location.assign()` after a hold in WebKit), so `pagereveal` carries a
+transition: asserted on a reused navigation in Chromium/Pixel 7 and in
+persistent-profile WebKit. Gecko has no cross-document transitions.
+
 **Bytes.** `prefetch.js` is 2.6 KB on the wire (2,197 B Brotli body),
 +1 request on every page; `budgets.spec.js` rows raised by exactly that
-(+3 KB js/total, +1 request). Measured after: 38.7 / 7.7 / 101.2 KB, 11
-requests on the dashboard; chart pages 98.8 KB JS, 12 requests.
+(+3 KB js/total, +1 request), on top of KAN-125/126. Measured after all
+three: 38.7 / 8.0 / 101.6 KB, 11 requests on the dashboard; chart pages
+98.8 KB JS, 12 requests.
 
 **Not verified:** a real iPhone or Android device; Firefox for Android's
 shell (only Gecko on desktop); prod's HTTP/2 (both requests share one
 connection there, so the unheld double-fetch would have been cheaper, but
 still a second download).
 
-_Pending: view transitions._

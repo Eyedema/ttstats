@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { applyProdCSP } = require('./helpers');
 const { watchPrefetches, tab, tapTabExpectReuse } = require('./prefetch-helpers');
+const { recordPageReveal, pageReveal } = require('./view-transitions');
 
 /**
  * Tap-intent prefetch (KAN-124), iphone-safari (WebKit).
@@ -41,6 +42,21 @@ test.describe('with a disk cache (Safari, the installed PWA)', () => {
       expect(await page.evaluate(() => sessionStorage.getItem('ttstats-prefetch-off'))).toBeNull();
       await tapTabExpectReuse(page, '/pingpong/championships/');
       await tapTabExpectReuse(page, '/pingpong/');
+    } finally {
+      await context.close();
+    }
+  });
+
+  test('a held, prefetched navigation still runs the view transition', async ({ playwright, baseURL }, testInfo) => {
+    // The held click ends in location.assign(): still a real same-origin
+    // navigation, so KAN-125's cross-document transition still fires.
+    const context = await persistentPhone(playwright, baseURL, testInfo);
+    const page = context.pages()[0] || await context.newPage();
+    try {
+      await recordPageReveal(page);
+      await page.goto('/pingpong/play/');
+      await tapTabExpectReuse(page, '/pingpong/leaderboard/');
+      expect((await pageReveal(page)).revealed).toBe(true);
     } finally {
       await context.close();
     }
