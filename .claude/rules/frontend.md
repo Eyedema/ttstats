@@ -201,6 +201,33 @@ tap that never registered.
   WhiteNoise writes both); HTML stays on `GZipMiddleware` (Brotli measured
   ~9% smaller on the dashboard, ~1 KB: not worth a custom middleware).
 
+## Pull to refresh (KAN-126)
+
+`static/pingpong/js/pull_to_refresh.js`, plain JS, deferred from `base.html`.
+
+- **Standalone only**: `display-mode: standalone`/`fullscreen` or iOS's
+  `navigator.standalone`. A browser tab keeps its native gesture untouched.
+- While live it adds `html.ptr-on` (`overscroll-behavior-y: contain`), so a
+  native pull-to-refresh (Chrome Android; Firefox Android when the user has
+  enabled it) can't fire alongside ours.
+- **Off for the whole page** under any `[data-no-pull-refresh]`; that's how a
+  page opts out. The scoreboard root carries it: no listener at all, so a
+  tap is never eaten.
+- **Off per gesture** while `.overlay.is-open` exists (the drawer), while a
+  POST/`hx-post` form has had `input`/`change` and is still in the DOM, when
+  the touch starts in something scrolled off its top, or when the drag is
+  upward or mostly horizontal.
+- One non-passive `touchmove` (only `preventDefault()` stops the rubber band);
+  it returns at once unless a vertical pull is underway.
+- Offline (`navigator.onLine === false`): "No connection", no reload.
+  Reduced motion: `.is-static`, text only.
+- The indicator is created by the script (fails closed); its CSS is outside
+  `@layer` because Tailwind doesn't scan JS and would purge it. Its icons
+  (`refresh-cw`, `wifi-off`) are guarded by `TestIconSprite`.
+- Specs share `tests/e2e/pull-to-refresh-cases.js`: `*.pwa.spec.js`
+  (iPhone), `*.android.spec.js` (`android-chrome`, `android-firefox`), plus
+  `.reduced`/`.nojs`.
+
 ## Tap-intent prefetch (KAN-124)
 
 - **`prefetch.js` fetches a tab's page on `touchstart`/`mousedown`** with

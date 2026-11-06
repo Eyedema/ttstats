@@ -24,7 +24,7 @@ const { defineConfig, devices } = require('@playwright/test');
  *                      variant, not the norm. A spec suite that only ever ran
  *                      in light mode would be testing the exception.
  *   - `desktop-chrome` the wide layout, so the sidebar path stays covered.
- *   - `android-chrome` / `android-firefox`  the app's Android users (KAN-124).
+ *   - `android-chrome` / `android-firefox`  the app's Android users (KAN-124/126).
  *                      Chromium with the Pixel 7 descriptor stands in for
  *                      Chrome for Android. Playwright's Firefox has no
  *                      isMobile, so `android-firefox` is desktop Gecko at a
@@ -131,21 +131,25 @@ module.exports = defineConfig({
       },
     },
     {
+      // Chrome for Android, as far as Playwright can stand in for it:
+      // Chromium with the Pixel 7 profile (mobile viewport, touch, isMobile).
       name: 'android-chrome',
       dependencies: ['setup'],
       testMatch: /.*\.android\.spec\.js/,
-      use: { ...devices['Pixel 7'], storageState: STORAGE_STATE, serviceWorkers: 'block' },
+      use: { ...devices['Pixel 7'], storageState: STORAGE_STATE },
     },
     {
+      // Firefox for Android, approximately: Playwright's Firefox has no
+      // isMobile, so this is desktop Gecko at a phone viewport with touch.
+      // It exercises the engine (touch events, CSS, CSP), not Fenix's shell.
       name: 'android-firefox',
       dependencies: ['setup'],
       testMatch: /.*\.android\.spec\.js/,
       use: {
         browserName: 'firefox',
-        viewport: { width: 412, height: 839 },
+        viewport: { width: 412, height: 915 },
         hasTouch: true,
         storageState: STORAGE_STATE,
-        serviceWorkers: 'block',
       },
     },
     {
