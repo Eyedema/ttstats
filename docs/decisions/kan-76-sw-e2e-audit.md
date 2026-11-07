@@ -101,9 +101,34 @@ runs in `iphone-pwa`.
 ## Rules for KAN-82 / KAN-131
 
 - Offline specs go in `iphone-pwa` (`*pwa.spec.js`). Drive the network with
-  `context.setOffline()`, not `page.route()`.
+  `context.setOffline()`, not `page.route()`. (Superseded by the KAN-82
+  addendum below: in WebKit, use `offline-proxy.js`, not `setOffline()`.)
 - A `iphone-pwa` spec that needs `page.route()` either blocks workers for
   itself or asserts the route applied (`gotoUnderProdCSP` in `pwa.spec.js`).
 - Keep the worker's GET-only, same-origin guard in front of the route table.
 - `pwa.spec.js` "the fetch handler" asserts that a page no route claims is not
   served from cache offline; keep it green as routes are added.
+
+## KAN-82 addendum: `context.setOffline()` cannot test a worker in WebKit
+
+Measured 2026-11-07 while adding the scoreboard route. With the worker
+controlling the page and `context.setOffline(true)`:
+
+- a `fetch()` of a hashed stylesheet the worker had **in its cache** (cache
+  first, no network involved) failed with `TypeError: Load failed`;
+- a reload of the stored scoreboard failed with "WebKit encountered an
+  internal error".
+
+WebKit's offline emulation fails the page's loads before the worker's fetch
+handler runs. So in WebKit a spec using `setOffline()` can never see a page
+served from cache, and an assertion that a page is *not* served from cache
+passes whatever the worker does (the KAN-96 canary in `pwa.spec.js` was
+vacuous in this sense).
+
+Offline specs therefore cut the network for real: `tests/e2e/offline-proxy.js`
+sits between the browser and the e2e server on its own port (cookies are per
+host, so the session applies; the worker registers afresh per test) and can
+be switched `online` / `offline` (connections destroyed) / `hang` (accepted,
+never answered: lie-fi). Every "not served offline" assertion is paired with a
+scoreboard that *is* served over the same dead network, so it cannot pass
+vacuously.
