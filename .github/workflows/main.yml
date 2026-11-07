@@ -56,7 +56,7 @@ jobs:
           # .webmanifest is here because the PWA manifest is a template like
           # any other -- without it, a commit touching only the manifest would
           # skip the browser tests that check the app is still installable.
-          if echo "$CHANGED_FILES" | grep -qE "\.(html|css|js|webmanifest)$|tailwind\.config\.js|postcss\.config\.js|package(-lock)?\.json"; then
+          if echo "$CHANGED_FILES" | grep -qE "\.(html|css|js|mjs|webmanifest)$|tailwind\.config\.js|postcss\.config\.js|package(-lock)?\.json|live_vectors\.json"; then
             echo "Frontend files were changed"
             echo "assets_changed=true" >> $GITHUB_OUTPUT
           else
@@ -92,6 +92,13 @@ jobs:
           npm run build
           test -s ttstats/pingpong/static/pingpong/css/app.css
           test -s ttstats/pingpong/static/pingpong/js/vendor/htmx.min.js
+
+      # live_rules.js is the offline scoreboard's mirror of live_scoring.py.
+      # It replays the golden vectors pytest keeps current (test_live_vectors.py),
+      # so a rule change that skips the JS fails here. No browser, no deps.
+      - name: Run JS unit tests (live_rules.js parity)
+        if: needs.changes.outputs.py_changed == 'true' || needs.changes.outputs.assets_changed == 'true'
+        run: npm run test:js
 
       - name: Set up Python
         if: needs.changes.outputs.py_changed == 'true'

@@ -12,6 +12,12 @@ paths:
   - "ttstats/pingpong/templates/pingpong/head_to_head.html"
   - "ttstats/pingpong/templates/pingpong/game_form.html"
   - "ttstats/pingpong/tests/test_point*.py"
+  - "ttstats/pingpong/static/pingpong/js/live_rules.js"
+  - "ttstats/pingpong/templatetags/live_tags.py"
+  - "ttstats/pingpong/tests/live_vectors.py"
+  - "ttstats/pingpong/tests/test_live_vectors.py"
+  - "ttstats/pingpong/tests/fixtures/live_vectors.json"
+  - "tests/js/live_rules.test.mjs"
   - "tests/e2e/momentum*.js"
   - "tests/e2e/point-stats*.js"
   - "tests/e2e/scoreboard*.js"
@@ -25,8 +31,30 @@ paths:
   `is_valid_final_score`, `common_final_scores`. Pure, no Django.
 - `is_valid_final_score` is stricter than "someone is ahead": 11-10 isn't over,
   and 13-5 can't happen.
+- Serve rotation and the side switch are named too: `DEUCE_AT`,
+  `SERVES_PER_TURN`, `SIDE_SWITCH_AT`. `rules_config()` is the dict of every
+  constant the client needs.
 - `GameForm.clean()` defers to it; the Alt+1..4 presets in `game_form.html` come
   from `common_final_scores()` via `json_script`.
+
+## `live_rules.js` is a verified mirror, never a second authority
+
+`static/pingpong/js/live_rules.js` ports the rules for offline scoring (KAN-79).
+
+- **Change `live_scoring.py` -> regenerate the vectors -> fix the JS**:
+  `cd ttstats && ../.venv/bin/python -m pingpong.tests.live_vectors`, then
+  `npm run test:js`. `test_live_vectors.py` fails on a stale
+  `tests/fixtures/live_vectors.json`; `tests/js/live_rules.test.mjs`
+  deep-equals the full state after every op (CI runs both).
+- **Constants are injected, never typed in JS**: `LiveRules.create(config)`
+  with `config` = `rules_config()`, which the template tag
+  `{% live_rules_config %}` (`{% load live_tags %}`) emits via `json_script`
+  as `#live-rules-config`. The JS test fails on any numeric literal but 0/1/2.
+- Same state shape as `Match.live_state`; functions never mutate their input;
+  Python's tuples come back as `[state, extra]`; refused ops throw with
+  Python's message.
+- UMD: a classic script sets `window.LiveRules`, Node `require()`s it. No DOM,
+  no eval.
 
 ## The scoreboard opts out of pull to refresh
 

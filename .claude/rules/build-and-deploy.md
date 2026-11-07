@@ -61,5 +61,6 @@ paths:
   `CONN_MAX_AGE` in the same change.
 - **CI/CD** (`.github/workflows/main.yml`): tests with coverage on push/PR; SSH
   deploy on master. `.py` changes gate tests, frontend extensions gate the asset
-  build.
+  build. `npm run test:js` (`node --test tests/js/*.test.mjs`, no deps) runs
+  in the test job whenever either changed.
 - Tenancy cutover runbook: `docs/tenancy-rollout.md`.
