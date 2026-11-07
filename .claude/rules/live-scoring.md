@@ -4,6 +4,7 @@ paths:
   - "ttstats/pingpong/point_stats.py"
   - "ttstats/pingpong/point_rollups.py"
   - "ttstats/pingpong/views.py"
+  - "ttstats/pingpong/live_ops.py"
   - "ttstats/pingpong/management/commands/rebuild_point_rollups.py"
   - "ttstats/pingpong/management/commands/point_storage.py"
   - "ttstats/pingpong/templates/pingpong/scoreboard.html"
@@ -42,9 +43,9 @@ row per point, written when the point is applied**, never reconstructed later.
 
 - **`serving_side` is read from the state BEFORE `apply_point()`.** Afterwards
   `current_server()` names who serves *next*, and the error is undetectable in
-  stored data. `_record_point_event` takes `state_before` explicitly.
+  stored data. `live_ops.record_point_event` takes `state_before` explicitly.
 - **Scoring wins over recording.** The write runs in its own savepoint inside
-  `LivePointView`'s transaction and swallows everything. The savepoint matters
+  the op's transaction and swallows everything. The savepoint matters
   on Postgres, where an error poisons the whole transaction.
 - **Undo deletes the trailing row** -- never a compensating "undone" event that
   every aggregation would have to filter. A failed delete rolls the request
@@ -59,12 +60,20 @@ row per point, written when the point is applied**, never reconstructed later.
   the seed (a harness always starting with side 1 can't see an ignored
   `initial_server`), and carries tests proving it fails against broken writes.
 - **No starting server means no point.** `apply_point()` raises unless the state
-  is `started` **and** names `initial_server`; `LivePointView` returns 409 before
+  is `started` **and** names `initial_server`; `live_ops` rejects the point (409) before
   writing. `PointEvent.serving_side` stays nullable only as a defensive fallback.
 - **Historic matches have no point rows and never will.** Every consuming
   surface must be absent rather than empty.
 - Retention policy (keep everything, revisit at a threshold):
   `docs/decisions/point-event-retention.md`.
+
+## `live_ops.apply_op` is the one way an op is applied (KAN-87)
+
+`live_ops.py` (Django layer; rules still from `live_scoring`) applies `start`,
+`point`, `undo`, `side_switch` and returns an `OpResult`. The four single-op
+views and `live_sync` are thin wrappers: parse, lock, dedupe, call, shape. The
+caller owns the transaction and the `select_for_update()` lock, so a point
+synced in a batch runs exactly the code a point tapped online runs.
 
 ## Every op carries a seq; dedupe before `is_live` (KAN-77)
 
@@ -107,7 +116,7 @@ rebuildable from `PointEvent` with `manage.py rebuild_point_rollups`.
 
 - **Per player, not per side.** In doubles both partners get the side's figures.
 - **Counts are stored, never rates.**
-- **Written from `LivePointView` at completion, not a `post_save` receiver**,
+- **Written by `live_ops` at completion, not a `post_save` receiver**,
   to keep it out of the completion pipeline. Non-fatal on failure.
 - No compare-and-set: rollups are deterministic, `update_or_create` is enough.
 - **A match with no log has its rows deleted, not zeroed.**

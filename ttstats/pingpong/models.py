@@ -928,7 +928,7 @@ class PointEvent(models.Model):
     (not per game), which is what makes "no gaps and no duplicates" usable as
     an integrity check. Undo *deletes* the trailing row rather than appending
     a compensating one, so the property is preserved by construction -- see
-    ``views.LiveUndoView``.
+    ``live_ops._undo``.
 
     **Club scoping reaches through the match rather than duplicating the
     column.** ``Match`` already denormalizes ``club`` because it is filtered

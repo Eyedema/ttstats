@@ -14,7 +14,7 @@ from django.core.exceptions import PermissionDenied
 from django.core.mail import send_mail
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db import transaction
-from django.db.models import Count, F, Max, Prefetch, Q
+from django.db.models import Count, F, Prefetch, Q
 from django.http import Http404, HttpResponse, JsonResponse
 from django.urls import reverse
 from django.views.decorators.http import require_POST
@@ -39,13 +39,13 @@ logger = logging.getLogger(__name__)
 
 from ttstats.middleware import get_current_club
 
-from . import live_scoring, notifications, player_hues, point_rollups, point_stats, push, rating_pipeline, ratings
+from . import live_ops, live_scoring, notifications, player_hues, point_rollups, point_stats, push, rating_pipeline, ratings
 from .forms import GameForm, MatchEditForm, MatchForm, PlayerRegistrationForm, ScheduledMatchForm, MatchConvertForm, \
     ChampionshipCreateForm, ChampionshipEditForm, ScheduledMatchEditForm, LeaderboardScopeForm, DEFAULT_TOP_X
 from .achievements import get_achievement_progress
 from . import cache_utils
 from .managers import scope_to_active_club
-from .models import Game, Location, Match, MatchParticipant, PointEvent, Player, UserProfile, MatchConfirmation, ScheduledMatch, ScheduledMatchParticipant, Side, Championship, Club, ClubInvite, ClubMembership, ClubRole, format_side_label, NotificationKind, NotificationPreference, PushSubscription
+from .models import Game, Location, Match, MatchParticipant, Player, UserProfile, MatchConfirmation, ScheduledMatch, ScheduledMatchParticipant, Side, Championship, Club, ClubInvite, ClubMembership, ClubRole, format_side_label, NotificationKind, NotificationPreference, PushSubscription
 from .emails import send_scheduled_match_email, send_passkey_deleted_email
 from .services import set_match_sides, set_scheduled_match_sides
 
@@ -2930,12 +2930,16 @@ def _check_seq(match: Match, seq: int | None, op_type: str) -> JsonResponse | No
     return None
 
 
-def _record_applied_seq(match: Match, seq: int | None) -> None:
-    """Persist ``seq`` as applied, in the op's own transaction."""
-    if seq is None:
-        return
-    Match.all_objects.filter(pk=match.pk).update(live_applied_seq=seq)
-    match.live_applied_seq = seq
+def _apply_op(match: Match, op: dict) -> JsonResponse:
+    """Apply one deduped op through ``live_ops`` and shape the response.
+
+    ``_record_point_event`` is looked up here, at call time, so a test can
+    substitute a broken writer on this module.
+    """
+    result = live_ops.apply_op(match, op, record_point=_record_point_event)
+    if not result.applied:
+        return _op_error(match, op.get("seq"), result.error, result.status)
+    return JsonResponse(_scoreboard_payload(match, redirect_url=result.redirect_url))
 
 
 def _op_error(match: Match, seq: int | None, error: str, status: int = 409) -> JsonResponse:
@@ -2955,57 +2959,9 @@ def _lenient_json(request) -> dict:
     return payload if isinstance(payload, dict) else {}
 
 
-def _record_point_event(match, *, state_before, side, completed, new_state):
-    """Persist one ``PointEvent`` for a point the server has just applied.
-
-    Called from inside ``LivePointView``'s transaction, with the match row
-    already locked, so sequence allocation is serialised: two taps arriving
-    while an earlier request is still in flight are applied -- and numbered --
-    in the order the server took them.
-
-    **Scoring wins over recording.** The write runs in its own savepoint and
-    swallows everything: a point that reached the server must count on the
-    scoreboard even if its history row cannot be stored. The savepoint is what
-    makes that true on Postgres, where an error inside an atomic block poisons
-    the whole transaction and would otherwise take the point down with it. A
-    dropped row leaves a gap, which the fidelity harness is built to notice.
-
-    ``state_before`` is passed in because the serving side must be read from
-    the state *before* the point: afterwards ``current_server()`` names whoever
-    serves next, and that mistake is invisible in the stored data.
-    """
-    try:
-        with transaction.atomic():
-            serving = live_scoring.current_server(state_before)
-            if completed is not None:
-                # live_state has already reset the in-progress score to 0-0,
-                # so the score after this point is the completed game's final.
-                team1_score = completed["team1_score"]
-                team2_score = completed["team2_score"]
-            else:
-                team1_score = new_state["team1_points"]
-                team2_score = new_state["team2_points"]
-
-            next_sequence = (
-                PointEvent.objects.filter(match=match).aggregate(
-                    last=Max("sequence")
-                )["last"] or 0
-            ) + 1
-
-            PointEvent.objects.create(
-                match=match,
-                game_number=state_before["current_game_number"],
-                scoring_side=Side.from_live(side),
-                serving_side=Side.from_live(serving),
-                team1_score=team1_score,
-                team2_score=team2_score,
-                sequence=next_sequence,
-            )
-    except Exception:
-        logger.exception(
-            "Failed to persist PointEvent for match %s; the point still counts",
-            match.pk,
-        )
+# Kept under its historical name: the fidelity harness substitutes broken
+# writers here to prove it notices them.
+_record_point_event = live_ops.record_point_event
 
 
 class LiveScoreboardView(LoginRequiredMixin, View):
@@ -3080,24 +3036,20 @@ class LiveStartView(LoginRequiredMixin, View):
             if answered:
                 return answered
 
-            if not match.is_live:
-                return _op_error(match, seq, "Match is not live")
+            # Legacy clients only: idempotent if already started with the
+            # same server. A sequenced re-send is a duplicate and was already
+            # answered by _check_seq above.
+            if (
+                seq is None
+                and match.is_live
+                and (match.live_state or {}).get("started")
+                and match.live_state.get("initial_server") == server
+            ):
+                return JsonResponse(_scoreboard_payload(match))
 
-            current = match.live_state or live_scoring.initial_state(match.best_of)
-            if current.get("started"):
-                # Legacy clients only: a sequenced re-send is a duplicate and
-                # was already answered by _check_seq above.
-                if seq is None and current.get("initial_server") == server:
-                    return JsonResponse(_scoreboard_payload(match))
-                _record_applied_seq(match, seq)
-                return _op_error(match, seq, "Match already started")
-
-            new_state = live_scoring.set_initial_server(current, server)
-            Match.all_objects.filter(pk=match.pk).update(live_state=new_state)
-            match.live_state = new_state
-            _record_applied_seq(match, seq)
-
-        return JsonResponse(_scoreboard_payload(match))
+            return _apply_op(
+                match, {"type": "start", "seq": seq, "initial_server": server}
+            )
 
 
 @method_decorator(require_POST, name="dispatch")
@@ -3126,93 +3078,7 @@ class LivePointView(LoginRequiredMixin, View):
             if answered:
                 return answered
 
-            if not match.is_live:
-                return _op_error(match, seq, "Match is not live")
-            if not match.live_state or not match.live_state.get("started"):
-                _record_applied_seq(match, seq)
-                return _op_error(match, seq, "Match has not started — pick an initial server")
-
-            # Captured before apply_point: current_server() on the new state
-            # names who serves *next*, not who served this point.
-            state_before = match.live_state
-
-            try:
-                new_state, completed = live_scoring.apply_point(match.live_state, side)
-            except ValueError as exc:
-                _record_applied_seq(match, seq)
-                return _op_error(match, seq, str(exc))
-
-            # In memory before Game.objects.create below: Game.save() saves
-            # this very instance, every field included.
-            _record_applied_seq(match, seq)
-
-            _record_point_event(
-                match,
-                state_before=state_before,
-                side=side,
-                completed=completed,
-                new_state=new_state,
-            )
-
-            redirect_url = None
-
-            if completed is None:
-                Match.all_objects.filter(pk=match.pk).update(live_state=new_state)
-                match.live_state = new_state
-            else:
-                match_complete = live_scoring.is_match_complete(new_state)
-                if match_complete:
-                    # Flip is_live OFF first so the upcoming Game.save() →
-                    # Match.save() pipeline runs the existing winner /
-                    # signal / rating cascade as if it were a normal match.
-                    Match.all_objects.filter(pk=match.pk).update(
-                        is_live=False, live_state=None
-                    )
-                    match.is_live = False
-                    match.live_state = None
-                    # Hand off to the existing match_confirm flow: running
-                    # the live scoreboard implicitly attests the score, so
-                    # the scorekeeper is confirmed in one step and lands on
-                    # match_detail. The other player still confirms via the
-                    # email they receive from the post-save signal.
-                    redirect_url = reverse("pingpong:match_confirm", args=[match.pk])
-                else:
-                    Match.all_objects.filter(pk=match.pk).update(live_state=new_state)
-                    match.live_state = new_state
-
-                # Persist the completed Game row. While is_live=True (mid-match)
-                # this triggers Match.save() but the winner-detection guard
-                # short-circuits. On the final game, is_live=False so the
-                # normal signal pipeline runs.
-                Game.objects.create(
-                    match=match,
-                    game_number=completed["game_number"],
-                    team1_score=completed["team1_score"],
-                    team2_score=completed["team2_score"],
-                )
-
-                if match_complete:
-                    # Roll the point log up now, inside the same transaction,
-                    # so the summary and the games it describes commit
-                    # together. This is the ONLY moment a match's log stops
-                    # changing on its own, so it is the natural write point --
-                    # and doing it here rather than in a post_save receiver
-                    # keeps it out of the completion pipeline the epic
-                    # measured down to 39 queries. Non-fatal for the same
-                    # reason the point write is: a missing rollup is
-                    # rebuildable from the raw log by
-                    # `manage.py rebuild_point_rollups`, a lost match is not.
-                    try:
-                        with transaction.atomic():
-                            point_rollups.rebuild_match_summaries(match)
-                    except Exception:
-                        logger.exception(
-                            "Failed to roll up point stats for match %s; "
-                            "rebuild with manage.py rebuild_point_rollups",
-                            match.pk,
-                        )
-
-        return JsonResponse(_scoreboard_payload(match, redirect_url=redirect_url))
+            return _apply_op(match, {"type": "point", "seq": seq, "side": side})
 
 
 class LiveStateView(LoginRequiredMixin, View):
@@ -3260,24 +3126,12 @@ class LiveSideSwitchView(LoginRequiredMixin, View):
             if answered:
                 return answered
 
-            if not match.is_live or not match.live_state:
-                return _op_error(match, seq, "Match is not live")
-
-            new_state = live_scoring.confirm_side_switch(match.live_state)
-            Match.all_objects.filter(pk=match.pk).update(live_state=new_state)
-            match.live_state = new_state
-            _record_applied_seq(match, seq)
-
-        return JsonResponse(_scoreboard_payload(match))
+            return _apply_op(match, {"type": "side_switch", "seq": seq})
 
 
 @method_decorator(require_POST, name="dispatch")
 class LiveUndoView(LoginRequiredMixin, View):
-    """Undo the most recent point (KAN-10).
-
-    If the undone point ended a game, the trailing Game row is deleted and
-    the in-progress game state is restored from the event log.
-    """
+    """Undo the most recent point (KAN-10); see ``live_ops._undo``."""
 
     def post(self, request, pk):
         seq, error = _parse_seq(_lenient_json(request))
@@ -3293,58 +3147,7 @@ class LiveUndoView(LoginRequiredMixin, View):
             if answered:
                 return answered
 
-            if not match.is_live or not match.live_state:
-                return _op_error(match, seq, "Match is not live")
-
-            # Whether there was anything to undo at all. undo_last_point() is a
-            # no-op on an empty log and returns the state unchanged, and the
-            # persisted row must not be dropped in that case -- live_state's
-            # event list is capped at MAX_EVENTS, so on a long match it can run
-            # out while the persisted log still holds every earlier point.
-            had_events = bool((match.live_state or {}).get("events"))
-
-            new_state, undone_game = live_scoring.undo_last_point(match.live_state)
-
-            if had_events:
-                # Delete the row; never append a compensating "undone" event.
-                # A tombstone would mean every aggregation query has to filter
-                # it out, and the first one that forgets double-counts -- with
-                # no error and nothing to notice by inspection. Deleting the
-                # trailing row also keeps `sequence` gapless, which is what
-                # makes "no gaps" usable as an integrity check.
-                #
-                # Unlike the write path, this is NOT best-effort. A failed undo
-                # rolls back and the scorekeeper taps again; a log that keeps a
-                # point the umpire retracted is silently wrong forever.
-                trailing = (
-                    PointEvent.objects.filter(match=match)
-                    .order_by("-sequence")
-                    .first()
-                )
-                if trailing is not None:
-                    trailing.delete()
-
-            if undone_game is not None:
-                # Drop the trailing Game row. Use all_objects to bypass the
-                # live-match GameManager filter.
-                Game.all_objects.filter(
-                    match=match,
-                    game_number=undone_game["game_number"],
-                ).delete()
-
-            Match.all_objects.filter(pk=match.pk).update(live_state=new_state)
-            match.live_state = new_state
-            _record_applied_seq(match, seq)
-
-            if had_events:
-                # A match cannot normally be undone after it completes (the
-                # guard above returns 409), so there is usually no rollup yet.
-                # The check is one indexed existence query and it is what makes
-                # a rebuilt-then-corrected match self-heal rather than keeping
-                # a summary of a log that no longer says that.
-                point_rollups.invalidate_for_match(match)
-
-        return JsonResponse(_scoreboard_payload(match))
+            return _apply_op(match, {"type": "undo", "seq": seq})
 
 
 # ---------------------------------------------------------------------------
