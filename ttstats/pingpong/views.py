@@ -3005,6 +3005,7 @@ class LiveScoreboardView(LoginRequiredMixin, View):
             "state_url": reverse("pingpong:live_state", args=[pk]),
             "undo_url": reverse("pingpong:live_undo", args=[pk]),
             "side_switch_url": reverse("pingpong:live_side_switch", args=[pk]),
+            "sync_url": reverse("pingpong:live_sync", args=[pk]),
         }
         return render(request, self.template_name, context)
 
@@ -3148,6 +3149,125 @@ class LiveUndoView(LoginRequiredMixin, View):
                 return answered
 
             return _apply_op(match, {"type": "undo", "seq": seq})
+
+
+SYNC_MAX_OPS = 500
+
+
+def _parse_sync_ops(request) -> tuple[list[dict] | None, JsonResponse | None]:
+    """Validate a ``live_sync`` body; ``(ops sorted by seq, None)`` or an error.
+
+    The whole batch is validated before anything is applied: a malformed op
+    is a client bug, not a rule rejection, and must not half-apply a batch.
+    """
+    try:
+        payload = json.loads(request.body or b"{}")
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None, JsonResponse({"error": "Invalid JSON"}, status=400)
+    if not isinstance(payload, dict) or not isinstance(payload.get("ops"), list):
+        return None, JsonResponse({"error": "ops must be a list"}, status=400)
+
+    raw_ops = payload["ops"]
+    if len(raw_ops) > SYNC_MAX_OPS:
+        return None, JsonResponse(
+            {"error": f"at most {SYNC_MAX_OPS} ops per batch"}, status=413
+        )
+
+    ops = []
+    seen = set()
+    for raw in raw_ops:
+        if not isinstance(raw, dict):
+            return None, JsonResponse({"error": "each op must be an object"}, status=400)
+        seq, error = _parse_seq(raw)
+        if error:
+            return None, error
+        if seq is None:
+            return None, JsonResponse({"error": "every op needs a seq"}, status=400)
+        if seq in seen:
+            return None, JsonResponse({"error": f"seq {seq} appears twice"}, status=400)
+        seen.add(seq)
+
+        op_type = raw.get("type")
+        if op_type not in live_ops.OP_TYPES:
+            return None, JsonResponse(
+                {"error": f"op {seq}: type must be one of {', '.join(live_ops.OP_TYPES)}"},
+                status=400,
+            )
+        op = {"type": op_type, "seq": seq}
+        if op_type == "point":
+            if raw.get("side") not in ("team1", "team2"):
+                return None, JsonResponse(
+                    {"error": f"op {seq}: side must be 'team1' or 'team2'"}, status=400
+                )
+            op["side"] = raw["side"]
+        elif op_type == "start":
+            if raw.get("initial_server") not in ("team1", "team2"):
+                return None, JsonResponse(
+                    {"error": f"op {seq}: initial_server must be 'team1' or 'team2'"},
+                    status=400,
+                )
+            op["initial_server"] = raw["initial_server"]
+        ops.append(op)
+
+    ops.sort(key=lambda op: op["seq"])
+    return ops, None
+
+
+@method_decorator(require_POST, name="dispatch")
+class LiveSyncView(LoginRequiredMixin, View):
+    """Apply an ordered batch of live ops in one request (KAN-88).
+
+    After a dead spell the scoreboard may hold dozens of unsent ops; replaying
+    them one round-trip at a time on slow 4G takes minutes. This applies them
+    in one transaction under one row lock, in ``seq`` order, through the same
+    ``live_ops.apply_op`` as the single-op endpoints:
+
+    * ops at or below the applied seq are skipped (duplicate deliveries);
+    * a gap stops processing -- 409 ``{"error": "gap", "applied_seq": N}``
+      when nothing new was applied, else 200 with it named in ``rejected``;
+    * the first rule rejection stops processing and is named in ``rejected``;
+      the ops before it stay applied, and it consumes its seq;
+    * once an op completes the match, the next one is rejected with
+      ``"match complete"``, and ``redirect_url`` points at match_confirm.
+    """
+
+    def post(self, request, pk):
+        ops, error = _parse_sync_ops(request)
+        if error:
+            return error
+
+        rejected = None
+        with transaction.atomic():
+            match = _get_live_match_for_scorekeeper(request, pk)
+            Match.all_objects.select_for_update().get(pk=match.pk)
+            match.refresh_from_db()
+
+            progressed = False
+            for op in ops:
+                applied = match.live_applied_seq or 0
+                verdict = _classify_seq(applied, op["seq"])
+                if verdict == "duplicate":
+                    continue
+                if verdict == "gap":
+                    if not progressed:
+                        return JsonResponse(
+                            {"error": "gap", "applied_seq": applied}, status=409
+                        )
+                    rejected = {"seq": op["seq"], "error": "gap"}
+                    break
+                if not match.is_live and match.winner_side is not None:
+                    rejected = {"seq": op["seq"], "error": "match complete"}
+                    break
+
+                result = live_ops.apply_op(match, op, record_point=_record_point_event)
+                progressed = True
+                if not result.applied:
+                    rejected = {"seq": op["seq"], "error": result.error}
+                    break
+
+        payload = _scoreboard_payload(match, redirect_url=_completion_redirect(match))
+        payload["rejected"] = rejected
+        return JsonResponse(payload)
 
 
 # ---------------------------------------------------------------------------

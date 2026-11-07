@@ -95,6 +95,26 @@ duplicate is a retried match point.
   once no cached page sends it.
 - `_scoreboard_payload()` carries `applied_seq` (0 before any sequenced op).
 
+## The batch sync endpoint (`live_sync`, KAN-88)
+
+`POST matches/<pk>/live/sync/` with `{"ops": [{"seq", "type", "side" |
+"initial_server", "client_ts"?}, ...]}`; the scoreboard gets the URL as
+`data-sync-url`.
+
+- **Validate the whole batch first** (400; more than `SYNC_MAX_OPS` = 500 is
+  413): a malformed op is a client bug and must not half-apply a batch.
+- One `transaction.atomic()` + one `select_for_update()`; ops in `seq` order
+  through `live_ops.apply_op`, so the per-point savepoint stays **per op**.
+- Duplicates are skipped. A gap is 409 `gap` if nothing new was applied,
+  else 200 with `rejected: {"seq", "error": "gap"}`.
+- **Partial success is explicit**: the first rule rejection stops the batch,
+  is named in `rejected`, and never rolls back the ops before it.
+- After the completing op, the next is rejected `"match complete"`;
+  completion and rollups therefore happen at most once. `redirect_url` is
+  match_confirm whenever the match has finished.
+- Response: canonical payload + `applied_seq` + `rejected` (null when none).
+  Query cost is linear in the batch (`test_live_sync.py` pins a ceiling).
+
 ## `point_stats.py` is a pure module
 
 No Django, no DB; `tests/test_point_stats.py` has **no `django_db` marker** and
