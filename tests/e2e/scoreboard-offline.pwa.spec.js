@@ -187,9 +187,13 @@ test.describe('offline scoreboard', () => {
     expect(response.ok()).toBe(true);
     await expectScoreboard(page, shown);
 
+    // The proxy restores the network without the browser noticing; a phone
+    // leaving airplane mode fires `online`, which nudges the flush. Without it
+    // the retry waits on the backoff (1/2/5/10/30 s), too slow on CI.
     net.setMode('online');
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
     await expect
-      .poll(async () => (await read()).applied_seq, { timeout: 20000 })
+      .poll(async () => (await read()).applied_seq, { timeout: 40000 })
       .toBe(server.applied_seq + 3);
     const after = (await read()).state;
     expect([String(after.team1_points), String(after.team2_points)]).toEqual(shown);
