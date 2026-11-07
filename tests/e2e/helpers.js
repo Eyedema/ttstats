@@ -140,7 +140,196 @@ async function openPlayerByName(page, name) {
   return href;
 }
 
+// --- Network chaos (KAN-83) --------------------------------------------------
+//
+// WebKit has no CDP throttling, so latency and loss are simulated with
+// page.route. Playwright runs the most recently registered matching route
+// first, so these are registered AFTER applyProdCSP() and hand the request on
+// with route.fallback() -- which lands in applyProdCSP's handler. A request
+// they answer themselves (abort, or route.fetch() for a lost ack) never needs
+// the CSP header: it is a JSON sync, not a document.
+
+/** Deterministic PRNG (mulberry32): chaos specs must be reproducible. */
+function seededRandom(seed) {
+  let a = seed >>> 0;
+  return function next() {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const SYNC_URL = '**/live/sync/';
+
+/** Drop every '**\/*' route (applyProdCSP's, and goOffline's if present).
+ *
+ *  applyProdCSP answers each request with route.fetch() + fulfill(). For a
+ *  navigation answered with a redirect (the scoreboard handing off to
+ *  match_confirm, the login form's `next`) Playwright does not follow it in
+ *  the fetch, and WebKit does not follow a fulfilled 3xx either: the page is
+ *  left on the old document. A spec whose page has already proved itself
+ *  under the CSP releases the routes before such a navigation. */
+async function releaseProdCSP(page) {
+  await page.unroute('**/*');
+  page.__offlineHandler = null;
+}
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Kill the network for this page: the context's offline flag (so
+ *  navigator.onLine and the online/offline events follow) plus an abort-all
+ *  route, because a routed request is otherwise fetched by Playwright itself
+ *  and would reach the server regardless of the flag. */
+async function goOffline(page) {
+  const handler = (route) => route.abort('internetdisconnected');
+  page.__offlineHandler = handler;
+  await page.route('**/*', handler);
+  await page.context().setOffline(true);
+}
+
+async function goOnline(page) {
+  if (page.__offlineHandler) {
+    await page.unroute('**/*', page.__offlineHandler);
+    page.__offlineHandler = null;
+  }
+  await page.context().setOffline(false);
+}
+
+/** Slow, lossy 4G for the sync endpoint: every request waits minMs..maxMs,
+ *  and `dropRate` of them fail -- half before reaching the server (request
+ *  lost), half after it applied the ops (answer lost). Returns live counters. */
+async function withLatency(page, { minMs = 2000, maxMs = 4000, dropRate = 0.1, seed = 1, url = SYNC_URL } = {}) {
+  const random = seededRandom(seed);
+  const stats = { requests: 0, droppedBefore: 0, droppedAfter: 0 };
+  const handler = async (route) => {
+    stats.requests += 1;
+    const delay = minMs + random() * (maxMs - minMs);
+    const drop = random() < dropRate;
+    const after = random() < 0.5;
+    await sleep(delay);
+    try {
+      if (drop && !after) {
+        stats.droppedBefore += 1;
+        await route.abort('failed');
+      } else if (drop) {
+        stats.droppedAfter += 1;
+        await route.fetch();
+        await route.abort('failed');
+      } else {
+        await route.fallback();
+      }
+    } catch (err) {
+      if (!/disposed|Test ended|closed|already handled/i.test(String(err))) throw err;
+    }
+  };
+  await page.route(url, handler);
+  stats.stop = () => page.unroute(url, handler);
+  return stats;
+}
+
+/** Lost acks: the next `times` syncs reach the server and are applied, and
+ *  the page is told the request failed. */
+async function dropAcks(page, { times = 1, url = SYNC_URL } = {}) {
+  const stats = { dropped: 0 };
+  const handler = async (route) => {
+    if (stats.dropped >= times) return route.fallback();
+    stats.dropped += 1;
+    await route.fetch();
+    return route.abort('failed');
+  };
+  await page.route(url, handler);
+  stats.stop = () => page.unroute(url, handler);
+  return stats;
+}
+
+// --- Live matches for the chaos specs ---------------------------------------
+
+async function csrfFrom(page, path = '/pingpong/matches/add/') {
+  const html = await (await page.request.get(path)).text();
+  const token = html.match(/name="csrfmiddlewaretoken" value="([^"]+)"/);
+  if (!token) throw new Error('No CSRF token on ' + path);
+  return { html, token: token[1] };
+}
+
+function optionValue(html, select, label) {
+  const block = html.match(new RegExp(`<select[^>]*name="${select}"[\\s\\S]*?</select>`));
+  if (!block) throw new Error('No <select name=' + select + '>');
+  for (const m of block[0].matchAll(/<option value="(\d+)"[^>]*>([^<]*)<\/option>/g)) {
+    if (m[2].trim() === label) return m[1];
+  }
+  throw new Error('No option ' + label + ' in ' + select);
+}
+
+/** A fresh live match, E2E Player (scorekeeper) vs E2E Chaos, created
+ *  through the real "Score live" form. Returns { pk, url }. */
+async function createLiveMatch(page, { bestOf = 3, opponent = 'E2E Chaos' } = {}) {
+  const { html, token } = await csrfFrom(page);
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const resp = await page.request.post('/pingpong/matches/add/', {
+    form: {
+      csrfmiddlewaretoken: token,
+      player1: optionValue(html, 'player1', 'E2E Player'),
+      player2: optionValue(html, 'player2', opponent),
+      player3: '',
+      player4: '',
+      is_double: 'False',
+      date_played: `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`,
+      location: '',
+      match_type: 'casual',
+      best_of: String(bestOf),
+      notes: '',
+      start_live: '1',
+    },
+    maxRedirects: 0,
+  });
+  const location = resp.headers().location || '';
+  const pk = (location.match(/matches\/(\d+)\/live\//) || [])[1];
+  if (!pk) throw new Error(`Score live did not redirect to a scoreboard (${resp.status()} ${location})`);
+  return { pk: Number(pk), url: `/pingpong/matches/${pk}/live/` };
+}
+
+async function liveState(page, pk) {
+  return (await page.request.get(`/pingpong/matches/${pk}/live/state/`)).json();
+}
+
+/** Finish a live match through live_sync, so a spec that stops mid-match
+ *  leaves no live match behind for the next one's "Resume" link. */
+async function finishLiveMatch(page, pk) {
+  const state = await liveState(page, pk);
+  if (!state.is_live) return;
+  const { token } = await csrfFrom(page);
+  let seq = state.applied_seq;
+  const ops = [];
+  if (!state.state.started) ops.push({ seq: ++seq, type: 'start', initial_server: 'team1' });
+  for (let i = 0; i < 80; i += 1) ops.push({ seq: ++seq, type: 'point', side: 'team1' });
+  await page.request.post(`/pingpong/matches/${pk}/live/sync/`, {
+    data: { ops },
+    headers: { 'X-CSRFToken': token },
+  });
+}
+
+/** Ops from "another phone": straight to live_sync, seqs chosen by the caller. */
+async function syncFromAnotherDevice(page, pk, ops) {
+  const { token } = await csrfFrom(page);
+  return page.request.post(`/pingpong/matches/${pk}/live/sync/`, {
+    data: { ops },
+    headers: { 'X-CSRFToken': token },
+  });
+}
+
 module.exports = {
+  releaseProdCSP,
+  seededRandom,
+  goOffline,
+  goOnline,
+  withLatency,
+  dropAcks,
+  createLiveMatch,
+  finishLiveMatch,
+  liveState,
+  syncFromAnotherDevice,
   openMomentumMatch,
   openPlayerByName,
   PROD_CSP,

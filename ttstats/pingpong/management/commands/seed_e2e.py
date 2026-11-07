@@ -27,10 +27,14 @@ E2E_SEASONS_USERNAME = "e2e-seasons"
 # The Glicko-2 user (KAN-71/72): Glicko state written by the real pipeline and
 # a result awaiting their confirmation, for the rating-component specs.
 E2E_GLICKO_USERNAME = "e2e-glicko"
+# The network-chaos opponent (KAN-83): every offline spec creates and finishes
+# its own live match against this player, so those results never touch
+# E2E Opponent's, which the season and Glicko specs read.
+E2E_CHAOS_OPPONENT = "e2e-chaos"
 # Every player the seed rates. A re-seed starts them from scratch.
 E2E_PLAYER_NAMES = (
     "E2E Player", "E2E Opponent", "E2E Momentum", "E2E Seasons Player",
-    "E2E Glicko Player",
+    "E2E Glicko Player", "E2E Chaos",
 )
 
 
@@ -78,6 +82,15 @@ class Command(BaseCommand):
 
         momentum_match = self._seed_completed_live_match(player)
 
+        chaos_user, _ = User.objects.get_or_create(
+            username=E2E_CHAOS_OPPONENT, defaults={"email": "e2e-chaos@example.test"}
+        )
+        chaos_user.profile.email_verified = True
+        chaos_user.profile.save()
+        chaos, _ = Player.objects.get_or_create(name="E2E Chaos")
+        chaos.user = chaos_user
+        chaos.save()
+
         # A club, so the invite specs have something to point at. Idempotent
         # like everything else here: the suite re-seeds before every run.
         club, _ = Club.objects.get_or_create(
@@ -87,7 +100,7 @@ class Command(BaseCommand):
             club=club, user=user, defaults={"role": ClubRole.OWNER}
         )
         Player.objects.filter(
-            pk__in=[player.pk, opponent.pk, momentum_match.opponent_pk]
+            pk__in=[player.pk, opponent.pk, momentum_match.opponent_pk, chaos.pk]
         ).update(club=club)
         Match.all_objects.filter(
             pk__in=[match.pk, momentum_match.pk]

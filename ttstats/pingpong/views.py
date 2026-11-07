@@ -2305,7 +2305,10 @@ class CustomLoginView(LoginView):
     redirect_authenticated_user = True
 
     def get_success_url(self):
-        return reverse_lazy("pingpong:dashboard")
+        # A safe `next` wins (LoginView.get_redirect_url checks the host): the
+        # scoreboard's "Sign in again" link must land back on the scoreboard,
+        # where the kept outbox then flushes (KAN-81). Otherwise Today.
+        return self.get_redirect_url() or reverse_lazy("pingpong:dashboard")
 
     def form_valid(self, form):
         user = form.get_user()
