@@ -2,46 +2,84 @@
  *
  * Served from / (see ttstats/urls.py) so its scope covers the whole site.
  *
- * Deliberately minimal: it exists to receive push notifications and to make
- * the app installable. There is no offline caching strategy here, and that is
- * a choice -- a stale cached page showing yesterday's leaderboard is worse
- * than an honest browser error, and cache invalidation for an app whose whole
- * content is live data is a real project, not a side effect of adding push.
+ * It exists to receive push notifications and to make the app installable.
+ * Nothing is cached, and that is a choice -- a stale cached page showing
+ * yesterday's leaderboard is worse than an honest browser error, and cache
+ * invalidation for an app whose whole content is live data is a real project,
+ * not a side effect of adding push.
  *
- * THERE IS DELIBERATELY NO `fetch` HANDLER. Not even an empty one.
+ * THE FETCH HANDLER IS A ROUTE TABLE, AND THE TABLE IS EMPTY (KAN-96).
  *
- * Registering any fetch listener makes this worker the network path for every
- * request the app makes, which has two consequences and no benefit while
- * there is nothing to cache:
+ * `ROUTES` below lists the requests this worker answers itself. A request no
+ * route claims -- today, every request -- is not intercepted: the handler
+ * returns without calling respondWith() and the browser fetches it exactly as
+ * if there were no worker. Only same-origin GETs are ever offered to the
+ * table, so a POST (a scored point) can never be answered from here. The
+ * offline scoreboard (KAN-82) and offline reading (KAN-131) add entries to
+ * the table; neither should need to touch the handler.
  *
- *   1. Playwright's page.route() stops intercepting anything, because those
- *      requests now originate from the worker rather than the page. The
- *      scoreboard specs that abort /live/point/ to check the error toast
- *      then silently pass their request straight through to the server, see
- *      no error, and fail looking for a toast that was never provoked. This
- *      shipped once and failed in CI while passing locally -- it is a race
- *      against how fast the worker claims the page.
- *   2. Every request in production gains a worker hop for nothing.
+ * This file used to have no fetch listener at all, for two reasons:
+ *
+ *   1. Playwright's page.route() stops seeing requests from a page a worker
+ *      with a fetch listener controls. The scoreboard specs that abort
+ *      /live/point/ to check the error toast once silently passed that
+ *      request to the server, saw no error, and failed looking for a toast
+ *      never provoked -- in CI only, as a race against how fast the worker
+ *      claims the page. applyProdCSP() is page.route() too, so CSP specs
+ *      would quietly check pages served without a policy.
+ *      Now: playwright.config.js blocks service workers in EVERY project by
+ *      default. Only `iphone-pwa` allows them, and its specs either opt back
+ *      out (`test.use({ serviceWorkers: 'block' })`) or assert that the route
+ *      really applied. Audit: docs/decisions/kan-76-sw-e2e-audit.md. A new
+ *      project is blocked unless it says otherwise.
+ *   2. Every request in production gains a worker hop. With an empty table
+ *      that hop is one URL parse; it is the price of a cache offline scoring
+ *      can extend.
  *
  * Chrome dropped the fetch-handler requirement for installability in 89, and
  * iOS never needed a service worker for Add to Home Screen at all. Push works
- * without one. If an offline mode is ever added, adding the handler back is
- * the first step -- and the scoreboard specs are the canary that will tell
- * you the moment it starts intercepting.
+ * without one.
  */
 
-const VERSION = 'ttstats-v1';
+const VERSION = 'ttstats-v2';
 const FALLBACK_ICON = '{% static "pingpong/icons/app/icon-192.png" %}';
 
 self.addEventListener('install', (event) => {
   // Take over immediately rather than waiting for every tab to close. There
   // is no cached content to invalidate, so there is nothing for the old
-  // worker to still be serving correctly.
+  // worker to still be serving correctly. The first route that caches must
+  // revisit this, and delete caches not named for VERSION in `activate`.
   self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(self.clients.claim());
+});
+
+/* The route table. First match wins; no match means "not intercepted".
+ *
+ * Each entry is { name, match(url, request) -> boolean,
+ * handle(event, url) -> Promise<Response> }. `match` must be cheap and
+ * synchronous: it runs for every GET the app makes. `handle` owns its whole
+ * strategy (network first, cache first, timeouts) and must always resolve to
+ * a Response -- including when the network and the cache both fail.
+ */
+const ROUTES = [];
+
+function routeFor(request) {
+  if (request.method !== 'GET') return null;
+  const url = new URL(request.url);
+  if (url.origin !== self.location.origin) return null;
+  const route = ROUTES.find((candidate) => candidate.match(url, request));
+  return route ? { route, url } : null;
+}
+
+self.addEventListener('fetch', (event) => {
+  const found = routeFor(event.request);
+  // Pass-through: without respondWith() the browser performs the request
+  // itself, as if this worker did not exist.
+  if (!found) return;
+  event.respondWith(found.route.handle(event, found.url));
 });
 
 self.addEventListener('push', (event) => {
