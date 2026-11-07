@@ -56,6 +56,18 @@ class TestServiceWorkerView:
         assert "addEventListener('push'" in body
         assert "addEventListener('notificationclick'" in body
 
+    def test_fetch_handler_is_a_route_table_that_only_sees_gets(self, client):
+        # KAN-96: the handler answers nothing unless a route claims it, and a
+        # write is never offered to a route -- a cached reply to a POST would
+        # be a lost point. pytest cannot run the worker; the e2e `iphone-pwa`
+        # project does (pwa.spec.js).
+        body = client.get('/sw.js').content.decode()
+
+        assert "addEventListener('fetch'" in body
+        assert 'const ROUTES = [' in body
+        assert "request.method !== 'GET'" in body
+        assert 'self.location.origin' in body
+
 
 @pytest.mark.django_db
 class TestManifestView:

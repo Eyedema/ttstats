@@ -95,10 +95,63 @@ test.describe('service worker', () => {
   });
 });
 
+test.describe('the fetch handler (KAN-96 canary)', () => {
+  // sw.js now has a fetch listener whose route table is empty: every request
+  // must still reach the network exactly as if there were no worker. These
+  // run with the worker controlling the page, which no other project allows.
+  async function controlledPage(page) {
+    await page.goto('/pingpong/');
+    await expect
+      .poll(() => page.evaluate(() => Boolean(navigator.serviceWorker.controller)), {
+        timeout: 10000,
+      })
+      .toBe(true);
+  }
+
+  test('a controlled page still navigates and fetches from the server', async ({ page }) => {
+    await controlledPage(page);
+
+    const response = await page.goto('/pingpong/leaderboard/');
+    expect(response.status()).toBe(200);
+    expect(await page.evaluate(() => Boolean(navigator.serviceWorker.controller))).toBe(true);
+    await expect(page.locator('main')).toBeVisible();
+
+    const status = await page.evaluate(() => fetch('/manifest.webmanifest').then((r) => r.status));
+    expect(status).toBe(200);
+  });
+
+  test('offline, a page is not served from any cache', async ({ page, context }) => {
+    // The honest browser error, not yesterday's leaderboard. When KAN-82 adds
+    // the scoreboard route, this stays true for every page it doesn't claim.
+    await controlledPage(page);
+    await page.goto('/pingpong/leaderboard/');
+
+    await context.setOffline(true);
+    try {
+      await expect(page.goto('/pingpong/leaderboard/')).rejects.toThrow();
+    } finally {
+      await context.setOffline(false);
+    }
+  });
+});
+
 test.describe('under the production CSP', () => {
   test.beforeEach(async ({ page }) => {
     await applyProdCSP(page);
   });
+
+  /** Workers are allowed in this project, and a worker-controlled page can
+   *  bypass page.route() -- which would leave these checking a page that
+   *  never had a policy. Each test is a fresh context, so the navigation
+   *  below is not yet controlled; assert it, rather than trust it. */
+  async function gotoUnderProdCSP(page, path) {
+    const response = await page.goto(path);
+    expect(
+      response.headers()['content-security-policy'],
+      'applyProdCSP did not reach the document; a service worker answered it?',
+    ).toContain("default-src 'self'");
+    return response;
+  }
 
   test('nothing on the notifications page is blocked', async ({ page }) => {
     const violations = [];
@@ -110,7 +163,7 @@ test.describe('under the production CSP', () => {
     });
     page.on('pageerror', (err) => violations.push(String(err)));
 
-    await page.goto('/pingpong/notifications/');
+    await gotoUnderProdCSP(page, '/pingpong/notifications/');
     await page.waitForTimeout(1000);
 
     expect(
@@ -124,14 +177,14 @@ test.describe('under the production CSP', () => {
     // the production-shaped case. In mobile Safari, PushManager does not
     // exist until the app has been installed -- the user must be told to add
     // it to the Home Screen, not told their browser cannot do notifications.
-    await page.goto('/pingpong/notifications/');
+    await gotoUnderProdCSP(page, '/pingpong/notifications/');
 
     await expect(page.locator('[data-push-state="ios-install"]')).toBeVisible();
     await expect(page.locator('[data-push-state="unconfigured"]')).toBeHidden();
   });
 
   test('push.js resolves the panel to exactly one state', async ({ page }) => {
-    await page.goto('/pingpong/notifications/');
+    await gotoUnderProdCSP(page, '/pingpong/notifications/');
 
     // Whatever this browser supports, the user must end up looking at one
     // explanation -- never several, and never a bare panel with no controls

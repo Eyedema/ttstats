@@ -9,6 +9,7 @@ paths:
   - "ttstats/pingpong/static/pingpong/js/push.js"
   - "ttstats/pingpong/management/commands/generate_vapid_keys.py"
   - "tests/e2e/pwa*.js"
+  - "tests/e2e/service-workers.spec.js"
 ---
 
 # PWA and web push
@@ -43,10 +44,16 @@ raises). `notifications.py` is the vocabulary (what each event says, to whom).
   with no field, because without the field it could not be muted.
 - **`Match.result_notified_at` makes the result push exactly-once**
   (conditional `.update()` claim). Never set it by hand.
-- **`sw.js` has no `fetch` handler**, deliberately.
-- **A live service worker disables Playwright's `page.route`.** `iphone-safari`
-  blocks workers; PWA specs run in `iphone-pwa`. Any spec using `page.route`
-  belongs in a project with workers blocked.
+- **`sw.js`'s fetch handler is a route table (`ROUTES`), empty by default.**
+  A request no route claims is not intercepted (no `respondWith()`). Only
+  same-origin GETs reach the table, so a POST is never answered by the worker.
+  New offline behaviour is a new `ROUTES` entry; bump `VERSION`.
+- **A live service worker disables Playwright's `page.route`** (WebKit: always;
+  Chromium/Gecko: once a route calls `respondWith()`). Workers are blocked in
+  the top-level `use` of `playwright.config.js`; only `iphone-pwa` allows them
+  (pinned by `tests/e2e/service-workers.spec.js`). A spec there needing
+  `page.route` blocks workers itself or asserts the route applied. Per-engine
+  measurements: `docs/decisions/kan-76-sw-e2e-audit.md`.
 - **`push.js` is plain JS and fails closed**: every `[data-push-state]` block
   starts `hidden` and JS reveals exactly one.
 - The CSRF cookie is `HttpOnly`, so `push.js` reads its token (and the public
