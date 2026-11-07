@@ -100,6 +100,19 @@ test.describe('under the production CSP', () => {
     await applyProdCSP(page);
   });
 
+  /** Workers are allowed in this project, and a worker-controlled page can
+   *  bypass page.route() -- which would leave these checking a page that
+   *  never had a policy. Each test is a fresh context, so the navigation
+   *  below is not yet controlled; assert it, rather than trust it. */
+  async function gotoUnderProdCSP(page, path) {
+    const response = await page.goto(path);
+    expect(
+      response.headers()['content-security-policy'],
+      'applyProdCSP did not reach the document; a service worker answered it?',
+    ).toContain("default-src 'self'");
+    return response;
+  }
+
   test('nothing on the notifications page is blocked', async ({ page }) => {
     const violations = [];
     page.on('console', (msg) => {
@@ -110,7 +123,7 @@ test.describe('under the production CSP', () => {
     });
     page.on('pageerror', (err) => violations.push(String(err)));
 
-    await page.goto('/pingpong/notifications/');
+    await gotoUnderProdCSP(page, '/pingpong/notifications/');
     await page.waitForTimeout(1000);
 
     expect(
@@ -124,14 +137,14 @@ test.describe('under the production CSP', () => {
     // the production-shaped case. In mobile Safari, PushManager does not
     // exist until the app has been installed -- the user must be told to add
     // it to the Home Screen, not told their browser cannot do notifications.
-    await page.goto('/pingpong/notifications/');
+    await gotoUnderProdCSP(page, '/pingpong/notifications/');
 
     await expect(page.locator('[data-push-state="ios-install"]')).toBeVisible();
     await expect(page.locator('[data-push-state="unconfigured"]')).toBeHidden();
   });
 
   test('push.js resolves the panel to exactly one state', async ({ page }) => {
-    await page.goto('/pingpong/notifications/');
+    await gotoUnderProdCSP(page, '/pingpong/notifications/');
 
     // Whatever this browser supports, the user must end up looking at one
     // explanation -- never several, and never a bare panel with no controls

@@ -49,6 +49,20 @@ module.exports = defineConfig({
     baseURL: BASE_URL,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
+    // Service workers are BLOCKED in every project unless it opts in, and
+    // only `iphone-pwa` does. Once a worker controls the page, page.route()
+    // -- and so applyProdCSP() -- stops seeing its requests: in WebKit for
+    // every subresource and POST, worker fetch handler or not; in Chromium
+    // and Gecko as soon as a route calls respondWith(). The rule is then
+    // silently skipped and the request goes to the server, so a spec that
+    // aborts /live/point/ fails looking for an error it never provoked, and a
+    // CSP spec passes against a page that had no policy. It is a race against
+    // how fast the worker claims the page, so it fails in CI and passes
+    // locally. Measured per engine: docs/decisions/kan-76-sw-e2e-audit.md.
+    //
+    // Blocking costs no fidelity outside `iphone-pwa`: the worker answers no
+    // request itself today and only exists for push.
+    serviceWorkers: 'block',
   },
 
   projects: [
@@ -67,33 +81,28 @@ module.exports = defineConfig({
         /.*\.desktop\.spec\.js/,
         /.*\.dark\.spec\.js/,
         /.*\.android\.spec\.js/,
-        // The PWA specs need a live service worker; everything here needs it
-        // gone. See the two `serviceWorkers` settings below.
+        // The PWA specs need a live service worker; see `iphone-pwa`.
         /pwa\.spec\.js/,
       ],
-      use: {
-        ...devices['iPhone 13'],
-        storageState: STORAGE_STATE,
-        // Playwright's page.route() does not intercept requests from a page a
-        // service worker controls -- the abort/delay rule is simply never
-        // consulted and the request goes to the server. The scoreboard specs
-        // are built on exactly that (abort /live/point/ to provoke the error
-        // toast, delay it to prove the score moves optimistically), so with
-        // the worker live they fail, or worse, pass without testing anything.
-        //
-        // Blocking it here costs no fidelity: sw.js has no fetch handler, so
-        // it is inert with respect to everything these specs exercise. It
-        // only exists to receive push.
-        serviceWorkers: 'block',
-      },
+      // Workers blocked (top-level `use`): the scoreboard specs abort and
+      // delay /live/point/ with page.route().
+      use: { ...devices['iPhone 13'], storageState: STORAGE_STATE },
     },
     {
       // The mirror image: the specs that are *about* the service worker, so
-      // it has to be allowed to register here.
+      // it has to be allowed to register here -- the ONLY project that does.
+      // A spec here that needs page.route() / applyProdCSP() either blocks
+      // workers for itself (`test.use({ serviceWorkers: 'block' })`, as
+      // pull-to-refresh-cases.js does) or proves its route applied (as
+      // pwa.spec.js's CSP block does). Offline specs (KAN-82) belong here.
       name: 'iphone-pwa',
       dependencies: ['setup'],
       testMatch: /pwa\.spec\.js/,
-      use: { ...devices['iPhone 13'], storageState: STORAGE_STATE },
+      use: {
+        ...devices['iPhone 13'],
+        storageState: STORAGE_STATE,
+        serviceWorkers: 'allow',
+      },
     },
     {
       name: 'iphone-no-js',
