@@ -1,5 +1,5 @@
 {% extends "pingpong/base.html" %}
-{% load icon_tags %}
+{% load icon_tags live_tags static %}
 
 {% block title %}Live Scoreboard{% endblock %}
 
@@ -10,11 +10,21 @@ entering and leaving an instant swap: nothing is snapshotted over the tap zones
 and the first tap is never held behind an animation. The names are cleared too,
 so the chrome hidden under the board is never captured. Inline because it is
 one page's override of app.css; prod's style-src allows it.
+
+The other rules are the scoreboard's fail-closed contract (KAN-81). Every
+overlay below starts with the `hidden` attribute and only scoreboard.js
+removes it. Tailwind's preflight `[hidden]` rule loses to any display utility
+on the same element, so it is restated here with !important, inline, so it
+holds with no stylesheet at all. The game pips are styled by a data attribute
+because scoreboard.js toggles them and Tailwind never scans JS.
 {% endcomment %}
 {% block extra_css %}
 <style>
   @view-transition { navigation: none; }
   * { view-transition-name: none !important; }
+  #scoreboard [hidden] { display: none !important; }
+  #scoreboard [data-pip] { opacity: .25; }
+  #scoreboard [data-pip][data-won] { opacity: 1; }
 </style>
 {% endblock %}
 
@@ -34,30 +44,42 @@ at a glance and "2" is not distinguishable from "3" across a room.
 Chrome is a 60px bar pinned above the home indicator: Undo bottom-left where a
 thumb already is, and Exit deliberately the quietest thing on screen.
 
-The JS below is unchanged and load-bearing -- optimistic scoring, the serialised
-POST queue, the no-alert error toast. Read its comments before touching it.
+Offline-first (KAN-76): the page renders from local state = the server's state
++ the ops not yet acknowledged, kept in a durable outbox. All behaviour lives
+in static files -- live_rules.js (the rules mirror), live_outbox.js,
+live_session.js (flush loop + reconcile) and scoreboard.js (this DOM) -- plain
+JS, so it runs under a CSP with no 'unsafe-eval'. Read
+.claude/rules/live-scoring.md "Scoreboard client" before touching it.
 {% endcomment %}
 
 {% block full_bleed %}
 {% csrf_token %}
 {{ bootstrap|json_script:"scoreboard-bootstrap" }}
+{{ scoreboard_config|json_script:"scoreboard-config" }}
+{% live_rules_config %}
 <div
   id="scoreboard"
   data-no-pull-refresh
   class="fixed inset-0 z-50 flex select-none flex-col bg-court text-bone"
-  x-data="scoreboardApp()"
-  x-init="init()"
   data-point-url="{{ point_url }}"
   data-start-url="{{ start_url }}"
   data-state-url="{{ state_url }}"
   data-undo-url="{{ undo_url }}"
   data-side-switch-url="{{ side_switch_url }}"
+  data-sync-url="{{ sync_url }}"
   data-match-detail-url="{% url 'pingpong:match_detail' match.pk %}"
   data-team1-label="{{ team1_label }}"
   data-team2-label="{{ team2_label }}"
 >
-  {# --- Server picker, shown until live_state.started ------------------- #}
-  <div x-show="!state.started" x-cloak
+  <noscript>
+    <div class="flex flex-1 flex-col justify-center gap-4 p-6">
+      <p class="text-title">The live scoreboard needs JavaScript.</p>
+      <a href="{% url 'pingpong:match_detail' match.pk %}" class="btn-quiet self-start">Back to the match</a>
+    </div>
+  </noscript>
+
+  {# --- Server picker, shown until the match has started ----------------- #}
+  <div data-sb-picker hidden
        class="absolute inset-0 z-10 flex flex-col justify-center gap-6 bg-court p-6 pt-safe-top pb-safe-bottom">
     <div>
       <p class="label-cap">Before the first serve</p>
@@ -66,11 +88,11 @@ POST queue, the no-alert error toast. Read its comments before touching it.
     </div>
 
     <div class="flex flex-col gap-px">
-      <button type="button" @click="startMatch('team1')"
+      <button type="button" data-start="team1"
               class="hue-fill {{ team1_hue_class }} flex min-h-[88px] items-center px-5 text-[22px] font-extrabold tracking-[-0.02em]">
         {{ team1_label }}
       </button>
-      <button type="button" @click="startMatch('team2')"
+      <button type="button" data-start="team2"
               class="hue-fill {{ team2_hue_class }} flex min-h-[88px] items-center px-5 text-[22px] font-extrabold tracking-[-0.02em]">
         {{ team2_label }}
       </button>
@@ -80,91 +102,69 @@ POST queue, the no-alert error toast. Read its comments before touching it.
   </div>
 
   {# --- The two tap zones ------------------------------------------------ #}
-  <div x-show="state.started" x-cloak class="flex min-h-0 flex-1">
+  <div data-sb-board hidden class="flex min-h-0 flex-1">
     {% comment %}
-    There is deliberately NO :disabled here. A tap must never be dropped
-    because a previous POST is still in flight -- see addPoint().
+    There is deliberately NO `disabled` on a tap zone, ever. A tap is applied
+    locally and queued in the outbox; nothing about the network may drop it.
     {% endcomment %}
-    <button type="button" @click="addPoint('team1')"
-            :class="{ 'order-2': state.side_switched }"
-            class="tap-zone hue-fill {{ team1_hue_class }} flex flex-1 flex-col pt-[calc(52px+env(safe-area-inset-top,0px))] text-left">
+    {% for side, label, hue in sides %}
+    <button type="button" data-side="{{ side }}"
+            class="tap-zone hue-fill {{ hue }} flex flex-1 flex-col pt-[calc(52px+env(safe-area-inset-top,0px))] text-left">
       <span class="flex flex-col gap-0.5 px-[18px]">
-        <span class="text-[19px] font-extrabold leading-tight tracking-[-0.02em]">{{ team1_label }}</span>
+        <span class="text-[19px] font-extrabold leading-tight tracking-[-0.02em]">{{ label }}</span>
         <span class="flex items-center gap-1.5">
-          <span x-show="currentServer === 'team1'" class="dot h-2.5 w-2.5 flex-none bg-current"></span>
-          <span class="text-[11px] font-extrabold uppercase tracking-[0.12em]"
-                x-text="currentServer === 'team1' ? 'serving' : 'receiving'"></span>
+          <span data-serve-dot="{{ side }}" hidden class="dot h-2.5 w-2.5 flex-none bg-current"></span>
+          <span data-serve-word="{{ side }}" class="text-[11px] font-extrabold uppercase tracking-[0.12em]">receiving</span>
         </span>
       </span>
 
       <span class="flex flex-1 items-center justify-center">
-        <span x-ref="team1Score" class="n text-score-hero" x-text="points('team1')"></span>
+        <span data-score="{{ side }}" class="n text-score-hero">0</span>
       </span>
 
       {# Games won, countable at a glance. #}
       <span class="flex gap-[5px] px-[18px] pb-[18px]">
         {% for _ in game_pips %}
-        <span class="h-1.5 w-[26px] bg-current"
-              :class="state.team1_games > {{ forloop.counter0 }} ? 'opacity-100' : 'opacity-25'"></span>
+        <span data-pip="{{ side }}" data-pip-index="{{ forloop.counter0 }}" class="h-1.5 w-[26px] bg-current"></span>
         {% endfor %}
       </span>
     </button>
-
-    <button type="button" @click="addPoint('team2')"
-            :class="{ 'order-1': state.side_switched }"
-            class="tap-zone hue-fill {{ team2_hue_class }} flex flex-1 flex-col pt-[calc(52px+env(safe-area-inset-top,0px))] text-left">
-      <span class="flex flex-col gap-0.5 px-[18px]">
-        <span class="text-[19px] font-extrabold leading-tight tracking-[-0.02em]">{{ team2_label }}</span>
-        <span class="flex items-center gap-1.5">
-          <span x-show="currentServer === 'team2'" class="dot h-2.5 w-2.5 flex-none bg-current"></span>
-          <span class="text-[11px] font-extrabold uppercase tracking-[0.12em]"
-                x-text="currentServer === 'team2' ? 'serving' : 'receiving'"></span>
-        </span>
-      </span>
-
-      <span class="flex flex-1 items-center justify-center">
-        <span x-ref="team2Score" class="n text-score-hero" x-text="points('team2')"></span>
-      </span>
-
-      <span class="flex gap-[5px] px-[18px] pb-[18px]">
-        {% for _ in game_pips %}
-        <span class="h-1.5 w-[26px] bg-current"
-              :class="state.team2_games > {{ forloop.counter0 }} ? 'opacity-100' : 'opacity-25'"></span>
-        {% endfor %}
-      </span>
-    </button>
+    {% endfor %}
   </div>
 
   {% comment %}
-  --- Error toast. Replaces the blocking browser dialog this used to
-  raise, which froze the page mid-match and read as a browser failure
-  rather than as part of the scoreboard. Carries no [data-flash], so
-  base.html's five-second sweep leaves it alone. -------------------
+  --- Sync indicator (KAN-81). Quiet when everything is saved; otherwise a word
+  plus a glyph, never colour alone, and never amber (amber means live). Tapping
+  it opens the sync sheet. ---------------------------------------------
   {% endcomment %}
-  <div x-show="error" x-cloak
-       x-transition:enter="transition ease-out duration-200"
-       x-transition:enter-start="opacity-0"
-       x-transition:enter-end="opacity-100"
-       x-transition:leave="transition ease-in duration-150"
-       x-transition:leave-start="opacity-100"
-       x-transition:leave-end="opacity-0"
-       role="alert"
-       class="absolute bottom-24 left-1/2 z-20 max-w-[90vw] -translate-x-1/2 border-2 border-paddle bg-court px-4 py-2.5 text-[13px] font-extrabold"
-       x-text="error"></div>
+  <button type="button" data-sync-indicator hidden aria-haspopup="dialog"
+          class="absolute inset-x-0 top-[calc(10px+env(safe-area-inset-top,0px))] z-20 mx-auto flex min-h-[36px] w-max max-w-[90vw] items-center gap-1.5 border border-court-line bg-court px-3 py-1.5 text-[12px] font-extrabold text-bone">
+    <span data-sync-glyph="pending" hidden class="flex">{% icon "cloud-upload" size="sm" %}</span>
+    <span data-sync-glyph="offline" hidden class="flex">{% icon "cloud-off" size="sm" %}</span>
+    <span data-sync-text></span>
+  </button>
+
+  {% comment %}
+  --- Toast. Replaces the blocking browser dialog this used to raise, which
+  froze the page mid-match. Carries no [data-flash], so base.html's
+  five-second sweep leaves it alone. -------------------------------------
+  {% endcomment %}
+  <div data-sb-toast hidden role="alert"
+       class="absolute bottom-24 left-1/2 z-40 max-w-[90vw] -translate-x-1/2 border-2 border-paddle bg-court px-4 py-2.5 text-[13px] font-extrabold"></div>
 
   {# --- Chrome: 60px, pinned above the home indicator ------------------- #}
-  <div x-show="state.started" x-cloak
+  <div data-sb-chrome hidden
        class="flex flex-none items-stretch border-t-2 border-court-line bg-court pb-safe-bottom">
-    <button type="button" @click="undo()" :disabled="busy"
-            class="flex min-h-[60px] min-w-[96px] items-center gap-2 border-r border-court-line px-4 text-[14px] font-extrabold disabled:opacity-40">
+    <button type="button" data-action="undo"
+            class="flex min-h-[60px] min-w-[96px] items-center gap-2 border-r border-court-line px-4 text-[14px] font-extrabold">
       {% icon "undo-2" size="sm" %}
       <span>Undo</span>
     </button>
 
     <div class="flex min-h-[60px] flex-1 flex-col items-center justify-center gap-0.5">
-      <span class="n text-[15px]"><span x-text="state.team1_games || 0"></span> – <span x-text="state.team2_games || 0"></span></span>
+      <span class="n text-[15px]"><span data-games="team1">0</span> – <span data-games="team2">0</span></span>
       <span class="text-[10px] font-extrabold uppercase tracking-[0.12em] text-muted-foreground">
-        game <span x-text="state.current_game_number"></span> of {{ match.best_of }}
+        game <span data-game-number>1</span> of {{ match.best_of }}
       </span>
     </div>
 
@@ -175,8 +175,32 @@ POST queue, the no-alert error toast. Read its comments before touching it.
     </a>
   </div>
 
+  {# --- Another device is scoring: read-only follow mode (KAN-81) ------- #}
+  <div data-sb-follow hidden role="status"
+       class="absolute inset-x-0 top-0 z-30 flex flex-col gap-2 border-b-2 border-court-line bg-court px-4 pb-3 pt-[calc(12px+env(safe-area-inset-top,0px))]">
+    <p class="flex items-center gap-2 text-[14px] font-extrabold">
+      {% icon "smartphone" size="sm" %}
+      <span>This match is being scored on another device</span>
+    </p>
+    <p class="text-[12px] font-semibold text-muted-foreground">Following along, read-only. Taps here are not counted.</p>
+    <button type="button" data-action="take-over" class="btn-quiet self-start">Score on this phone instead</button>
+  </div>
+
+  {# --- Session expired: sign in again, the ops stay (KAN-81) ------------ #}
+  <div data-sb-reauth hidden role="status"
+       class="absolute inset-x-0 top-0 z-30 flex flex-col gap-2 border-b-2 border-paddle bg-court px-4 pb-3 pt-[calc(12px+env(safe-area-inset-top,0px))]">
+    <p class="flex items-center gap-2 text-[14px] font-extrabold">
+      {% icon "log-in" size="sm" %}
+      <span>Sign in again to save the score</span>
+    </p>
+    <p class="text-[12px] font-semibold text-muted-foreground">
+      <span data-reauth-count>Your points are</span> kept on this phone and will be sent after you sign in.
+    </p>
+    <a href="{{ scoreboard_config.login_url }}" data-reauth-link data-leave-ok class="btn-paddle self-start">Sign in</a>
+  </div>
+
   {# --- Side-switch prompt (KAN-9) --------------------------------------- #}
-  <div x-show="shouldPromptSideSwitch" x-cloak class="absolute inset-0 z-30 flex items-center justify-center p-6">
+  <div data-sb-switch hidden class="absolute inset-0 z-30 flex items-center justify-center p-6">
     <div class="overlay-scrim absolute inset-0"></div>
     <div class="surface-overlay relative w-full max-w-sm p-5">
       <p class="label-live">Deciding game</p>
@@ -185,212 +209,63 @@ POST queue, the no-alert error toast. Read its comments before touching it.
       <p class="mt-1 text-[13px] font-semibold leading-relaxed text-muted-foreground">
         The deciding game has reached 5. Change ends before the next point.
       </p>
-      <button type="button" @click="confirmSideSwitch()" class="btn-paddle mt-4 w-full">Done</button>
+      <button type="button" data-action="side-switch" class="btn-paddle mt-4 w-full">Done</button>
+    </div>
+  </div>
+
+  {# --- Finished locally, waiting for the server (KAN-81) ---------------- #}
+  <div data-sb-finish hidden
+       class="absolute inset-0 z-30 flex flex-col justify-center gap-5 bg-court p-6 pt-safe-top pb-safe-bottom">
+    <div>
+      <p class="label-cap">Final</p>
+      <span class="rule mt-2"></span>
+      <h2 class="mt-4 text-display">Match finished</h2>
+      <p class="mt-2 text-[15px] font-extrabold" data-finish-winner></p>
+    </div>
+    <p class="n text-[44px] font-extrabold leading-none"><span data-finish-tally="team1">0</span> – <span data-finish-tally="team2">0</span></p>
+    <ol data-finish-games class="flex flex-col gap-1 text-[14px] font-semibold text-muted-foreground"></ol>
+    <template data-finish-game-row><li class="n"></li></template>
+    <p class="flex items-center gap-2 text-[13px] font-extrabold" data-finish-status role="status">Saving result…</p>
+    <button type="button" data-action="retry" data-finish-retry hidden class="btn-quiet self-start">Retry now</button>
+  </div>
+
+  {# --- Sync details sheet (KAN-81) ------------------------------------- #}
+  <div data-sync-sheet hidden class="absolute inset-0 z-40 flex items-end justify-center">
+    <div class="overlay-scrim absolute inset-0" data-action="close-sheet"></div>
+    <div role="dialog" aria-modal="true" aria-labelledby="sync-sheet-title"
+         class="surface-overlay relative w-full max-w-md p-5 pb-[calc(20px+env(safe-area-inset-bottom,0px))]">
+      <h2 id="sync-sheet-title" class="text-title">Saving the score</h2>
+      <p class="mt-2 text-[13px] font-semibold leading-relaxed" data-sync-detail></p>
+      <p class="mt-1 text-[12px] font-semibold text-muted-foreground" data-sync-last></p>
+      <div class="mt-4 flex gap-2">
+        <button type="button" data-action="retry" class="btn-paddle flex-1">Retry now</button>
+        <button type="button" data-action="close-sheet" class="btn-quiet">Close</button>
+      </div>
+    </div>
+  </div>
+
+  {# --- Leaving with unsaved points (KAN-81) ----------------------------- #}
+  <div data-leave-sheet hidden class="absolute inset-0 z-40 flex items-end justify-center">
+    <div class="overlay-scrim absolute inset-0" data-action="stay"></div>
+    <div role="dialog" aria-modal="true" aria-labelledby="leave-sheet-title"
+         class="surface-overlay relative w-full max-w-md p-5 pb-[calc(20px+env(safe-area-inset-bottom,0px))]">
+      <h2 id="leave-sheet-title" class="text-title">Not saved yet</h2>
+      <p class="mt-2 text-[13px] font-semibold leading-relaxed">
+        <span data-leave-count>Some points</span> have not reached the server. They stay on this phone and are sent the next time you open this scoreboard.
+      </p>
+      <div class="mt-4 flex gap-2">
+        <button type="button" data-action="stay" class="btn-paddle flex-1">Stay</button>
+        <a href="{% url 'pingpong:match_detail' match.pk %}" data-leave-go data-leave-ok class="btn-quiet">Leave anyway</a>
+      </div>
     </div>
   </div>
 </div>
+{% endblock %}
 
-<script>
-// Haptic vocabulary. Each pattern is tied to one causal event and fires on the
-// same frame as its visual, otherwise the two read as unrelated. Kept short and
-// few: a buzz on everything trains the umpire to ignore all of them.
-const HAPTICS = {
-  point: 12,
-  gameWon: [0, 35, 70, 35],
-  sideSwitch: [0, 45, 90, 45],
-  error: [0, 70, 50, 70],
-};
-
-function scoreboardApp() {
-  return {
-    state: {},
-    currentServer: null,
-    shouldPromptSideSwitch: false,
-    busy: false,
-    wakeLock: null,
-    csrfToken: '',
-    error: '',
-    errorTimer: null,
-    // Points the user has tapped but the server has not confirmed yet. The
-    // display reads through this so the numeral moves on the tap rather than
-    // on the round-trip -- on gym wifi that gap is the difference between a
-    // scoreboard and a dead slab.
-    optimistic: {},
-    pending: 0,
-    // POSTs are serialised: the server applies points in order, and two
-    // in-flight requests could otherwise be processed the wrong way round.
-    queue: Promise.resolve(),
-
-    init() {
-      const bootstrap = JSON.parse(document.getElementById('scoreboard-bootstrap').textContent);
-      this.applyPayload(bootstrap);
-      const csrfInput = document.querySelector('input[name=csrfmiddlewaretoken]');
-      this.csrfToken = csrfInput ? csrfInput.value : '';
-      this.acquireWakeLock();
-      document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState !== 'visible') return;
-        this.acquireWakeLock();
-        // Re-read the canonical state. A phone that slept, or a match
-        // finished from another device, would otherwise leave this page
-        // showing a score the server no longer agrees with. Cheaper and
-        // quieter than polling: nothing happens while the tab is hidden.
-        this.refreshState();
-      });
-    },
-
-    async refreshState() {
-      const url = this.$root.dataset.stateUrl;
-      if (!url) return;
-      try {
-        const resp = await fetch(url, { credentials: 'same-origin' });
-        if (!resp.ok) return;
-        this.applyPayload(await resp.json());
-      } catch (err) {
-        // Offline or mid-navigation: keep showing what we have.
-      }
-    },
-
-    async acquireWakeLock() {
-      if (!('wakeLock' in navigator)) return;
-      try {
-        this.wakeLock = await navigator.wakeLock.request('screen');
-      } catch (err) {
-        // user-denied or device unsupported — no-op
-      }
-    },
-
-    // --- Feedback --------------------------------------------------------
-
-    haptic(pattern) {
-      if (!('vibrate' in navigator)) return;
-      try {
-        navigator.vibrate(pattern);
-      } catch (err) {
-        // Some browsers throw when the page has never been interacted with.
-      }
-    },
-
-    // Restart the animation rather than letting a still-running one swallow
-    // the next tap: remove, force a reflow, re-add.
-    bumpScore(side) {
-      const el = this.$refs[side + 'Score'];
-      if (!el) return;
-      el.classList.remove('score-bump');
-      void el.offsetWidth;
-      el.classList.add('score-bump');
-    },
-
-    showError(message) {
-      this.error = message;
-      this.haptic(HAPTICS.error);
-      clearTimeout(this.errorTimer);
-      this.errorTimer = setTimeout(() => { this.error = ''; }, 4000);
-    },
-
-    // --- State -----------------------------------------------------------
-
-    points(side) {
-      const key = side + '_points';
-      return key in this.optimistic ? this.optimistic[key] : (this.state[key] || 0);
-    },
-
-    applyPayload(p) {
-      const previous = this.state || {};
-      const wasPrompting = this.shouldPromptSideSwitch;
-
-      this.state = p.state || {};
-      this.currentServer = p.current_server;
-      this.shouldPromptSideSwitch = p.should_prompt_side_switch;
-
-      // A game closing out is a bigger event than a point, and the numerals
-      // resetting to 0 is easy to miss mid-rally.
-      const gamesBefore = (previous.team1_games || 0) + (previous.team2_games || 0);
-      const gamesAfter = (this.state.team1_games || 0) + (this.state.team2_games || 0);
-      if (gamesAfter > gamesBefore) this.haptic(HAPTICS.gameWon);
-
-      if (this.shouldPromptSideSwitch && !wasPrompting) this.haptic(HAPTICS.sideSwitch);
-
-      if (p.redirect_url) {
-        window.location.href = p.redirect_url;
-      }
-    },
-
-    // Serialise onto the queue so requests reach the server in tap order.
-    enqueue(fn) {
-      this.queue = this.queue.then(fn, fn);
-      return this.queue;
-    },
-
-    async postJSON(url, body) {
-      this.busy = true;
-      try {
-        const resp = await fetch(url, {
-          method: 'POST',
-          credentials: 'same-origin',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-CSRFToken': this.csrfToken,
-          },
-          body: JSON.stringify(body || {}),
-        });
-        const data = await resp.json();
-        if (!resp.ok) {
-          this.showError(data.error || 'Request failed');
-          return false;
-        }
-        this.applyPayload(data);
-        return true;
-      } catch (err) {
-        this.showError('Offline — the score has not been saved.');
-        return false;
-      } finally {
-        this.busy = false;
-      }
-    },
-
-    startMatch(server) {
-      return this.enqueue(() =>
-        this.postJSON(this.$root.dataset.startUrl, { initial_server: server })
-      );
-    },
-
-    addPoint(side) {
-      if (this.shouldPromptSideSwitch) return; // block until acknowledged
-
-      // Show the point immediately. This is not a re-implementation of the
-      // rules: the server always increments this side before deciding
-      // anything else, so the number shown is never wrong -- at most it is
-      // transient, when the point also ends the game and the server comes
-      // back with 0-0 and a game added. Which is what actually happened.
-      const key = side + '_points';
-      this.optimistic[key] = this.points(side) + 1;
-      this.pending += 1;
-      this.bumpScore(side);
-      this.haptic(HAPTICS.point);
-
-      return this.enqueue(async () => {
-        const ok = await this.postJSON(this.$root.dataset.pointUrl, { side });
-        this.pending -= 1;
-        // Hold the overlay while taps are still outstanding, or an early
-        // response would drag the display backwards. The last one to land
-        // hands authority back to the server.
-        if (!ok || this.pending === 0) this.optimistic = {};
-        if (!ok) await this.refreshState();
-      });
-    },
-
-    confirmSideSwitch() {
-      return this.enqueue(() => this.postJSON(this.$root.dataset.sideSwitchUrl, {}));
-    },
-
-    undo() {
-      return this.enqueue(async () => {
-        const ok = await this.postJSON(this.$root.dataset.undoUrl, {});
-        // Undo re-bases the score; any optimistic overlay is now meaningless.
-        if (ok) this.optimistic = {};
-      });
-    },
-  };
-}
-</script>
+{% block extra_js %}
+{# Order matters: the rules mirror, the outbox, the session, then the page. #}
+<script defer src="{% static 'pingpong/js/live_rules.js' %}"></script>
+<script defer src="{% static 'pingpong/js/live_outbox.js' %}"></script>
+<script defer src="{% static 'pingpong/js/live_session.js' %}"></script>
+<script defer src="{% static 'pingpong/js/scoreboard.js' %}"></script>
 {% endblock %}

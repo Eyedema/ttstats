@@ -40,6 +40,14 @@
 
     <link rel="stylesheet" href="{% static 'pingpong/css/app.css' %}">
 
+    {% comment %}
+    Logged out, this is empty, and offline.js tells the service worker to drop
+    every cached scoreboard (KAN-82): the next person on this phone must not
+    open the last one's page with no signal.
+    {% endcomment %}
+    <meta name="ttstats-identity" content="{{ ttstats_identity }}">
+    <script defer src="{% static 'pingpong/js/offline.js' %}"></script>
+
     {% block extra_head %}{% endblock %}
 </head>
 

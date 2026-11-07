@@ -60,6 +60,22 @@ def _create_player(at, **fields):
     return Player._base_manager.get(pk=old_player._base_manager.create(**fields).pk)
 
 
+def _create_match(at, **fields):
+    """A Match inserted through the *historical* model at migration `at`.
+
+    The mirror image of `_create_player`: the current model declares columns
+    that older schemas do not have yet (KAN-77 added `live_applied_seq`), so
+    it can neither insert nor load a row there. Returns an unsaved-shell
+    current-model instance carrying only the pk, which is all
+    `set_match_sides` needs.
+    """
+    from pingpong.models import Match
+
+    executor = MigrationExecutor(connection)
+    old_match = executor.loader.project_state((APP, at)).apps.get_model(APP, "Match")
+    return Match(pk=old_match._base_manager.create(**fields).pk)
+
+
 def _leaf():
     """The app's real latest migration, not the tenancy HEAD constant."""
     executor = MigrationExecutor(connection)
@@ -157,7 +173,7 @@ class TestBackfillMigrationIsTwoWay:
 
         p1 = _create_player(BEFORE_BACKFILL, name="Ada")
         p2 = _create_player(BEFORE_BACKFILL, name="Bob")
-        match = Match.all_objects.create(best_of=5)
+        match = _create_match(BEFORE_BACKFILL, best_of=5)
         set_match_sides(match, [p1], [p2])
         before = (Player.objects.count(), Match.all_objects.count())
 
@@ -237,7 +253,7 @@ class TestTheChainSurvivesADatabaseWithUsersInIt:
         players.append(_create_player(BEFORE_BACKFILL, name="Chain guest"))
 
         for i in range(0, 4, 2):
-            match = Match.all_objects.create(best_of=5, location=location)
+            match = _create_match(BEFORE_BACKFILL, best_of=5, location_id=location.pk)
             set_match_sides(match, [players[i]], [players[i + 1]])
 
         return User.objects.count(), Player.objects.count(), Match.all_objects.count()
@@ -357,3 +373,37 @@ class TestRetireEloMigration:
         _migrate_to(RETIRE_ELO)
         assert "elo_rating" not in _columns("pingpong_player")
         assert "elo_old_rating" in _columns("pingpong_ratingchange")
+
+
+LIVE_APPLIED_SEQ = "0047_match_live_applied_seq"
+
+
+@pytest.mark.django_db(transaction=True)
+class TestLiveAppliedSeqMigration:
+    """KAN-85: a nullable column, so it reverses and re-applies freely."""
+
+    def test_reverses_and_reapplies(self, at_head):
+        assert "live_applied_seq" in _columns("pingpong_match")
+
+        _migrate_to(RETIRE_ELO)
+        assert "live_applied_seq" not in _columns("pingpong_match")
+
+        _migrate_to(LIVE_APPLIED_SEQ)
+        assert "live_applied_seq" in _columns("pingpong_match")
+
+
+CLIENT_RECORDED_AT = "0048_pointevent_client_recorded_at"
+
+
+@pytest.mark.django_db(transaction=True)
+class TestClientRecordedAtMigration:
+    """KAN-89: a nullable column, so it reverses and re-applies freely."""
+
+    def test_reverses_and_reapplies(self, at_head):
+        assert "client_recorded_at" in _columns("pingpong_pointevent")
+
+        _migrate_to(LIVE_APPLIED_SEQ)
+        assert "client_recorded_at" not in _columns("pingpong_pointevent")
+
+        _migrate_to(CLIENT_RECORDED_AT)
+        assert "client_recorded_at" in _columns("pingpong_pointevent")

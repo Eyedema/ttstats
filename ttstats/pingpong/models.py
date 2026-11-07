@@ -484,6 +484,13 @@ class Match(ClubStampedMixin, SideLabelMixin, models.Model):
         related_name="live_matches",
         help_text="Player driving the live scoreboard for this match",
     )
+    # Highest client op ``seq`` the live endpoints have applied (KAN-77). Ops
+    # at or below it are duplicate deliveries and are acknowledged, never
+    # re-applied. Deliberately a column of its own rather than a key in
+    # ``live_state``: that is nulled at match end, and the most dangerous
+    # duplicate is a retried match point arriving after it. Written with a
+    # queryset ``.update()`` in the op's own transaction, like ``live_state``.
+    live_applied_seq = models.PositiveIntegerField(null=True, blank=True)
 
     # Set the first time the "match confirmed, here is your Elo" push goes
     # out. Three separate signal paths can reach that point for the same
@@ -921,7 +928,7 @@ class PointEvent(models.Model):
     (not per game), which is what makes "no gaps and no duplicates" usable as
     an integrity check. Undo *deletes* the trailing row rather than appending
     a compensating one, so the property is preserved by construction -- see
-    ``views.LiveUndoView``.
+    ``live_ops._undo``.
 
     **Club scoping reaches through the match rather than duplicating the
     column.** ``Match`` already denormalizes ``club`` because it is filtered
@@ -959,6 +966,12 @@ class PointEvent(models.Model):
         help_text="1-based position of this point within the match"
     )
     created_at = models.DateTimeField(auto_now_add=True)
+    # When the scorekeeper's device says the point was played (KAN-89): the
+    # op's ``client_ts``, clamped to [match day - 1 day, now], null when
+    # absent or unparseable. A point synced after a dead spell reaches the
+    # server minutes late, so ``created_at`` (server time) stops meaning "when
+    # it happened"; momentum and duration features should prefer this when set.
+    client_recorded_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ["sequence"]
