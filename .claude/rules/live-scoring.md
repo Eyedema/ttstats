@@ -230,7 +230,11 @@ Choices: `docs/decisions/kan-80-81-offline-client.md`; the epic as a whole:
   prompt, the finished match and follow mode ignore taps.
 - **Completion is shown locally, navigated only on the server's
   `redirect_url`**; the finish screen works offline indefinitely.
-- 403 or a login bounce keeps the outbox and stops the loop until the user
+- **A 403 is first retried once with a fresh CSRF token**: a page the worker
+  served from cache can hold a token from an older secret, so `/live/state/`
+  returns `csrf_token` (`get_token`) and `fetchTransport` keeps it. Only a
+  403 with the current token, or a login bounce, means signed out: that
+  keeps the outbox and stops the loop until the user
   signs in (the login view honours a safe `next`). Another device scoring
   (`applied_seq` past anything we issued, or a gap that does not resolve)
   switches to read-only follow mode.

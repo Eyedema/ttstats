@@ -371,3 +371,46 @@ class TestAccess:
         resp = auth_client(p1.user).get(reverse("pingpong:live_scoreboard", args=[match.pk]))
         url = reverse("pingpong:live_sync", args=[match.pk])
         assert f'data-sync-url="{url}"' in resp.content.decode()
+
+
+@pytest.mark.django_db
+class TestStateCarriesAFreshCsrfToken:
+    """A scoreboard the service worker served from its cache can hold a CSRF
+    token from an older secret. /live/state/ answers with the token for the
+    cookie the browser holds now, so the client can retry a 403'd sync."""
+
+    def _client(self, user):
+        from django.test import Client
+
+        client = Client(enforce_csrf_checks=True)
+        client.force_login(user)
+        return client
+
+    def test_state_token_lets_a_sync_through(self):
+        match, p1 = _make_live_match(best_of=3)
+        client = self._client(p1.user)
+
+        state = client.get(reverse("pingpong:live_state", args=[match.pk]))
+        token = state.json()["csrf_token"]
+        resp = client.post(
+            reverse("pingpong:live_sync", args=[match.pk]),
+            data=json.dumps({"ops": []}),
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=token,
+        )
+
+        assert resp.status_code == 200, resp.content
+
+    def test_a_stale_token_is_refused(self):
+        match, p1 = _make_live_match(best_of=3)
+        client = self._client(p1.user)
+        client.get(reverse("pingpong:live_state", args=[match.pk]))
+
+        resp = client.post(
+            reverse("pingpong:live_sync", args=[match.pk]),
+            data=json.dumps({"ops": []}),
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN="x" * 64,
+        )
+
+        assert resp.status_code == 403

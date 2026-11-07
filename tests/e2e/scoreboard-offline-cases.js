@@ -59,11 +59,15 @@ async function openScoreboard(page, match) {
   await expectSynced(page);
 }
 
+/** `n`: sync requests sent (a lost ack is one: it reached the server).
+ *  `answered`: those the page got a response to. A request already in flight
+ *  when the network returns can fail locally (WebKit: "internal error")
+ *  without reaching the server; it carried nothing, and only `n` counts it. */
 function countSyncs(page) {
-  const counter = { n: 0 };
-  page.on('request', (req) => {
-    if (req.url().endsWith('/live/sync/') && req.method() === 'POST') counter.n += 1;
-  });
+  const counter = { n: 0, answered: 0 };
+  const isSync = (req) => req.url().endsWith('/live/sync/') && req.method() === 'POST';
+  page.on('request', (req) => { if (isSync(req)) counter.n += 1; });
+  page.on('response', (resp) => { if (isSync(resp.request())) counter.answered += 1; });
   return counter;
 }
 
@@ -146,7 +150,7 @@ function defineOfflineCases() {
     await releaseProdCSP(page);
     await goOnline(page);
     await page.waitForURL(new RegExp(`/pingpong/matches/${match.pk}/$`), { timeout: 45000 });
-    expect(syncs.n).toBe(1);
+    expect(syncs.answered).toBe(1);
 
     // The record matches the taps.
     const main = page.locator('main');
@@ -317,7 +321,7 @@ function defineOfflineCases() {
     const syncs = countSyncs(page);
     await sheet.getByRole('button', { name: 'Retry now' }).click();
     await expectSynced(page);
-    expect(syncs.n).toBe(1);
+    expect(syncs.answered).toBe(1);
     const state = await liveState(page, match.pk);
     expect([state.state.team1_games, state.state.team1_points]).toEqual([1, 1]);
   });
