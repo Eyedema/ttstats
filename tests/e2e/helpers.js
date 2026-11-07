@@ -42,8 +42,11 @@ async function applyProdCSP(page) {
     } catch (err) {
       // A deferred script or a prefetch (KAN-124) still in flight when the
       // page navigates or the test ends: its response is gone, and nothing
-      // is waiting for it. Anything else is a real failure.
-      if (!/disposed|Test ended|closed/i.test(String(err))) throw err;
+      // is waiting for it. Or releaseProdCSP() unrouted while this request
+      // was in flight (the scoreboard's CSRF refresh, KAN-81): Playwright
+      // then continued it itself, without the policy. Anything else is a
+      // real failure.
+      if (!/disposed|Test ended|closed|already handled/i.test(String(err))) throw err;
     }
   });
 }
