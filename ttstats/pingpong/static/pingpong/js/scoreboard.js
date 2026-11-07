@@ -279,6 +279,12 @@
       onEvent: function (type, detail) {
         if (type === 'completed') {
           leaving = true;
+          // KAN-82: drop this match's stored copy so it never reopens offline
+          // as a live scoreboard of a finished match.
+          try {
+            var sw = navigator.serviceWorker && navigator.serviceWorker.controller;
+            if (sw) sw.postMessage({ type: 'live-match-complete', url: window.location.pathname });
+          } catch (e) { /* the redirect evicts it anyway */ }
           window.location.assign(detail.redirectUrl);
         } else if (MESSAGES[type]) {
           showError(MESSAGES[type]);

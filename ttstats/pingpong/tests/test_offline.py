@@ -67,6 +67,9 @@ class TestPrecacheList:
             "pingpong/css/app.css",
             "pingpong/js/vendor/alpine.min.js",
             "pingpong/js/live_rules.js",
+            "pingpong/js/live_outbox.js",
+            "pingpong/js/live_session.js",
+            "pingpong/js/scoreboard.js",
             "pingpong/js/offline.js",
         ):
             assert path in offline.SW_PRECACHE

@@ -19,8 +19,8 @@ const { startOfflineProxy } = require('./offline-proxy');
  * The selectors below are the scoreboard's; if its markup changes, change
  * them here (and only here).
  */
-const team1Score = (page) => page.locator('[x-ref="team1Score"]');
-const team2Score = (page) => page.locator('[x-ref="team2Score"]');
+const team1Score = (page) => page.locator('[data-score="team1"]');
+const team2Score = (page) => page.locator('[data-score="team2"]');
 const tapZones = (page) => page.locator('.tap-zone');
 
 const test = base.test.extend({
@@ -165,6 +165,37 @@ test.describe('offline scoreboard', () => {
     await expect
       .poll(async () => JSON.stringify((await read()).state), { timeout: 10000 })
       .not.toBe(before);
+  });
+
+  // KAN-83 scenario 4: taps made with no signal survive a reload with no
+  // signal (stored page + outbox), then sync exactly once when it returns.
+  test('taps queued offline survive an offline reload and sync once', async ({ page, net }) => {
+    const path = await scoreboardPath(page, net);
+    await openStartedScoreboard(page, net, path);
+    const read = () =>
+      page.evaluate((p) => fetch(p + 'state/', { credentials: 'same-origin' }).then((r) => r.json()), path);
+    const server = await read();
+
+    net.setMode('offline');
+    await tapZones(page).first().tap();
+    await tapZones(page).last().tap();
+    await tapZones(page).first().tap();
+    const shown = [await team1Score(page).innerText(), await team2Score(page).innerText()];
+
+    // Still offline: the stored page rebuilds from bootstrap + outbox.
+    const response = await page.reload();
+    expect(response.ok()).toBe(true);
+    await expectScoreboard(page, shown);
+
+    net.setMode('online');
+    await expect
+      .poll(async () => (await read()).applied_seq, { timeout: 20000 })
+      .toBe(server.applied_seq + 3);
+    const after = (await read()).state;
+    expect([String(after.team1_points), String(after.team2_points)]).toEqual(shown);
+    // Exactly once: nothing further trickles in.
+    await page.waitForTimeout(1500);
+    expect((await read()).applied_seq).toBe(server.applied_seq + 3);
   });
 
   test('offline, any other page is the browser error, never a cached copy', async ({ page, net }) => {

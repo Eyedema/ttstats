@@ -45,6 +45,9 @@ SW_PRECACHE = (
     "pingpong/js/prefetch.js",
     "pingpong/js/offline.js",
     "pingpong/js/live_rules.js",
+    "pingpong/js/live_outbox.js",
+    "pingpong/js/live_session.js",
+    "pingpong/js/scoreboard.js",
     "pingpong/icons/app/icon-192.png",
 )
 
