@@ -21,6 +21,12 @@ are tedious to enumerate by hand and easy to miss.
 deliberately broken write path (the server read *after* the point instead of
 before) and asserts it fails -- proof that the harness tests something real.
 
+KAN-76 extends it to delivery: every generated op script is also sent with
+random duplicate re-sends (``TestDuplicateDeliveriesChangeNothing``) and
+through ``live_sync`` in four batch splits (``TestBatchSplitsReplayIdentically``),
+and must leave exactly the rows the clean single-op delivery leaves, with one
+completion. Both have a has-teeth test that removes the seq dedupe.
+
 Runnable standalone::
 
     cd ttstats && python -m pytest pingpong/tests/test_point_fidelity.py -q
@@ -549,3 +555,136 @@ class TestTheHarnessCatchesAServerIgnoringSeq:
 
         with pytest.raises(AssertionError, match="duplicate delivery changed"):
             assert_same_record(match_record(noisy), match_record(clean))
+
+
+# ---------------------------------------------------------------------------
+# Batch splits through live_sync (KAN-78 / KAN-90)
+#
+# However the client happens to chunk its outbox -- one op per request after a
+# flaky minute, a few at a time, everything at once after a dead spell, or
+# chunks that overlap because an ack was lost -- the server must end up with
+# exactly the rows the single-op endpoints produce, and complete the match
+# exactly once.
+# ---------------------------------------------------------------------------
+
+
+def _numbered_ops(ops):
+    return [{**op, "seq": i + 1} for i, op in enumerate(ops)]
+
+
+def _sync(client, match, batch):
+    resp = _post(client, reverse("pingpong:live_sync", args=[match.pk]), {"ops": batch})
+    assert resp.status_code == 200, resp.content
+    return resp.json()
+
+
+def batch_splits(ops, seed):
+    """The four ways the harness chunks a script, as lists of batches."""
+    numbered = _numbered_ops(ops)
+    rng = random.Random(seed)
+
+    random_chunks, i = [], 0
+    while i < len(numbered):
+        size = rng.randint(1, 12)
+        random_chunks.append(numbered[i:i + size])
+        i += size
+
+    # Each chunk restarts somewhere at or before the previous chunk's end, as
+    # a client does when it cannot tell which of its last ops were acked.
+    overlapping, end = [], 0
+    while end < len(numbered):
+        start = max(0, end - rng.randint(0, 6))
+        stop = min(len(numbered), end + rng.randint(1, 12))
+        overlapping.append(numbered[start:stop])
+        end = stop
+    # ...and the whole outbox once more after the match is over.
+    overlapping.append(numbered)
+
+    return {
+        "one_op_batches": [[op] for op in numbered],
+        "random_chunks": random_chunks,
+        "one_batch": [numbered],
+        "overlapping_resends": overlapping,
+    }
+
+
+def _completions(match):
+    """How many times the completion pipeline ran for ``match``."""
+    from pingpong.models import MatchPointSummary
+
+    return MatchPointSummary.objects.filter(match=match).count()
+
+
+@pytest.mark.django_db
+class TestBatchSplitsReplayIdentically:
+
+    @pytest.mark.parametrize("seed", SEEDS)
+    def test_every_split_matches_the_single_op_path(self, auth_client, mailoutbox, seed):
+        from unittest import mock
+
+        from pingpong import point_rollups
+
+        best_of = 3 if seed % 3 == 0 else 5
+        ops, oracle, expected_servers = generate_ops(seed, best_of)
+        complete = ls.is_match_complete(oracle)
+
+        reference, p0 = _make_live_match(best_of=best_of)
+        mail_before = len(mailoutbox)
+        deliver(auth_client(p0.user), reference, ops)
+        reference_mails = len(mailoutbox) - mail_before
+        reference_record = match_record(reference)
+
+        for mode, batches in batch_splits(ops, seed).items():
+            match, p1 = _make_live_match(best_of=best_of)
+            client = auth_client(p1.user)
+            mail_before = len(mailoutbox)
+            with mock.patch.object(
+                point_rollups, "rebuild_match_summaries",
+                wraps=point_rollups.rebuild_match_summaries,
+            ) as rollup:
+                last = None
+                for batch in batches:
+                    last = _sync(client, match, batch)
+
+            record = match_record(match)
+            assert record == reference_record, (
+                f"{mode}: batch delivery diverged from the single-op path:\n"
+                f" batch     {record}\n reference {reference_record}"
+            )
+            events = list(PointEvent.objects.filter(match=match))
+            assert_sequence_is_contiguous(events)
+            assert_servers_agree(events, expected_servers)
+            assert_log_replays_to(events, oracle_state=oracle, best_of=best_of, match=match)
+
+            # Exactly one completion: one rollup write, one round of
+            # confirmation mail -- whatever the split.
+            assert rollup.call_count == (1 if complete else 0), mode
+            assert _completions(match) == (2 if complete else 0), mode
+            assert len(mailoutbox) - mail_before == reference_mails, mode
+            assert last["applied_seq"] == len(ops), mode
+            assert last["is_match_complete"] is complete, mode
+            if complete:
+                assert last["redirect_url"] == reverse(
+                    "pingpong:match_confirm", args=[match.pk]
+                ), mode
+
+
+@pytest.mark.django_db
+class TestTheHarnessCatchesABatchServerIgnoringSeq:
+    """The batch harness has teeth too: without the dedupe, the overlapping
+    re-sends double-count and the comparison fails."""
+
+    def test_ignored_seq_in_batches_is_detected(self, auth_client, monkeypatch):
+        ops, _, _ = generate_ops(seed=3, best_of=5, undo_probability=0.0)
+
+        reference, p0 = _make_live_match(best_of=5)
+        deliver(auth_client(p0.user), reference, ops)
+
+        monkeypatch.setattr(views, "_classify_seq", lambda applied, seq: "apply")
+        match, p1 = _make_live_match(best_of=5)
+        client = auth_client(p1.user)
+        for batch in batch_splits(ops, seed=3)["overlapping_resends"]:
+            _post(client, reverse("pingpong:live_sync", args=[match.pk]), {"ops": batch})
+
+        with pytest.raises(AssertionError, match="duplicate delivery changed"):
+            assert_same_record(match_record(match), match_record(reference))

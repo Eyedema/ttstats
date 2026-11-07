@@ -59,6 +59,9 @@ row per point, written when the point is applied**, never reconstructed later.
   and undos through the real endpoints, alternating the starting server with
   the seed (a harness always starting with side 1 can't see an ignored
   `initial_server`), and carries tests proving it fails against broken writes.
+  It also replays every script with duplicate re-sends and through
+  `live_sync` in four batch splits (1-op, random chunks, one batch,
+  overlapping re-sends): same rows, exactly one completion.
 - **No starting server means no point.** `apply_point()` raises unless the state
   is `started` **and** names `initial_server`; `live_ops` rejects the point (409) before
   writing. `PointEvent.serving_side` stays nullable only as a defensive fallback.
