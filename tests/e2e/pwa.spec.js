@@ -1,5 +1,6 @@
 const { test, expect } = require('@playwright/test');
 const { applyProdCSP } = require('./helpers');
+const { startOfflineProxy } = require('./offline-proxy');
 
 /**
  * The PWA layer: manifest, icons, service worker, and the notification panel.
@@ -120,17 +121,27 @@ test.describe('the fetch handler (KAN-96 canary)', () => {
     expect(status).toBe(200);
   });
 
-  test('offline, a page is not served from any cache', async ({ page, context }) => {
-    // The honest browser error, not yesterday's leaderboard. When KAN-82 adds
-    // the scoreboard route, this stays true for every page it doesn't claim.
-    await controlledPage(page);
-    await page.goto('/pingpong/leaderboard/');
-
-    await context.setOffline(true);
+  test('offline, a page is not served from any cache', async ({ page, baseURL }) => {
+    // The honest browser error, not yesterday's leaderboard. True for every
+    // page the scoreboard route (KAN-82) doesn't claim. The network is cut by
+    // a proxy, not context.setOffline(): in WebKit that fails requests before
+    // the worker sees them, so this would pass whatever the worker did
+    // (scoreboard-offline.pwa.spec.js proves the same dead network still
+    // serves the scoreboard).
+    const proxy = await startOfflineProxy(baseURL);
     try {
-      await expect(page.goto('/pingpong/leaderboard/')).rejects.toThrow();
+      await page.goto(proxy.origin + '/pingpong/');
+      await expect
+        .poll(() => page.evaluate(() => Boolean(navigator.serviceWorker.controller)), {
+          timeout: 10000,
+        })
+        .toBe(true);
+      await page.goto(proxy.origin + '/pingpong/leaderboard/');
+
+      proxy.setMode('offline');
+      await expect(page.goto(proxy.origin + '/pingpong/leaderboard/')).rejects.toThrow();
     } finally {
-      await context.setOffline(false);
+      await proxy.close();
     }
   });
 });

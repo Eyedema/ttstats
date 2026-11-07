@@ -5,6 +5,7 @@ renders `user.player.pk` -- see CLAUDE.md.
 """
 
 import json
+import re
 
 import pytest
 from unittest.mock import patch
@@ -12,6 +13,7 @@ from unittest.mock import patch
 from django.test import override_settings
 from django.urls import reverse
 
+from pingpong import offline
 from pingpong.models import NotificationPreference, PushSubscription
 
 from .conftest import PlayerFactory
@@ -67,6 +69,79 @@ class TestServiceWorkerView:
         assert 'const ROUTES = [' in body
         assert "request.method !== 'GET'" in body
         assert 'self.location.origin' in body
+
+
+@pytest.mark.django_db
+class TestServiceWorkerRoutes:
+    """KAN-82: the table holds exactly two narrow routes.
+
+    String assertions on the rendered worker; behaviour is proved in a real
+    WebKit by tests/e2e/scoreboard-offline.pwa.spec.js.
+    """
+
+    @staticmethod
+    def body(client):
+        return client.get('/sw.js').content.decode()
+
+    def test_route_table_is_static_then_scoreboard_and_nothing_else(self, client):
+        assert 'const ROUTES = [staticAssets, scoreboardShell];' in self.body(client)
+
+    def test_scoreboard_route_claims_only_live_scoreboard_navigations(self, client):
+        body = self.body(client)
+        assert r"const SCOREBOARD = /^\/pingpong\/matches\/\d+\/live\/$/;" in body
+        assert "request.mode === 'navigate' && SCOREBOARD.test(url.pathname)" in body
+
+    def test_scoreboard_pattern_rejects_its_json_and_post_siblings(self, client):
+        pattern = re.compile(r'^/pingpong/matches/\d+/live/$')
+        assert pattern.match('/pingpong/matches/12/live/')
+        for path in ('state/', 'sync/', 'point/', 'undo/', 'start/', 'side-switch/'):
+            assert not pattern.match(f'/pingpong/matches/12/live/{path}')
+        assert not pattern.match('/pingpong/leaderboard/')
+
+    def test_static_route_claims_only_hashed_files(self, client):
+        # Unhashed /static/ (dev) must never be cached: it changes in place.
+        body = self.body(client)
+        assert r"const HASHED_STATIC = /^\/static\/.+\.[0-9a-f]{12}\.[A-Za-z0-9]+$/;" in body
+        pattern = re.compile(r'^/static/.+\.[0-9a-f]{12}\.[A-Za-z0-9]+$')
+        assert pattern.match('/static/pingpong/css/app.0123456789ab.css')
+        assert not pattern.match('/static/pingpong/css/app.css')
+
+    def test_posts_never_reach_a_route(self, client):
+        body = self.body(client)
+        # The GET guard sits in front of the table and returns before any route.
+        guard = body.index("if (request.method !== 'GET') return null;")
+        assert guard < body.index('ROUTES.find(')
+
+    def test_version_bumped_and_build_keyed_on_the_precache(self, client):
+        body = self.body(client)
+        urls = offline.precache_urls()
+        assert "const VERSION = 'ttstats-v3';" in body
+        assert f"const BUILD = VERSION + '-{offline.build_key(urls)}';" in body
+        assert f'const PRECACHE = {json.dumps(urls)};' in body
+
+    def test_activate_deletes_caches_from_other_builds(self, client):
+        body = self.body(client)
+        assert "name.startsWith('ttstats-') && !isCurrentCache(name)" in body
+        assert 'caches.delete(name)' in body
+
+    def test_caches_are_bounded(self, client):
+        body = self.body(client)
+        assert 'trim(cache, STATIC_MAX)' in body
+        assert 'trim(cache, LIVE_MAX)' in body
+        assert 'LIVE_MAX_AGE_MS' in body
+
+    def test_redirects_evict_and_only_identified_200s_are_stored(self, client):
+        body = self.body(client)
+        assert "response.type === 'opaqueredirect'" in body
+        assert 'await evictScoreboard(key);' in body
+        assert 'response.status === 200' in body
+        assert 'IDENTITY.test(identity)' in body
+
+    def test_documents_and_handles_the_page_messages(self, client):
+        body = self.body(client)
+        for message in ('identity', 'purge', 'live-match-complete'):
+            assert f"{{type: '{message}'" in body, f'{message} undocumented in the header'
+            assert f"data.type === '{message}'" in body
 
 
 @pytest.mark.django_db

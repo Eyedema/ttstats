@@ -92,6 +92,9 @@
     {# Installed-app pull to refresh; opt a page out with data-no-pull-refresh. #}
     <script defer src="{% static 'pingpong/js/pull_to_refresh.js' %}"></script>
     <script defer src="{% static 'pingpong/js/prefetch.js' %}"></script>
+    {# Offline cache partition (KAN-82): offline.js tells the worker whose page this is. #}
+    <meta name="ttstats-identity" content="{{ ttstats_identity }}">
+    <script defer src="{% static 'pingpong/js/offline.js' %}"></script>
 
     {% block extra_css %}{% endblock %}
 </head>

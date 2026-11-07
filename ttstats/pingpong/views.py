@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 from ttstats.middleware import get_current_club
 
-from . import live_ops, live_scoring, notifications, player_hues, point_rollups, point_stats, push, rating_pipeline, ratings
+from . import live_ops, live_scoring, notifications, offline, player_hues, point_rollups, point_stats, push, rating_pipeline, ratings
 from .forms import GameForm, MatchEditForm, MatchForm, PlayerRegistrationForm, ScheduledMatchForm, MatchConvertForm, \
     ChampionshipCreateForm, ChampionshipEditForm, ScheduledMatchEditForm, LeaderboardScopeForm, DEFAULT_TOP_X
 from .achievements import get_achievement_progress
@@ -3007,7 +3007,11 @@ class LiveScoreboardView(LoginRequiredMixin, View):
             "side_switch_url": reverse("pingpong:live_side_switch", args=[pk]),
             "sync_url": reverse("pingpong:live_sync", args=[pk]),
         }
-        return render(request, self.template_name, context)
+        response = render(request, self.template_name, context)
+        # The service worker keeps this page for offline reopening, filed under
+        # whose page it is (pingpong/offline.py). No header, no copy.
+        response[offline.IDENTITY_HEADER] = offline.request_identity(request)
+        return response
 
 
 @method_decorator(require_POST, name="dispatch")
@@ -3293,6 +3297,14 @@ class ServiceWorkerView(TemplateView):
 
     template_name = "pingpong/sw.js"
     content_type = "application/javascript"
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        urls = offline.precache_urls()
+        # json.dumps, not a template loop: the list lands in a JS literal.
+        ctx["sw_precache_json"] = json.dumps(urls)
+        ctx["sw_build"] = offline.build_key(urls)
+        return ctx
 
 
 class ManifestView(TemplateView):
