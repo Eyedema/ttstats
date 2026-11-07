@@ -341,3 +341,64 @@ describe('LiveSession: comparable()', () => {
     assert.notEqual(LiveSession.comparable(a), LiveSession.comparable(c));
   });
 });
+
+describe('fetchTransport: a stale CSRF token is refreshed once', () => {
+  // A scoreboard served from the service worker's cache can carry a token
+  // from an older CSRF secret; /live/state/ answers with the current one.
+  function fakeFetch({ validToken, stateToken = validToken, stateStatus = 200 }) {
+    const calls = [];
+    const respond = (status, body) => ({
+      status,
+      ok: status >= 200 && status < 300,
+      redirected: false,
+      headers: { get: () => 'application/json' },
+      json: () => Promise.resolve(body),
+    });
+    const fetch = (url, init) => {
+      calls.push({ url, token: init.headers['X-CSRFToken'] });
+      if (url === '/state/') {
+        return Promise.resolve(respond(stateStatus, { applied_seq: 0, csrf_token: stateToken }));
+      }
+      return Promise.resolve(
+        init.headers['X-CSRFToken'] === validToken
+          ? respond(200, { applied_seq: 1 })
+          : respond(403, { detail: 'CSRF' })
+      );
+    };
+    return { fetch, calls };
+  }
+
+  const transportFor = (fetch, token = 'old') =>
+    LiveSession.fetchTransport({ fetch, syncUrl: '/sync/', stateUrl: '/state/', csrfToken: () => token });
+
+  test('a 403 fetches the current token and retries the sync once', async () => {
+    const { fetch, calls } = fakeFetch({ validToken: 'new' });
+    const resp = await transportFor(fetch).sync([{ seq: 1, type: 'undo' }]);
+    assert.equal(resp.status, 200);
+    assert.deepEqual(calls.map((c) => c.url), ['/sync/', '/state/', '/sync/']);
+    assert.equal(calls[2].token, 'new');
+  });
+
+  test('the refreshed token is kept for later syncs', async () => {
+    const { fetch, calls } = fakeFetch({ validToken: 'new' });
+    const transport = transportFor(fetch);
+    await transport.sync([]);
+    await transport.sync([]);
+    assert.equal(calls.at(-1).token, 'new');
+    assert.equal(calls.length, 4);
+  });
+
+  test('still refused with the current token: the 403 stands (sign in again)', async () => {
+    const { fetch, calls } = fakeFetch({ validToken: 'nobody', stateToken: 'new' });
+    const resp = await transportFor(fetch).sync([]);
+    assert.equal(resp.status, 403);
+    assert.equal(calls.length, 3);
+  });
+
+  test('a state call that is itself refused does not retry', async () => {
+    const { fetch, calls } = fakeFetch({ validToken: 'new', stateStatus: 403 });
+    const resp = await transportFor(fetch).sync([]);
+    assert.equal(resp.status, 403);
+    assert.deepEqual(calls.map((c) => c.url), ['/sync/', '/state/']);
+  });
+});

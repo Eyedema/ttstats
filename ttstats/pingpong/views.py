@@ -17,6 +17,7 @@ from django.core.serializers.json import DjangoJSONEncoder
 from django.db import transaction
 from django.db.models import Count, F, Prefetch, Q
 from django.http import Http404, HttpResponse, JsonResponse
+from django.middleware.csrf import get_token
 from django.urls import reverse
 from django.views.decorators.http import require_POST
 from django.shortcuts import get_object_or_404, redirect, render, resolve_url
@@ -3139,7 +3140,12 @@ class LiveStateView(LoginRequiredMixin, View):
         redirect_url = None
         if not match.is_live:
             redirect_url = reverse("pingpong:match_detail", args=[match.pk])
-        return JsonResponse(_scoreboard_payload(match, redirect_url=redirect_url))
+        payload = _scoreboard_payload(match, redirect_url=redirect_url)
+        # A scoreboard served from the service worker's cache may carry a
+        # token from an older CSRF secret; this one matches the cookie the
+        # browser holds now, so the client can retry a refused sync (KAN-81).
+        payload["csrf_token"] = get_token(request)
+        return JsonResponse(payload)
 
 
 @method_decorator(require_POST, name="dispatch")
