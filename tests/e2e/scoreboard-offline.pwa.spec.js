@@ -1,5 +1,5 @@
 const base = require('@playwright/test');
-const { openMomentumMatch } = require('./helpers');
+const { createLiveMatch, finishLiveMatch, openMomentumMatch } = require('./helpers');
 const { startOfflineProxy } = require('./offline-proxy');
 
 /**
@@ -13,8 +13,8 @@ const { startOfflineProxy } = require('./offline-proxy');
  * ever be served offline; see offline-proxy.js).
  *
  * Every test gets its own proxy origin, so the worker and its caches start
- * empty. It shares the seeded live match with scoreboard.spec.js, so it never
- * assumes a score: it reads the score online and requires the same offline.
+ * empty. Each test scores a live match of its own (`scoreboardPath`); it still
+ * never assumes a score: it reads the score online and requires the same offline.
  *
  * The selectors below are the scoreboard's; if its markup changes, change
  * them here (and only here).
@@ -44,14 +44,23 @@ async function waitForControl(page) {
     .toBe(true);
 }
 
-/** Through the proxy: Today, until the worker controls it; returns the seeded
- *  live match's scoreboard path, read off the Resume link. */
+/** This test's own live match. Never the seeded one: scoreboard.spec.js
+ *  scores that in parallel workers, and another writer's ops push this page
+ *  into read-only follow mode (KAN-81), so its taps would be ignored. */
+const created = [];
+base.test.afterEach(async ({ page }) => {
+  // Finished so no stray "Resume" link is left for scoreboard.spec.js.
+  while (created.length) await finishLiveMatch(page, created.pop());
+});
+
+/** Through the proxy: Today, until the worker controls it; returns the path
+ *  of a fresh live match's scoreboard. */
 async function scoreboardPath(page, net) {
+  const match = await createLiveMatch(page, { bestOf: 5 });
+  created.push(match.pk);
   await page.goto(net.origin + '/pingpong/');
   await waitForControl(page);
-  const href = await page.getByRole('link', { name: /Resume/i }).first().getAttribute('href');
-  expect(href).toMatch(/^\/pingpong\/matches\/\d+\/live\/$/);
-  return href;
+  return match.url;
 }
 
 /** When the stored copy of `path` was stored (ms), or 0 if there is none. */
