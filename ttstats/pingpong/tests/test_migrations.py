@@ -390,3 +390,20 @@ class TestLiveAppliedSeqMigration:
 
         _migrate_to(LIVE_APPLIED_SEQ)
         assert "live_applied_seq" in _columns("pingpong_match")
+
+
+CLIENT_RECORDED_AT = "0048_pointevent_client_recorded_at"
+
+
+@pytest.mark.django_db(transaction=True)
+class TestClientRecordedAtMigration:
+    """KAN-89: a nullable column, so it reverses and re-applies freely."""
+
+    def test_reverses_and_reapplies(self, at_head):
+        assert "client_recorded_at" in _columns("pingpong_pointevent")
+
+        _migrate_to(LIVE_APPLIED_SEQ)
+        assert "client_recorded_at" not in _columns("pingpong_pointevent")
+
+        _migrate_to(CLIENT_RECORDED_AT)
+        assert "client_recorded_at" in _columns("pingpong_pointevent")

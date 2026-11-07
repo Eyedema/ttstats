@@ -966,6 +966,12 @@ class PointEvent(models.Model):
         help_text="1-based position of this point within the match"
     )
     created_at = models.DateTimeField(auto_now_add=True)
+    # When the scorekeeper's device says the point was played (KAN-89): the
+    # op's ``client_ts``, clamped to [match day - 1 day, now], null when
+    # absent or unparseable. A point synced after a dead spell reaches the
+    # server minutes late, so ``created_at`` (server time) stops meaning "when
+    # it happened"; momentum and duration features should prefer this when set.
+    client_recorded_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ["sequence"]

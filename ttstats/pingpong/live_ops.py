@@ -20,11 +20,14 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import date, datetime, time, timedelta
+from datetime import timezone as dt_timezone
 from typing import Any, Callable
 
 from django.db import transaction
 from django.db.models import Max
 from django.urls import reverse
+from django.utils import timezone
 
 from . import live_scoring, point_rollups
 from .models import Game, Match, PointEvent, Side
@@ -54,7 +57,42 @@ class OpResult:
     match_completed: bool = False
 
 
-def record_point_event(match, *, state_before, side, completed, new_state):
+def parse_client_ts(value: Any, *, match_day: date, now: datetime) -> datetime | None:
+    """The op's ``client_ts`` as an aware UTC datetime, or ``None`` (KAN-89).
+
+    ISO-8601 only; a naive value is taken as UTC. Clamped to
+    ``[match day - 1 day, now]``: a phone's clock can be wrong, but a point
+    cannot have been played in the future, nor long before the match.
+    Anything unparseable is ``None`` -- a bad clock must never cost a point.
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt_timezone.utc)
+    parsed = parsed.astimezone(dt_timezone.utc)
+    earliest = datetime.combine(
+        match_day - timedelta(days=1), time.min, tzinfo=dt_timezone.utc
+    )
+    return min(max(parsed, earliest), now)
+
+
+def _client_recorded_at(match: Match, op: dict[str, Any]) -> datetime | None:
+    if op.get("client_ts") is None:
+        return None
+    return parse_client_ts(
+        op["client_ts"],
+        match_day=match.date_played.astimezone(dt_timezone.utc).date(),
+        now=timezone.now(),
+    )
+
+
+def record_point_event(
+    match, *, state_before, side, completed, new_state, client_recorded_at=None
+):
     """Persist one ``PointEvent`` for a point the server has just applied.
 
     Called from inside the op's transaction, with the match row already
@@ -99,6 +137,7 @@ def record_point_event(match, *, state_before, side, completed, new_state):
                 team1_score=team1_score,
                 team2_score=team2_score,
                 sequence=next_sequence,
+                client_recorded_at=client_recorded_at,
             )
     except Exception:
         logger.exception(
@@ -117,6 +156,7 @@ def apply_op(
 
     ``op`` is ``{"type": ..., "seq": int | None, ...}`` with the type's own
     field (``initial_server`` for start, ``side`` for point) already checked.
+    A point may carry ``client_ts``; it is parsed here and never rejected.
     ``record_point`` defaults to :func:`record_point_event`.
     """
     if op["type"] == "point":
@@ -194,6 +234,7 @@ def _point(match: Match, op: dict[str, Any], record: Callable[..., None]) -> OpR
         side=side,
         completed=completed,
         new_state=new_state,
+        client_recorded_at=_client_recorded_at(match, op),
     )
 
     if completed is None:

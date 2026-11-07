@@ -3079,7 +3079,12 @@ class LivePointView(LoginRequiredMixin, View):
             if answered:
                 return answered
 
-            return _apply_op(match, {"type": "point", "seq": seq, "side": side})
+            return _apply_op(match, {
+                "type": "point",
+                "seq": seq,
+                "side": side,
+                "client_ts": payload.get("client_ts"),
+            })
 
 
 class LiveStateView(LoginRequiredMixin, View):
@@ -3200,6 +3205,8 @@ def _parse_sync_ops(request) -> tuple[list[dict] | None, JsonResponse | None]:
                     {"error": f"op {seq}: side must be 'team1' or 'team2'"}, status=400
                 )
             op["side"] = raw["side"]
+            # Never validated: a bad clock is stored as null, not refused.
+            op["client_ts"] = raw.get("client_ts")
         elif op_type == "start":
             if raw.get("initial_server") not in ("team1", "team2"):
                 return None, JsonResponse(

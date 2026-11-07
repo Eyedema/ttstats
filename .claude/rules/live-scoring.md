@@ -114,6 +114,10 @@ duplicate is a retried match point.
   match_confirm whenever the match has finished.
 - Response: canonical payload + `applied_seq` + `rejected` (null when none).
   Query cost is linear in the batch (`test_live_sync.py` pins a ceiling).
+- A point's `client_ts` becomes `PointEvent.client_recorded_at`, clamped to
+  `[match day - 1 day, now]`, null when unparseable; never a reason to refuse
+  the point. `created_at` stays server time; prefer `client_recorded_at` for
+  timing features. Choices: `docs/decisions/kan-77-78-live-sync.md`.
 
 ## `point_stats.py` is a pure module
 

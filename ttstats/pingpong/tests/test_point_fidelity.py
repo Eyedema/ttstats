@@ -299,7 +299,7 @@ class TestTheHarnessCatchesABrokenWritePath:
     def test_server_read_after_the_point_is_detected(self, auth_client, monkeypatch):
         original = views._record_point_event
 
-        def broken(match, *, state_before, side, completed, new_state):
+        def broken(match, *, state_before, side, completed, new_state, **rest):
             # The bug: name the server from the state after the point.
             return original(
                 match,
@@ -307,6 +307,7 @@ class TestTheHarnessCatchesABrokenWritePath:
                 side=side,
                 completed=completed,
                 new_state=new_state,
+                **rest,
             )
 
         monkeypatch.setattr(views, "_record_point_event", broken)
@@ -331,7 +332,7 @@ class TestTheHarnessCatchesABrokenWritePath:
         """
         original = views._record_point_event
 
-        def broken(match, *, state_before, side, completed, new_state):
+        def broken(match, *, state_before, side, completed, new_state, **rest):
             # The bug: drop the match's actual starting server.
             return original(
                 match,
@@ -339,6 +340,7 @@ class TestTheHarnessCatchesABrokenWritePath:
                 side=side,
                 completed=completed,
                 new_state=new_state,
+                **rest,
             )
 
         monkeypatch.setattr(views, "_record_point_event", broken)
