@@ -208,7 +208,8 @@ rebuildable from `PointEvent` with `manage.py rebuild_point_rollups`.
 
 **Local state = server state + the outbox's unsynced ops**, replayed with
 `live_rules.js`. One state model; the old optimistic overlay is gone.
-Choices: `docs/decisions/kan-80-81-offline-client.md`.
+Choices: `docs/decisions/kan-80-81-offline-client.md`; the epic as a whole:
+`docs/decisions/kan-76-offline-scoring.md`.
 
 - **Plain JS in static files, no Alpine, nothing inline**: scripts load
   `defer` in order `live_rules.js`, `live_outbox.js`, `live_session.js`,
