@@ -1,6 +1,7 @@
 """Tests for the Live Scoreboard feature (KAN-4 epic)."""
 import json
 import re
+from pathlib import Path
 
 import pytest
 from django.urls import reverse
@@ -31,6 +32,16 @@ def _make_live_match(best_of=5):
         live_state=ls.initial_state(best_of),
     )
     return match, p1, p2
+
+
+STATIC_JS = Path(__file__).resolve().parents[1] / "static" / "pingpong" / "js"
+# The scoreboard's client, in load order (KAN-95). Plain static files, so the
+# page carries no inline logic and runs under a CSP without 'unsafe-eval'.
+SCOREBOARD_SCRIPTS = ("live_rules.js", "live_outbox.js", "live_session.js", "scoreboard.js")
+
+
+def _client_js(name="scoreboard.js"):
+    return (STATIC_JS / name).read_text()
 
 
 # ---------------------------------------------------------------------------
@@ -533,7 +544,8 @@ class TestLiveStateEndpoint:
         assert reverse("pingpong:live_state", args=[match.pk]) in body
         # The handler that consumes it must exist, or the attribute is inert
         # again -- which is exactly the state this endpoint was in.
-        assert "refreshState" in body
+        assert "data-state-url" in _client_js()
+        assert "refresh" in _client_js("live_session.js")
 
     def test_returns_canonical_state(self, auth_client):
         match, p1, _ = _make_live_match()
@@ -675,10 +687,11 @@ class TestScoreboardPage:
         assert b'id="scoreboard-bootstrap"' in resp.content
         # The heading uses a typographic apostrophe, so match the stable half.
         assert b"s serving?" in resp.content
-        # tap zones present
-        assert b'addPoint(' in resp.content
+        # tap zones present, wired by the static client
+        assert resp.content.count(b'class="tap-zone') == 2
+        assert "addPoint(" in _client_js()
         # wake lock acquisition in client JS
-        assert b"wakeLock" in resp.content
+        assert "wakeLock" in _client_js()
 
     def test_scoreboard_opts_out_of_pull_to_refresh(self, auth_client):
         """KAN-126: a pull on the scoreboard must never reload it mid-rally.
@@ -1282,7 +1295,8 @@ class TestScoreboardResponsiveness:
     """Markup/handler contracts that would fail silently if broken.
 
     None of this is testable through the Python layer -- the behaviour lives
-    in the Alpine component -- but each assertion pins a coupling that has a
+    in the static client (tests/js for its logic, tests/e2e for the page) --
+    but each assertion pins a coupling that has a
     real failure mode, so a refactor that drops one gets caught here rather
     than on a phone at the table.
     """
@@ -1295,40 +1309,86 @@ class TestScoreboardResponsiveness:
         assert resp.status_code == 200
         return resp.content.decode()
 
-    def test_score_reads_through_the_optimistic_overlay(self, auth_client):
-        """Binding straight to state.teamN_points puts the round-trip back on
-        the input path: the numeral would only move once the POST returned."""
+    def test_client_scripts_load_in_order_after_their_data(self, auth_client):
+        """Rules mirror, outbox, session, page -- each needs the one before."""
         body = self._page(auth_client)
-        assert "points('team1')" in body
-        assert "points('team2')" in body
-        assert 'x-text="state.team1_points"' not in body
+        positions = [body.index(f"pingpong/js/{name.split('.')[0]}") for name in SCOREBOARD_SCRIPTS]
+        assert positions == sorted(positions)
+        for data_id in ("scoreboard-bootstrap", "scoreboard-config", "live-rules-config"):
+            assert body.index(f'id="{data_id}"') < positions[0]
+
+    def test_no_inline_logic_and_no_alpine(self, auth_client):
+        """Alpine needs 'unsafe-eval'; the e2e PROD_CSP withholds it, so an
+        Alpine scoreboard could never be verified the way it ships."""
+        body = self._page(auth_client)
+        board = body[body.index('id="scoreboard"'):]
+        assert "x-data" not in board
+        assert "@click" not in board
+        assert "function scoreboardApp" not in body
+
+    def test_the_old_optimistic_model_is_gone(self, auth_client):
+        """Two state models on one screen is how bugs hide (KAN-80)."""
+        body = self._page(auth_client) + _client_js()
+        for name in ("optimistic", "enqueue(", "postJSON", "pending -= 1"):
+            assert name not in body
 
     def test_tap_zones_are_never_disabled(self, auth_client):
-        """`:disabled="busy"` on a tap zone drops points during a slow POST."""
+        """A disabled tap zone drops points; sync state must never do that."""
         body = self._page(auth_client)
-        zones = body.count("tap-zone")
+        zones = body.count('class="tap-zone')
         assert zones == 2, f"expected two tap zones, found {zones}"
-        # The control cluster may still disable on `busy`; the zones may not.
         for fragment in body.split("<button")[1:]:
-            if "tap-zone" in fragment.split(">")[0]:
-                assert ":disabled" not in fragment.split(">")[0]
+            tag = fragment.split(">")[0]
+            if "tap-zone" in tag:
+                assert "disabled" not in tag
+        assert ".disabled" not in _client_js()
 
     def test_press_and_haptic_feedback_are_wired(self, auth_client):
-        body = self._page(auth_client)
-        assert "bumpScore" in body       # visual confirmation of the tap
-        assert "navigator.vibrate" in body
+        self._page(auth_client)
+        js = _client_js()
+        assert "bumpScore" in js       # visual confirmation of the tap
+        assert "navigator.vibrate" in js
 
     def test_errors_do_not_use_a_blocking_dialog(self, auth_client):
         """alert() freezes the page mid-match and reads as a browser failure."""
         body = self._page(auth_client)
-        assert "alert(" not in body
-        assert "showError" in body
+        for source in [body] + [_client_js(name) for name in SCOREBOARD_SCRIPTS]:
+            assert "alert(" not in source
+            assert "confirm(" not in source
+        assert "showError" in _client_js()
 
-    def test_requests_are_serialised(self, auth_client):
-        """Points must reach the server in tap order once zones accept
-        taps while a request is in flight."""
+    def test_ops_go_through_the_outbox(self, auth_client):
+        """Every tap is an op in the outbox, flushed to live_sync in order."""
+        self._page(auth_client)
+        js = _client_js()
+        assert "session.dispatch(" in js
+        assert "fetch(" not in js.replace("window.fetch.bind", "")
+
+    def test_every_overlay_starts_hidden(self, auth_client):
+        """Fail closed: with scripting off nothing may render open."""
         body = self._page(auth_client)
-        assert "enqueue" in body
+        for marker in (
+            "data-sb-picker", "data-sb-board", "data-sb-chrome", "data-sb-toast",
+            "data-sb-switch", "data-sb-finish", "data-sb-follow", "data-sb-reauth",
+            "data-sync-indicator", "data-sync-sheet", "data-leave-sheet",
+        ):
+            tag = re.search(rf"<[a-z]+[^>]*\s{marker}[\s>][^>]*>", body)
+            assert tag, marker
+            assert " hidden" in tag.group(0), marker
+        assert "#scoreboard [hidden] { display: none !important; }" in body
+
+    def test_config_scopes_the_outbox_by_user(self, auth_client):
+        match, p1, _ = _make_live_match()
+        body = auth_client(p1.user).get(
+            reverse("pingpong:live_scoreboard", args=[match.pk])
+        ).content.decode()
+        raw = re.search(r'<script id="scoreboard-config" type="application/json">(.*?)</script>', body)
+        config = json.loads(raw.group(1))
+        assert config["match_pk"] == match.pk
+        assert config["user_id"] == p1.user.pk
+        assert config["best_of"] == match.best_of
+        assert config["login_url"].startswith("/accounts/login/?next=")
+        assert str(match.pk) in config["login_url"]
 
 
 # ---------------------------------------------------------------------------

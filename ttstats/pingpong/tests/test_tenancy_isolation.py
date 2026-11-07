@@ -207,6 +207,7 @@ URL_EXPECTATIONS = {
     "live_state": ("detail", "live_match"),
     "live_side_switch": ("detail", "live_match"),
     "live_undo": ("detail", "live_match"),
+    "live_sync": ("detail", "live_match"),
 }
 
 # Which HTTP verb each route actually answers. A GET against a POST-only view
@@ -220,6 +221,7 @@ POST_ONLY = {
     "live_point",
     "live_side_switch",
     "live_undo",
+    "live_sync",
     "push_subscribe",
     "push_unsubscribe",
     "push_test",
@@ -239,6 +241,7 @@ PK_KWARG = {
 POST_BODIES = {
     "live_start": {"initial_server": "team1"},
     "live_point": {"side": "team1"},
+    "live_sync": {"ops": []},
 }
 
 

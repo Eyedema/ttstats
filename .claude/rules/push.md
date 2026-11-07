@@ -7,8 +7,13 @@ paths:
   - "ttstats/pingpong/templates/pingpong/manifest.webmanifest"
   - "ttstats/pingpong/templates/pingpong/notification_settings.html"
   - "ttstats/pingpong/static/pingpong/js/push.js"
+  - "ttstats/pingpong/static/pingpong/js/offline.js"
+  - "ttstats/pingpong/offline.py"
   - "ttstats/pingpong/management/commands/generate_vapid_keys.py"
   - "tests/e2e/pwa*.js"
+  - "tests/e2e/service-workers.spec.js"
+  - "tests/e2e/*.pwa.spec.js"
+  - "tests/e2e/offline-proxy.js"
 ---
 
 # PWA and web push
@@ -43,10 +48,44 @@ raises). `notifications.py` is the vocabulary (what each event says, to whom).
   with no field, because without the field it could not be muted.
 - **`Match.result_notified_at` makes the result push exactly-once**
   (conditional `.update()` claim). Never set it by hand.
-- **`sw.js` has no `fetch` handler**, deliberately.
-- **A live service worker disables Playwright's `page.route`.** `iphone-safari`
-  blocks workers; PWA specs run in `iphone-pwa`. Any spec using `page.route`
-  belongs in a project with workers blocked.
+- **`sw.js` caches two things and nothing else (KAN-82).** `ROUTES` =
+  `staticAssets` (cache-first, only `/static/` names carrying a 12-hex
+  manifest hash, so dev's unhashed files are never cached) then
+  `scoreboardShell` (navigations to `/pingpong/matches/<pk>/live/` only:
+  network first, 3 s timeout, stored copy on no answer/timeout/5xx). Anything
+  else, every POST, `/live/state/` and `/live/sync/` included, is not
+  intercepted; only same-origin GETs reach the table. A stale copy of any
+  other page is a lie; the scoreboard rebuilds from bootstrap + outbox.
+  A later route (KAN-131 snapshots) goes **after** `scoreboardShell`.
+- **A stored scoreboard is one person's** (CSRF token, player ids). Stored only
+  from a 200 carrying `X-TTStats-Identity` (`offline.request_identity`: HMAC of
+  user + active club, KAN-132's fingerprint), filed in
+  `ttstats-live-<BUILD>-<identity>`; at most one identity's partition exists.
+  `offline.js` (every page, `base.html` and `base_auth.html`) posts
+  `{type:'identity'}` from `<meta name="ttstats-identity">` (empty when logged
+  out: drop all) and `{type:'purge'}` on submit of a `data-sw-purge` form (Log
+  out). A redirect/403/404/410 for a scoreboard evicts it, as does
+  `{type:'live-match-complete', url}` from the page. Switching club drops the
+  copy until the next online open. Not `Clear-Site-Data`: its `"storage"` type
+  would also wipe the outbox and the worker.
+- **Cache names carry `BUILD` = `VERSION` + a digest of the precache URLs**
+  (`offline.SW_PRECACHE`, content-hashed), so any deploy changing them
+  reinstalls the worker and `activate` drops every `ttstats-*` cache not
+  current; stored pages never outlive their assets. Bump `VERSION` when the
+  worker's logic changes. Bounds: static 120 entries, scoreboards 8 and 7 days.
+- New offline behaviour is a new `ROUTES` entry. Tests: `test_push_views.py`
+  (rendered worker), `test_offline.py`, `tests/e2e/scoreboard-offline.pwa.spec.js`.
+- **Never test the worker offline with `context.setOffline()`**: WebKit fails
+  the loads before the worker runs, so nothing is ever served from cache and
+  "not cached" assertions pass vacuously. Cut the network with
+  `tests/e2e/offline-proxy.js` (`online`/`offline`/`hang`), and pair every
+  "not served" check with one that is served over the same dead network.
+- **A live service worker disables Playwright's `page.route`** (WebKit: always;
+  Chromium/Gecko: once a route calls `respondWith()`). Workers are blocked in
+  the top-level `use` of `playwright.config.js`; only `iphone-pwa` allows them
+  (pinned by `tests/e2e/service-workers.spec.js`). A spec there needing
+  `page.route` blocks workers itself or asserts the route applied. Per-engine
+  measurements: `docs/decisions/kan-76-sw-e2e-audit.md`.
 - **`push.js` is plain JS and fails closed**: every `[data-push-state]` block
   starts `hidden` and JS reveals exactly one.
 - The CSRF cookie is `HttpOnly`, so `push.js` reads its token (and the public

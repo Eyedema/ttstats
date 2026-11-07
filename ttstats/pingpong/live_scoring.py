@@ -23,6 +23,29 @@ MAX_EVENTS = 50
 WIN_POINTS = 11
 MIN_LEAD = 2
 
+# Serve rotation: each side serves SERVES_PER_TURN points in a row until both
+# reach DEUCE_AT, then the serve alternates every point.
+DEUCE_AT = WIN_POINTS - 1
+SERVES_PER_TURN = 2
+
+# ITTF: in the deciding game the ends change when a side first reaches this.
+SIDE_SWITCH_AT = 5
+
+
+def rules_config() -> dict:
+    """The constants the client-side mirror (``static/pingpong/js/live_rules.js``)
+    is built from. Emitted into pages with ``json_script`` so JavaScript never
+    re-types a rule; the golden vectors carry the same dict.
+    """
+    return {
+        "WIN_POINTS": WIN_POINTS,
+        "MIN_LEAD": MIN_LEAD,
+        "DEUCE_AT": DEUCE_AT,
+        "SERVES_PER_TURN": SERVES_PER_TURN,
+        "SIDE_SWITCH_AT": SIDE_SWITCH_AT,
+        "MAX_EVENTS": MAX_EVENTS,
+    }
+
 
 def games_to_win(best_of: int) -> int:
     """Games one side needs to win the match. best_of=5 → 3, best_of=7 → 4."""
@@ -83,11 +106,13 @@ def current_server(state: dict) -> Side | None:
     t1 = state["team1_points"]
     t2 = state["team2_points"]
 
-    if t1 >= 10 and t2 >= 10:
-        # First 20 points used 2-per-rotation (10 rotations), then 1 per point.
-        rotations = 10 + ((t1 + t2) - 20)
+    if t1 >= DEUCE_AT and t2 >= DEUCE_AT:
+        # The points up to DEUCE_AT-all went SERVES_PER_TURN per rotation;
+        # from there the serve changes every point.
+        deuce_total = 2 * DEUCE_AT
+        rotations = deuce_total // SERVES_PER_TURN + ((t1 + t2) - deuce_total)
     else:
-        rotations = (t1 + t2) // 2
+        rotations = (t1 + t2) // SERVES_PER_TURN
 
     return game_starter if rotations % 2 == 0 else other(game_starter)
 
@@ -157,13 +182,13 @@ def is_deciding_game(state: dict) -> bool:
 
 def should_prompt_side_switch(state: dict) -> bool:
     """ITTF rule (singles): in the deciding game, switch sides when either
-    side first reaches 5. We prompt once per match.
+    side first reaches SIDE_SWITCH_AT. We prompt once per match.
     """
     if state.get("side_switched"):
         return False
     if not is_deciding_game(state):
         return False
-    return state["team1_points"] >= 5 or state["team2_points"] >= 5
+    return state["team1_points"] >= SIDE_SWITCH_AT or state["team2_points"] >= SIDE_SWITCH_AT
 
 
 def _now_iso() -> str:

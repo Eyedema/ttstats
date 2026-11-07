@@ -47,6 +47,7 @@ urlpatterns = [
     path("matches/<int:pk>/live/state/", views.LiveStateView.as_view(), name="live_state"),
     path("matches/<int:pk>/live/side-switch/", views.LiveSideSwitchView.as_view(), name="live_side_switch"),
     path("matches/<int:pk>/live/undo/", views.LiveUndoView.as_view(), name="live_undo"),
+    path("matches/<int:pk>/live/sync/", views.LiveSyncView.as_view(), name="live_sync"),
     path("matches/schedule/", views.ScheduledMatchCreateView.as_view(), name="match_schedule"),
     path("scheduled-matches/<int:pk>/", views.ScheduledMatchDetailView.as_view(), name="scheduled_match_detail"),
     path("scheduled-matches/<int:scheduled_match_pk>/convert/", views.ScheduledMatchConvertView.as_view(), name="scheduled_match_convert"),

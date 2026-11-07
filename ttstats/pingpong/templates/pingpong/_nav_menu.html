@@ -126,7 +126,8 @@ you are almost always after.
   Log out is a POST, so it is a form rather than a link -- but it has to read
   as the same kind of row as the ones above it.
   {% endcomment %}
-  <form method="post" action="{% url 'logout' %}">
+  {# data-sw-purge: offline.js empties the scoreboard cache before the POST leaves (KAN-82). #}
+  <form method="post" action="{% url 'logout' %}" data-sw-purge>
     {% csrf_token %}
     <button type="submit"
             class="flex w-full min-h-[44px] items-center gap-3 py-2 pl-5 pr-4 text-left text-[15px] font-semibold text-bone-dim hover:bg-court-line">

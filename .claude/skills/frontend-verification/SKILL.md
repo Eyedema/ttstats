@@ -124,9 +124,11 @@ is the throttled timing report (Chromium only, not part of the suite).
 - **The live match carries state between specs.** Read the current score and
   assert a delta; never assume 0-0.
 - **A live service worker disables `page.route`.** Requests from a
-  worker-controlled page skip the route table, so `abort`/`delay` rules are
-  silently ignored. `iphone-safari` sets `serviceWorkers: 'block'`; any spec
-  using `page.route` belongs in a project with workers blocked.
+  worker-controlled page skip the route table, so `abort`/`delay` rules and
+  `applyProdCSP` are silently ignored -- in WebKit even with no fetch handler.
+  The config blocks workers in every project but `iphone-pwa`
+  (`service-workers.spec.js` pins it); `context.route` is no substitute
+  outside Chromium. See `docs/decisions/kan-76-sw-e2e-audit.md`.
 - **Playwright queues evaluations behind a pending navigation.** A *delayed*
   route makes the assertion run against the next document. To test an armed
   in-flight state (e.g. `#nav-progress`), abort the navigation instead, as

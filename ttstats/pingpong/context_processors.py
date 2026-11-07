@@ -190,3 +190,16 @@ def club_context(request):
         # permission decision somewhere nobody thinks to audit.
         'club_admin': SimpleLazyObject(_is_club_admin),
     }
+
+
+def offline_context(request):
+    """The viewer's offline-cache partition key, for `<meta name="ttstats-identity">`.
+
+    `static/pingpong/js/offline.js` hands it to the service worker on every
+    page load, and the worker deletes any cached scoreboard filed under a
+    different identity (KAN-82). Empty when logged out, which deletes them all.
+    See `pingpong/offline.py`.
+    """
+    from pingpong.offline import request_identity
+
+    return {'ttstats_identity': request_identity(request)}

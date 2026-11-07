@@ -87,6 +87,7 @@ TEMPLATES = [
                 'pingpong.context_processors.pingpong_context',
                 'pingpong.context_processors.push_context',
                 'pingpong.context_processors.club_context',
+                'pingpong.context_processors.offline_context',
             ],
         },
     },
