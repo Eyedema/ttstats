@@ -106,29 +106,56 @@
       );
     }
 
+    // A page the service worker served from its cache can carry a token
+    // from an older CSRF secret. /live/state/ answers with the current one
+    // (`csrf_token`); once learned it replaces the page's.
+    var freshToken = null;
+    function token() { return freshToken || csrfToken(); }
+
+    function state(opts) {
+      return doFetch(options.stateUrl, {
+        credentials: 'same-origin',
+        cache: 'no-store',
+        headers: { Accept: 'application/json' },
+        signal: opts && opts.signal,
+      }).then(normalise).then(function (resp) {
+        if (resp.body && typeof resp.body.csrf_token === 'string' && resp.body.csrf_token) {
+          freshToken = resp.body.csrf_token;
+        }
+        return resp;
+      });
+    }
+
+    function postSync(ops, opts) {
+      return doFetch(options.syncUrl, {
+        method: 'POST',
+        credentials: 'same-origin',
+        cache: 'no-store',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          'X-CSRFToken': token(),
+        },
+        body: JSON.stringify({ ops: ops }),
+        signal: opts && opts.signal,
+      }).then(normalise);
+    }
+
     return {
+      // A 403 is retried once with the token /live/state/ hands out; only a
+      // refusal with the current token is "sign in again". The retry is safe:
+      // ops carry seqs, so nothing is applied twice.
       sync: function (ops, opts) {
-        return doFetch(options.syncUrl, {
-          method: 'POST',
-          credentials: 'same-origin',
-          cache: 'no-store',
-          headers: {
-            'Content-Type': 'application/json',
-            Accept: 'application/json',
-            'X-CSRFToken': csrfToken(),
-          },
-          body: JSON.stringify({ ops: ops }),
-          signal: opts && opts.signal,
-        }).then(normalise);
+        return postSync(ops, opts).then(function (resp) {
+          if (resp.status !== 403 || resp.loginRedirect) return resp;
+          var before = token();
+          return state(opts).then(function (fresh) {
+            if (fresh.status !== 200 || fresh.loginRedirect || token() === before) return resp;
+            return postSync(ops, opts);
+          }, function () { return resp; });
+        });
       },
-      state: function (opts) {
-        return doFetch(options.stateUrl, {
-          credentials: 'same-origin',
-          cache: 'no-store',
-          headers: { Accept: 'application/json' },
-          signal: opts && opts.signal,
-        }).then(normalise);
-      },
+      state: state,
     };
   }
 

@@ -118,6 +118,7 @@ class TestDuplicateDelivery:
             assert _point(client, match, seq=seq).status_code == 200
         before = _snapshot(match)
         canonical = client.get(reverse("pingpong:live_state", args=[match.pk])).json()
+        canonical.pop("csrf_token")  # per-request, not match state
 
         resp = _point(client, match, seq=5)
 
