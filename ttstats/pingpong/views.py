@@ -2867,7 +2867,92 @@ def _scoreboard_payload(match: Match, *, redirect_url: str | None = None) -> dic
             live_scoring.should_prompt_side_switch(state) if state.get("started") else False
         ),
         "redirect_url": redirect_url,
+        "applied_seq": match.live_applied_seq or 0,
     }
+
+
+# --- Op sequence numbers (KAN-77) -------------------------------------------
+#
+# Every live op may carry a client-assigned ``seq``: per match, starting at 1,
+# gapless. ``Match.live_applied_seq`` is the highest one applied. The check
+# runs right after the row lock + refresh and BEFORE the ``is_live`` check, so
+# a retried match point that arrives after the match completed is answered
+# with the completion rather than "Match is not live".
+
+
+def _parse_seq(payload) -> tuple[int | None, JsonResponse | None]:
+    """``(seq, None)``, ``(None, None)`` for a legacy body, or a 400."""
+    seq = payload.get("seq") if isinstance(payload, dict) else None
+    if seq is None:
+        return None, None
+    # bool is an int subclass: ``true`` must not pass as seq 1.
+    if isinstance(seq, bool) or not isinstance(seq, int) or seq < 1:
+        return None, JsonResponse({"error": "seq must be an integer >= 1"}, status=400)
+    return seq, None
+
+
+def _classify_seq(applied: int, seq: int) -> str:
+    """``"apply"``, ``"duplicate"`` or ``"gap"`` for an op against ``applied``."""
+    if seq <= applied:
+        return "duplicate"
+    if seq > applied + 1:
+        return "gap"
+    return "apply"
+
+
+def _completion_redirect(match: Match) -> str | None:
+    """Where a client learning that the match finished should go next."""
+    if not match.is_live and match.winner_side is not None:
+        return reverse("pingpong:match_confirm", args=[match.pk])
+    return None
+
+
+def _check_seq(match: Match, seq: int | None, op_type: str) -> JsonResponse | None:
+    """Answer a duplicate or a gap; ``None`` means go ahead and apply.
+
+    The match must already be locked and refreshed.
+    """
+    if seq is None:
+        # Legacy client (a page cached from before KAN-77). Applied
+        # unconditionally, exactly as before; remove once nothing sends it.
+        logger.info(
+            "Live %s without seq for match %s (legacy client)", op_type, match.pk
+        )
+        return None
+    applied = match.live_applied_seq or 0
+    verdict = _classify_seq(applied, seq)
+    if verdict == "duplicate":
+        return JsonResponse(
+            _scoreboard_payload(match, redirect_url=_completion_redirect(match))
+        )
+    if verdict == "gap":
+        return JsonResponse({"error": "gap", "applied_seq": applied}, status=409)
+    return None
+
+
+def _record_applied_seq(match: Match, seq: int | None) -> None:
+    """Persist ``seq`` as applied, in the op's own transaction."""
+    if seq is None:
+        return
+    Match.all_objects.filter(pk=match.pk).update(live_applied_seq=seq)
+    match.live_applied_seq = seq
+
+
+def _op_error(match: Match, seq: int | None, error: str, status: int = 409) -> JsonResponse:
+    """An op's error body; a sequenced op also learns ``applied_seq``."""
+    body: dict[str, Any] = {"error": error}
+    if seq is not None:
+        body["applied_seq"] = match.live_applied_seq or 0
+    return JsonResponse(body, status=status)
+
+
+def _lenient_json(request) -> dict:
+    """Body of an endpoint that historically ignored it (undo, side switch)."""
+    try:
+        payload = json.loads(request.body or b"{}")
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _record_point_event(match, *, state_before, side, completed, new_state):
@@ -2981,25 +3066,36 @@ class LiveStartView(LoginRequiredMixin, View):
         server = payload.get("initial_server")
         if server not in ("team1", "team2"):
             return JsonResponse({"error": "initial_server must be 'team1' or 'team2'"}, status=400)
+        seq, error = _parse_seq(payload)
+        if error:
+            return error
 
         with transaction.atomic():
             match = _get_live_match_for_scorekeeper(request, pk)
             # Re-fetch with lock so concurrent requests serialize
             Match.all_objects.select_for_update().get(pk=match.pk)
+            match.refresh_from_db()
+
+            answered = _check_seq(match, seq, "start")
+            if answered:
+                return answered
 
             if not match.is_live:
-                return JsonResponse({"error": "Match is not live"}, status=409)
+                return _op_error(match, seq, "Match is not live")
 
             current = match.live_state or live_scoring.initial_state(match.best_of)
             if current.get("started"):
-                # Idempotent if already started with the same server
-                if current.get("initial_server") == server:
+                # Legacy clients only: a sequenced re-send is a duplicate and
+                # was already answered by _check_seq above.
+                if seq is None and current.get("initial_server") == server:
                     return JsonResponse(_scoreboard_payload(match))
-                return JsonResponse({"error": "Match already started"}, status=409)
+                _record_applied_seq(match, seq)
+                return _op_error(match, seq, "Match already started")
 
             new_state = live_scoring.set_initial_server(current, server)
             Match.all_objects.filter(pk=match.pk).update(live_state=new_state)
             match.live_state = new_state
+            _record_applied_seq(match, seq)
 
         return JsonResponse(_scoreboard_payload(match))
 
@@ -3017,16 +3113,24 @@ class LivePointView(LoginRequiredMixin, View):
         side = payload.get("side")
         if side not in ("team1", "team2"):
             return JsonResponse({"error": "side must be 'team1' or 'team2'"}, status=400)
+        seq, error = _parse_seq(payload)
+        if error:
+            return error
 
         with transaction.atomic():
             match = _get_live_match_for_scorekeeper(request, pk)
             Match.all_objects.select_for_update().get(pk=match.pk)
             match.refresh_from_db()
 
+            answered = _check_seq(match, seq, "point")
+            if answered:
+                return answered
+
             if not match.is_live:
-                return JsonResponse({"error": "Match is not live"}, status=409)
+                return _op_error(match, seq, "Match is not live")
             if not match.live_state or not match.live_state.get("started"):
-                return JsonResponse({"error": "Match has not started — pick an initial server"}, status=409)
+                _record_applied_seq(match, seq)
+                return _op_error(match, seq, "Match has not started — pick an initial server")
 
             # Captured before apply_point: current_server() on the new state
             # names who serves *next*, not who served this point.
@@ -3035,7 +3139,12 @@ class LivePointView(LoginRequiredMixin, View):
             try:
                 new_state, completed = live_scoring.apply_point(match.live_state, side)
             except ValueError as exc:
-                return JsonResponse({"error": str(exc)}, status=409)
+                _record_applied_seq(match, seq)
+                return _op_error(match, seq, str(exc))
+
+            # In memory before Game.objects.create below: Game.save() saves
+            # this very instance, every field included.
+            _record_applied_seq(match, seq)
 
             _record_point_event(
                 match,
@@ -3138,17 +3247,26 @@ class LiveSideSwitchView(LoginRequiredMixin, View):
     """Mark the deciding-game side switch as confirmed (KAN-9)."""
 
     def post(self, request, pk):
+        seq, error = _parse_seq(_lenient_json(request))
+        if error:
+            return error
+
         with transaction.atomic():
             match = _get_live_match_for_scorekeeper(request, pk)
             Match.all_objects.select_for_update().get(pk=match.pk)
             match.refresh_from_db()
 
+            answered = _check_seq(match, seq, "side_switch")
+            if answered:
+                return answered
+
             if not match.is_live or not match.live_state:
-                return JsonResponse({"error": "Match is not live"}, status=409)
+                return _op_error(match, seq, "Match is not live")
 
             new_state = live_scoring.confirm_side_switch(match.live_state)
             Match.all_objects.filter(pk=match.pk).update(live_state=new_state)
             match.live_state = new_state
+            _record_applied_seq(match, seq)
 
         return JsonResponse(_scoreboard_payload(match))
 
@@ -3162,13 +3280,21 @@ class LiveUndoView(LoginRequiredMixin, View):
     """
 
     def post(self, request, pk):
+        seq, error = _parse_seq(_lenient_json(request))
+        if error:
+            return error
+
         with transaction.atomic():
             match = _get_live_match_for_scorekeeper(request, pk)
             Match.all_objects.select_for_update().get(pk=match.pk)
             match.refresh_from_db()
 
+            answered = _check_seq(match, seq, "undo")
+            if answered:
+                return answered
+
             if not match.is_live or not match.live_state:
-                return JsonResponse({"error": "Match is not live"}, status=409)
+                return _op_error(match, seq, "Match is not live")
 
             # Whether there was anything to undo at all. undo_last_point() is a
             # no-op on an empty log and returns the state unchanged, and the
@@ -3208,6 +3334,7 @@ class LiveUndoView(LoginRequiredMixin, View):
 
             Match.all_objects.filter(pk=match.pk).update(live_state=new_state)
             match.live_state = new_state
+            _record_applied_seq(match, seq)
 
             if had_events:
                 # A match cannot normally be undone after it completes (the

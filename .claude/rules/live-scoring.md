@@ -66,6 +66,26 @@ row per point, written when the point is applied**, never reconstructed later.
 - Retention policy (keep everything, revisit at a threshold):
   `docs/decisions/point-event-retention.md`.
 
+## Every op carries a seq; dedupe before `is_live` (KAN-77)
+
+Ops (`start`, `point`, `undo`, `side_switch`) carry a client `seq`: per match,
+from 1, gapless. `Match.live_applied_seq` is the highest applied; it is its own
+column because `live_state` is nulled at match end and the most dangerous
+duplicate is a retried match point.
+
+- **Check the seq after the lock + `refresh_from_db()` and BEFORE `is_live`**
+  (`_check_seq`), or a re-sent match point gets "Match is not live" instead of
+  the completion and its `redirect_url`.
+- `seq <= applied`: duplicate, apply nothing, answer the canonical payload.
+  `seq > applied + 1`: 409 `{"error": "gap", "applied_seq": N}`.
+- **A rule rejection consumes its seq** (the client drops the op and carries
+  on); an op refused because the match is not live does not.
+- Undo is an op with its own seq, never a decrement.
+- `seq` must be an int >= 1; bools and strings are 400.
+- No `seq` is the legacy contract, applied unconditionally and logged. Remove
+  once no cached page sends it.
+- `_scoreboard_payload()` carries `applied_seq` (0 before any sequenced op).
+
 ## `point_stats.py` is a pure module
 
 No Django, no DB; `tests/test_point_stats.py` has **no `django_db` marker** and

@@ -484,6 +484,13 @@ class Match(ClubStampedMixin, SideLabelMixin, models.Model):
         related_name="live_matches",
         help_text="Player driving the live scoreboard for this match",
     )
+    # Highest client op ``seq`` the live endpoints have applied (KAN-77). Ops
+    # at or below it are duplicate deliveries and are acknowledged, never
+    # re-applied. Deliberately a column of its own rather than a key in
+    # ``live_state``: that is nulled at match end, and the most dangerous
+    # duplicate is a retried match point arriving after it. Written with a
+    # queryset ``.update()`` in the op's own transaction, like ``live_state``.
+    live_applied_seq = models.PositiveIntegerField(null=True, blank=True)
 
     # Set the first time the "match confirmed, here is your Elo" push goes
     # out. Three separate signal paths can reach that point for the same
