@@ -1278,6 +1278,38 @@ class TestCustomLoginView:
         resp = c.get("/accounts/login/")
         assert resp.status_code == 302
 
+    def test_a_safe_next_is_honoured(self):
+        """KAN-81: "Sign in again to save the score" returns to the scoreboard,
+        where the kept outbox flushes."""
+        u = UserFactory(username="next_login")
+        u.profile.email_verified = True
+        u.profile.save()
+        resp = Client().post("/accounts/login/?next=/pingpong/matches/7/live/", {
+            "username": "next_login",
+            "password": "testpass123",
+        })
+        assert resp.status_code == 302
+        assert resp.url == "/pingpong/matches/7/live/"
+
+    def test_an_offsite_next_is_ignored(self):
+        u = UserFactory(username="evil_next_login")
+        u.profile.email_verified = True
+        u.profile.save()
+        resp = Client().post("/accounts/login/?next=https://evil.example/", {
+            "username": "evil_next_login",
+            "password": "testpass123",
+        })
+        assert resp.status_code == 302
+        assert resp.url == reverse("pingpong:dashboard")
+
+    def test_an_authenticated_visit_follows_next(self):
+        u = UserFactory()
+        u.profile.email_verified = True
+        u.profile.save()
+        resp = _login_client(u).get("/accounts/login/?next=/pingpong/matches/7/live/")
+        assert resp.status_code == 302
+        assert resp.url == "/pingpong/matches/7/live/"
+
 
 # ===========================================================================
 # EmailVerifyView

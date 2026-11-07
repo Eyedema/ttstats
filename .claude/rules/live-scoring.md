@@ -14,11 +14,15 @@ paths:
   - "ttstats/pingpong/templates/pingpong/game_form.html"
   - "ttstats/pingpong/tests/test_point*.py"
   - "ttstats/pingpong/static/pingpong/js/live_rules.js"
+  - "ttstats/pingpong/static/pingpong/js/live_outbox.js"
+  - "ttstats/pingpong/static/pingpong/js/live_session.js"
+  - "ttstats/pingpong/static/pingpong/js/scoreboard.js"
   - "ttstats/pingpong/templatetags/live_tags.py"
   - "ttstats/pingpong/tests/live_vectors.py"
   - "ttstats/pingpong/tests/test_live_vectors.py"
+  - "ttstats/pingpong/tests/test_scoreboard.py"
   - "ttstats/pingpong/tests/fixtures/live_vectors.json"
-  - "tests/js/live_rules.test.mjs"
+  - "tests/js/live_*.mjs"
   - "tests/e2e/momentum*.js"
   - "tests/e2e/point-stats*.js"
   - "tests/e2e/scoreboard*.js"
@@ -200,14 +204,45 @@ rebuildable from `PointEvent` with `manage.py rebuild_point_rollups`.
   `new Function()` refusal under the e2e `PROD_CSP` and draws anyway; do not add
   `'unsafe-eval'` to `PROD_CSP`.
 
-## Scoreboard client (`scoreboard.html`)
+## Scoreboard client (`scoreboard.html`, KAN-80/81)
 
-- **The score is optimistic**: `addPoint()` bumps a local overlay rendered via
-  `points(side)`; the POST reconciles.
-- **Never put `:disabled="busy"` on a tap zone** -- it drops points during a
-  slow POST. `busy` still gates Undo/start.
-- **All POSTs go through `enqueue()`** so the server applies them in tap order.
-- The overlay is only cleared when `pending` hits 0.
-- Errors go to the toast via `showError()`. **No `alert()`.**
+**Local state = server state + the outbox's unsynced ops**, replayed with
+`live_rules.js`. One state model; the old optimistic overlay is gone.
+Choices: `docs/decisions/kan-80-81-offline-client.md`.
+
+- **Plain JS in static files, no Alpine, nothing inline**: scripts load
+  `defer` in order `live_rules.js`, `live_outbox.js`, `live_session.js`,
+  `scoreboard.js`, after the json_script data (`scoreboard-bootstrap`,
+  `scoreboard-config` with `match_pk`/`user_id`/`login_url`,
+  `live-rules-config`). It runs under the e2e `PROD_CSP`; keep it that way.
+- **Every action is an op persisted before anything is sent**
+  (`LiveOutbox`, localStorage, keyed by match pk AND user id). Undo of an
+  unsynced point is just another op; never cancel queued ops.
+- **`LiveSession` owns the flush loop**: single flight, 150 ms debounce,
+  `online`/visible nudges, backoff 1/2/5/10/30 s + jitter, 8 s abort.
+  Reconcile drops ops <= `applied_seq`; server state != prediction means the
+  server wins (toast + report). `LiveStateView` only overwrites local state
+  when the outbox is empty.
+- **The base is the newer of the bootstrap and the outbox's stored snapshot**,
+  so a page the service worker serves stale still rebuilds correctly.
+- **Never disable a tap zone** (no `disabled`, ever); only the side-switch
+  prompt, the finished match and follow mode ignore taps.
+- **Completion is shown locally, navigated only on the server's
+  `redirect_url`**; the finish screen works offline indefinitely.
+- 403 or a login bounce keeps the outbox and stops the loop until the user
+  signs in (the login view honours a safe `next`). Another device scoring
+  (`applied_seq` past anything we issued, or a gap that does not resolve)
+  switches to read-only follow mode.
+- **Overlays start `hidden`** and only `scoreboard.js` reveals them; the inline
+  `#scoreboard [hidden]` rule beats Tailwind's display utilities. Classes
+  toggled by JS don't exist: Tailwind never scans JS (pips use `data-won`).
+- The sync indicator is a word plus a glyph and never amber; the leave guard
+  is `beforeunload` plus an in-page sheet. **No `alert()`/`confirm()`.**
+- Reports go to `console.warn`, `window.ttstatsReport` and a `ttstats:report`
+  event (no client Sentry yet).
 - Haptics live in the `HAPTICS` table and fire in the tap handler. Keep them few.
-- It is Alpine and works in production because prod allows `'unsafe-eval'`.
+- Tests: `tests/js/live_outbox.test.mjs`, `live_session.test.mjs` (fake
+  live_sync in `live_fakes.mjs`); e2e `scoreboard.spec.js` and the chaos cases
+  in `scoreboard-offline-cases.js` (WebKit + desktop Chrome, plus
+  dark/reduced/nojs). e2e traps: `releaseProdCSP` before a redirecting
+  navigation; `tap()` not `click()` for rapid taps in WebKit.

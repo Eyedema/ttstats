@@ -1,5 +1,6 @@
 import json
 import logging
+from urllib.parse import urlencode
 from datetime import datetime
 from typing import Any
 
@@ -18,7 +19,7 @@ from django.db.models import Count, F, Prefetch, Q
 from django.http import Http404, HttpResponse, JsonResponse
 from django.urls import reverse
 from django.views.decorators.http import require_POST
-from django.shortcuts import get_object_or_404, redirect, render
+from django.shortcuts import get_object_or_404, redirect, render, resolve_url
 from django.urls import reverse_lazy
 from datetime import timedelta
 
@@ -2304,7 +2305,10 @@ class CustomLoginView(LoginView):
     redirect_authenticated_user = True
 
     def get_success_url(self):
-        return reverse_lazy("pingpong:dashboard")
+        # A safe `next` wins (LoginView.get_redirect_url checks the host): the
+        # scoreboard's "Sign in again" link must land back on the scoreboard,
+        # where the kept outbox then flushes (KAN-81). Otherwise Today.
+        return self.get_redirect_url() or reverse_lazy("pingpong:dashboard")
 
     def form_valid(self, form):
         user = form.get_user()
@@ -2983,20 +2987,27 @@ class LiveScoreboardView(LoginRequiredMixin, View):
         # countable at a glance and a fraction is not.
         games_to_win = match.best_of // 2 + 1
 
+        team1_label = " & ".join(p.name for p in match.cached_team1_players)
+        team2_label = " & ".join(p.name for p in match.cached_team2_players)
+        team1_hue = (
+            match.cached_team1_players[0].hue_class
+            if match.cached_team1_players else "hue-1"
+        )
+        team2_hue = (
+            match.cached_team2_players[0].hue_class
+            if match.cached_team2_players else "hue-2"
+        )
         context = {
             "match": match,
-            "team1_label": " & ".join(p.name for p in match.cached_team1_players),
-            "team2_label": " & ".join(p.name for p in match.cached_team2_players),
+            # (live side, label, hue class): the two tap zones render from one
+            # loop, so they cannot drift apart.
+            "sides": [("team1", team1_label, team1_hue), ("team2", team2_label, team2_hue)],
+            "team1_label": team1_label,
+            "team2_label": team2_label,
             # Each half of the scoreboard wears its player's permanent hue, so
             # the two sides are the two people rather than "left" and "right".
-            "team1_hue_class": (
-                match.cached_team1_players[0].hue_class
-                if match.cached_team1_players else "hue-1"
-            ),
-            "team2_hue_class": (
-                match.cached_team2_players[0].hue_class
-                if match.cached_team2_players else "hue-2"
-            ),
+            "team1_hue_class": team1_hue,
+            "team2_hue_class": team2_hue,
             "games_to_win": games_to_win,
             "game_pips": range(games_to_win),
             "bootstrap": _scoreboard_payload(match),
@@ -3006,6 +3017,19 @@ class LiveScoreboardView(LoginRequiredMixin, View):
             "undo_url": reverse("pingpong:live_undo", args=[pk]),
             "side_switch_url": reverse("pingpong:live_side_switch", args=[pk]),
             "sync_url": reverse("pingpong:live_sync", args=[pk]),
+            # For static/pingpong/js/scoreboard.js, via json_script. The user
+            # id scopes the offline outbox: two accounts on one phone must
+            # never share one (KAN-80).
+            "scoreboard_config": {
+                "match_pk": match.pk,
+                "user_id": request.user.pk,
+                "best_of": match.best_of,
+                "max_batch": SYNC_MAX_OPS,
+                "login_url": "{}?{}".format(
+                    resolve_url(settings.LOGIN_URL),
+                    urlencode({"next": request.get_full_path()}),
+                ),
+            },
         }
         response = render(request, self.template_name, context)
         # The service worker keeps this page for offline reopening, filed under
