@@ -176,9 +176,10 @@ function defineOfflineCases() {
   test('3: slow, lossy 4G -- the display never goes backwards and the server ends right', async ({ page }) => {
     test.setTimeout(150000);
     await openScoreboard(page, match);
-    // Seed 6 loses the 1st request before the server and the 5th after it
-    // applied (asserted below), so both kinds of loss are exercised.
-    const chaos = await withLatency(page, { minMs: 2000, maxMs: 4000, dropRate: 0.1, seed: 6 });
+    // Seed 449 loses the 1st request before the server and the 2nd after it
+    // applied (asserted below), so both kinds of loss are exercised however
+    // the taps happen to batch.
+    const chaos = await withLatency(page, { minMs: 2000, maxMs: 4000, dropRate: 0.1, seed: 449 });
 
     // Record what the scoreboard shows after every render (a MutationObserver
     // callback runs once per render, after all of its writes).

@@ -265,8 +265,6 @@ function optionValue(html, select, label) {
  *  through the real "Score live" form. Returns { pk, url }. */
 async function createLiveMatch(page, { bestOf = 3, opponent = 'E2E Chaos' } = {}) {
   const { html, token } = await csrfFrom(page);
-  const now = new Date();
-  const pad = (n) => String(n).padStart(2, '0');
   const resp = await page.request.post('/pingpong/matches/add/', {
     form: {
       csrfmiddlewaretoken: token,
@@ -275,7 +273,9 @@ async function createLiveMatch(page, { bestOf = 3, opponent = 'E2E Chaos' } = {}
       player3: '',
       player4: '',
       is_double: 'False',
-      date_played: `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`,
+      // Dated long ago so the dozen finished chaos matches sort to the end
+      // of the paginated match list, below the seeded rows other specs open.
+      date_played: '2024-01-06T12:00',
       location: '',
       match_type: 'casual',
       best_of: String(bestOf),
