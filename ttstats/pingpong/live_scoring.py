@@ -8,7 +8,7 @@ no Django imports — so the rules can be exercised with plain pytest.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Any, Literal
 
 Side = Literal["team1", "team2"]
 
@@ -195,8 +195,14 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def apply_point(state: dict, side: Side, *, now: str | None = None) -> tuple[dict, dict | None]:
+def apply_point(
+    state: dict, side: Side, *, now: str | None = None, by: Any = None
+) -> tuple[dict, dict | None]:
     """Add one point for ``side``. Returns (new_state, completed_game).
+
+    ``by`` (KAN-150) is who recorded the point -- in practice a player id --
+    and is stored on the event as ``"by"`` when given. It is an opaque value:
+    no rule reads it, and an event without one has the pre-KAN-150 shape.
 
     ``completed_game`` is None unless the point ended a game; otherwise it
     carries ``{"game_number": int, "team1_score": int, "team2_score": int,
@@ -244,6 +250,8 @@ def apply_point(state: dict, side: Side, *, now: str | None = None) -> tuple[dic
         "t": timestamp,
         "game": state["current_game_number"],
     }
+    if by is not None:
+        event["by"] = by
     if completed_game is not None:
         event["game_end"] = True
         event["final_t1"] = completed_game["team1_score"]

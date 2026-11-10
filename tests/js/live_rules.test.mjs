@@ -43,7 +43,8 @@ function runOp(state, op) {
     case 'start':
       return [rules.setInitialServer(state, op[1]), null];
     case 'point':
-      return rules.applyPoint(state, op[1], { now: op[2] });
+      // A fourth element is the point's author (KAN-150), an opaque id.
+      return rules.applyPoint(state, op[1], op.length > 3 ? { now: op[2], by: op[3] } : { now: op[2] });
     case 'undo':
       return rules.undoLastPoint(state);
     case 'switch':

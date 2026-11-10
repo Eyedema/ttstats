@@ -461,12 +461,14 @@ def match_record(match):
     m = Match.all_objects.get(pk=match.pk)
     live_state = m.live_state and {
         # Timestamps are wall-clock; everything else must agree. The events
-        # themselves are compared without theirs.
+        # themselves are compared without theirs, and without ``by``: two
+        # matches compared here have different scorers, so attribution is
+        # asserted on its own (``assert_attribution``).
         k: v for k, v in m.live_state.items() if k not in ("events", "last_point_at")
     }
     if live_state is not None:
         live_state["events"] = [
-            {k: v for k, v in e.items() if k != "t"}
+            {k: v for k, v in e.items() if k not in ("t", "by")}
             for e in m.live_state.get("events", [])
         ]
     return {

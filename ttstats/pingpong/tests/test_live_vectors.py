@@ -25,7 +25,8 @@ def _apply(state, op):
         if op[0] == "start":
             return live_scoring.set_initial_server(state, op[1])
         if op[0] == "point":
-            return live_scoring.apply_point(state, op[1], now=op[2])[0]
+            by = op[3] if len(op) > 3 else None
+            return live_scoring.apply_point(state, op[1], now=op[2], by=by)[0]
         if op[0] == "undo":
             return live_scoring.undo_last_point(state)[0]
         return live_scoring.confirm_side_switch(state)
@@ -125,6 +126,15 @@ class TestVectorCoverage:
                     seen.add("undo past the cap is a no-op with points left")
                 if r and "error" in r:
                     seen.add("refused op")
+                if any("by" in e for e in state["events"]):
+                    seen.add("attributed events")
+                if (
+                    op == ["undo"]
+                    and r and "winner" in r
+                    and prev is not None
+                    and "by" in prev["events"][-1]
+                ):
+                    seen.add("undo of an attributed game end")
                 prev = state
         assert seen == {
             "long deuce",
@@ -134,6 +144,8 @@ class TestVectorCoverage:
             "event cap reached",
             "undo past the cap is a no-op with points left",
             "refused op",
+            "attributed events",
+            "undo of an attributed game end",
         }
 
 
