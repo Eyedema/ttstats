@@ -34,6 +34,7 @@ from .conftest import (
     ClubFactory,
     ClubMembershipFactory,
     GameFactory,
+    LiveLobbyFactory,
     MatchFactory,
     PlayerFactory,
     ScheduledMatchFactory,
@@ -208,12 +209,34 @@ URL_EXPECTATIONS = {
     "live_side_switch": ("detail", "live_match"),
     "live_undo": ("detail", "live_match"),
     "live_sync": ("detail", "live_match"),
+    # --- Shared scoring (KAN-151 / KAN-152) ----------------------------------
+    # The lobby is host-only through the scoped LiveLobby manager; another
+    # club's lobby pk 404s like any detail row.
+    "live_lobby": ("detail", "lobby"),
+    "live_lobby_status": ("detail", "lobby"),
+    "live_lobby_cancel": ("detail", "lobby"),
+    "live_lobby_create": (
+        "agnostic",
+        "Creates a lobby stamped with the viewer's club; reads no club data. "
+        "Location choices are scoped (test_shared_scoring.py).",
+    ),
+    "live_join": (
+        "agnostic",
+        "Token-addressed like club_invite_accept: the token is the "
+        "authorization, it is rate limited, and joining requires membership "
+        "of the lobby's club (test_shared_scoring.py::TestJoinView).",
+    ),
+    "live_join_resume": (
+        "agnostic",
+        "Redirects to the join link parked in the viewer's own session.",
+    ),
 }
 
 # Which HTTP verb each route actually answers. A GET against a POST-only view
 # returns 405 and would pass a naive "not 200" assertion while testing nothing.
 POST_ONLY = {
     "match_confirm",
+    "live_lobby_cancel",
     "championship_register",
     "championship_unregister",
     "championship_start",
@@ -319,6 +342,9 @@ class Tenant:
         )
         self.live_match.refresh_from_db()
 
+        # An open shared-scoring lobby hosted by this club's player (KAN-151).
+        self.lobby = LiveLobbyFactory(host=self.player, club=self.club)
+
         # An archived season with a frozen final table (KAN-51).
         from django.utils import timezone
 
@@ -342,6 +368,7 @@ class Tenant:
             "championship": self.championship.pk,
             "live_match": self.live_match.pk,
             "season": self.season.pk,
+            "lobby": self.lobby.pk,
         }[kind]
 
     def client(self):

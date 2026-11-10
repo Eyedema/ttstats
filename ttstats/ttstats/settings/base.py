@@ -232,6 +232,10 @@ FEATURE_FLAGS = {
     # the hottest path in the app, so it is separately killable without a
     # deploy -- and gated again by TENANCY_CANARY_SAMPLE_RATE below.
     'tenancy_canary': False,
+    # Two-phone live scoring: start a match without an opponent and hand them
+    # a QR code / join link (KAN-148). Gates only the entry points; a lobby
+    # already open keeps working if this is turned off.
+    'shared_scoring': False,
     # `seasons` (KAN-9) and `glicko2` (KAN-72) were retired by KAN-73: seasons
     # and Glicko-2 are always on. A stale name in TTSTATS_FLAGS_ON is ignored.
 }

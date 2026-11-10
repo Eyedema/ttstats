@@ -9,6 +9,7 @@ paths:
   - "ttstats/pingpong/club_backfill.py"
   - "ttstats/pingpong/management/commands/backfill_clubs.py"
   - "ttstats/pingpong/tests/test_tenancy*.py"
+  - "ttstats/pingpong/live_lobby_views.py"
 ---
 
 # Tenancy: row-level security and the active club

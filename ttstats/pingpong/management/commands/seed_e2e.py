@@ -106,6 +106,12 @@ class Command(BaseCommand):
             pk__in=[match.pk, momentum_match.pk]
         ).update(club=club)
 
+        # Shared scoring (KAN-151) is flag-gated; the seeded user gets it, the
+        # way production rolls it out (a per-user override first).
+        FeatureFlagOverride.objects.update_or_create(
+            name="shared_scoring", user=user, defaults={"enabled": True, "note": "e2e"}
+        )
+
         # A second club, so the switcher actually has something to switch
         # between. A single-club user sees no switcher by design, which would
         # make the S1.8 specs assert on markup that is correctly absent.

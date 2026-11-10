@@ -3,7 +3,7 @@ from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.models import User
 
 from . import live_scoring
-from .models import Club, Game, Match, Player, ScheduledMatch, Championship
+from .models import Club, Game, Location, Match, Player, ScheduledMatch, Championship
 
 # The set of legal match lengths. match_form.html used to hard-code these as
 # five hand-written <option> tags; they belong with the other match rules.
@@ -673,3 +673,25 @@ class LeaderboardScopeForm(StyledFormMixin, forms.Form):
             for s in seasons
         ] + [(all_time_value, "All-time")]
         self.fields["format"].choices = RatingFormat.choices
+
+
+class LiveLobbyForm(forms.Form):
+    """What the match form's "Score live with a shared link" button posts
+    (KAN-151): the match length and where, and nothing about the opponent.
+
+    The whole match form is submitted (the button uses ``formaction``), so
+    the other fields are simply ignored. ``is_double`` is read only to refuse
+    doubles, which shared scoring does not do yet.
+    """
+
+    best_of = _best_of_field()
+    location = forms.ModelChoiceField(queryset=Location.objects.none(), required=False)
+    is_double = forms.NullBooleanField(required=False)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Location's default manager is not club-scoped, so scope it here:
+        # a lobby must not point at another club's table.
+        from .managers import scope_to_active_club
+
+        self.fields["location"].queryset = scope_to_active_club(Location.objects.all())

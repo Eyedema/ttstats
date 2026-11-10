@@ -1025,6 +1025,23 @@ class MatchCreateView(LoginRequiredMixin, CreateView):
             return reverse_lazy("pingpong:live_scoreboard", kwargs={"pk": self.object.pk})
         return reverse_lazy("pingpong:match_detail", kwargs={"pk": self.object.pk})
 
+    def get_initial(self):
+        """Match length and location from the query string, for the lobby's
+        "Pick opponent instead" (KAN-151). Anything unparseable is ignored."""
+        from .forms import BEST_OF_CHOICES
+
+        initial = super().get_initial()
+        try:
+            best_of = int(self.request.GET.get("best_of", ""))
+        except ValueError:
+            best_of = None
+        if best_of in dict(BEST_OF_CHOICES):
+            initial["best_of"] = best_of
+        location = self.request.GET.get("location", "")
+        if location.isdigit():
+            initial["location"] = int(location)
+        return initial
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["locations"] = Location.objects.all()
@@ -1735,6 +1752,14 @@ class PlayerRegistrationView(CreateView):
             recipient_list=[user.email],
             fail_silently=False,
         )
+
+        # Arrived from a shared-scoring join link (KAN-152)? Same hook shape
+        # as the invite: back to the lobby they scanned, not a second signup.
+        from .live_lobby_views import consume_pending_live_join
+
+        live_join = consume_pending_live_join(self.request, user=user)
+        if live_join is not None:
+            return live_join
 
         return render(
             self.request,

@@ -7,7 +7,7 @@ from django.test import Client
 from factory.django import DjangoModelFactory
 
 from pingpong import live_scoring
-from pingpong.models import Championship, ChampionshipEntry, ChampionshipEntryMember, Club, ClubMembership, ClubRole, Game, JobRun, LiveScorer, Location, Match, MatchConfirmation, Player, PlayerRating, ScheduledMatch, Season, SeasonStanding, Side
+from pingpong.models import Championship, ChampionshipEntry, ChampionshipEntryMember, Club, ClubMembership, ClubRole, Game, JobRun, LiveLobby, LiveScorer, Location, Match, MatchConfirmation, Player, PlayerRating, ScheduledMatch, Season, SeasonStanding, Side
 from pingpong.services import create_live_match, set_match_sides, set_scheduled_match_sides
 
 
@@ -209,6 +209,17 @@ class LiveScorerFactory(DjangoModelFactory):
     player = factory.SubFactory(PlayerFactory, with_user=True)
     side = Side.TWO
     role = LiveScorer.Role.GUEST
+
+
+class LiveLobbyFactory(DjangoModelFactory):
+    """A shared-scoring lobby (KAN-151), open for ``LOBBY_TTL``. Pass
+    ``club=`` explicitly in tenancy tests; the token is generated on save."""
+
+    class Meta:
+        model = LiveLobby
+
+    host = factory.SubFactory(PlayerFactory, with_user=True)
+    best_of = 5
 
 
 class GameFactory(DjangoModelFactory):

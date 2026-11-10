@@ -25,3 +25,5 @@
 | `rating_replay`, `recalculate_ratings` (formerly `elo_replay`, `elo_parity`, `recalculate_elo`, migration 0040) | `_base_manager` replay of the whole history | **Left club-wide** — commands and migrations, no viewer |
 | `seed_demo`, `seed_e2e`, `award_achievements`, `backfill_clubs` | Management commands | **Left club-wide** — same |
 
+| `live_lobby_views.find_lobby` (KAN-152) | `LiveLobby.all_objects` by join token: the joiner is not the host | **Left club-wide** — token lookup only (`compare_digest`); the view then requires membership of `lobby.club` before anything is shown beyond host/best-of/club, and the join uses `club=lobby.club` explicitly |
+| `services.open_lobby` / `cancel_lobby` / `start_shared_match` (KAN-151/152) | `LiveLobby.all_objects` writes keyed on the host or a known pk | **Left club-wide** — writes only; `open_lobby` closes the host's open lobby in any club so the one-open-lobby rule holds |
