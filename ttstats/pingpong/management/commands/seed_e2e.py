@@ -13,8 +13,8 @@ from django.utils import timezone
 
 from pingpong import live_scoring as ls, point_rollups, services
 from pingpong.models import (
-    Club, ClubInvite, ClubMembership, ClubRole, FeatureFlagOverride, Game, Match,
-    MatchConfirmation, Player, PlayerRating, Season, SeasonStanding,
+    Club, ClubInvite, ClubMembership, ClubRole, FeatureFlagOverride, Game, LiveScorer,
+    Match, MatchConfirmation, Player, PlayerRating, Season, SeasonStanding, Side,
 )
 
 E2E_USERNAME = "e2e"
@@ -31,10 +31,13 @@ E2E_GLICKO_USERNAME = "e2e-glicko"
 # its own live match against this player, so those results never touch
 # E2E Opponent's, which the season and Glicko specs read.
 E2E_CHAOS_OPPONENT = "e2e-chaos"
+# Shared scoring (KAN-153): the guest scorer of a seeded two-phone match, so
+# the scoreboard's "my side" layout can be opened without the join flow.
+E2E_PARTNER = "e2e-partner"
 # Every player the seed rates. A re-seed starts them from scratch.
 E2E_PLAYER_NAMES = (
     "E2E Player", "E2E Opponent", "E2E Momentum", "E2E Seasons Player",
-    "E2E Glicko Player", "E2E Chaos",
+    "E2E Glicko Player", "E2E Chaos", "E2E Partner",
 )
 
 
@@ -117,6 +120,8 @@ class Command(BaseCommand):
             club=second, user=user, defaults={"role": ClubRole.MEMBER}
         )
 
+        shared_match = self._seed_shared_live_match(club, player)
+
         season = self._seed_season(club, player, opponent)
         glicko_match = self._seed_glicko(club, opponent)
 
@@ -134,6 +139,7 @@ class Command(BaseCommand):
         self.stdout.write(f"E2E_PASSWORD={E2E_PASSWORD}")
         self.stdout.write(f"E2E_MATCH_PK={match.pk}")
         self.stdout.write(f"E2E_MOMENTUM_MATCH_PK={momentum_match.pk}")
+        self.stdout.write(f"E2E_SHARED_MATCH_PK={shared_match.pk}")
         self.stdout.write(f"E2E_INVITE_TOKEN={live_invite.token}")
         self.stdout.write(f"E2E_REVOKED_INVITE_TOKEN={dead_invite.token}")
         self.stdout.write(f"E2E_CLUB={club.name}")
@@ -157,6 +163,32 @@ class Command(BaseCommand):
         Match.all_objects.filter(participants__player__in=players).distinct().delete()
         PlayerRating.all_objects.filter(player__in=players).delete()
         FeatureFlagOverride.objects.filter(name__in=["seasons", "glicko2"]).delete()
+
+    def _seed_shared_live_match(self, club, player):
+        """A live match scored on two phones (KAN-153): E2E Player is the
+        host on side 1, E2E Partner the guest on side 2, each restricted to
+        their own side -- the shape the join flow (KAN-152) leaves behind.
+        Not started, so the specs pick a server and never assume a score."""
+        partner_user, _ = User.objects.get_or_create(
+            username=E2E_PARTNER, defaults={"email": "e2e-partner@example.test"}
+        )
+        partner_user.profile.email_verified = True
+        partner_user.profile.save()
+        partner, _ = Player.objects.get_or_create(name="E2E Partner")
+        partner.user = partner_user
+        partner.club = club
+        partner.save()
+        match = services.create_live_match(
+            Match(best_of=5, club=club),
+            scorekeeper=player,
+            side1_players=[player],
+            side2_players=[partner],
+            can_score_both=False,
+        )
+        LiveScorer.objects.create(
+            match=match, player=partner, side=Side.TWO, role=LiveScorer.Role.GUEST
+        )
+        return match
 
     def _seed_season(self, club, player, opponent):
         """A current season with confirmed singles results, for the season table.

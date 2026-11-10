@@ -3169,11 +3169,22 @@ class LiveScoreboardView(LoginRequiredMixin, View):
             match.cached_team2_players[0].hue_class
             if match.cached_team2_players else "hue-2"
         )
+        bootstrap = _scoreboard_payload(match, caller=caller)
+        me = bootstrap["me"]
+        # Shared scoring (KAN-153): more than one phone writes to this match.
+        # The client rebases on the other phones' ops whenever it is shared;
+        # the "my side" layout applies only to a phone restricted to its own
+        # side (a phone that scores both keeps the two zones).
+        shared = match.is_shared
+        shared_layout = bool(shared and me and not me["can_score_both"])
         context = {
             "match": match,
             # (live side, label, hue class): the two tap zones render from one
             # loop, so they cannot drift apart.
             "sides": [("team1", team1_label, team1_hue), ("team2", team2_label, team2_hue)],
+            # The "my side" layout: this side's zone is the big "+1" button,
+            # the other is read-only digits. None outside that layout.
+            "my_side": Side.to_live(me["side"]) if shared_layout else None,
             "team1_label": team1_label,
             "team2_label": team2_label,
             # Each half of the scoreboard wears its player's permanent hue, so
@@ -3182,7 +3193,7 @@ class LiveScoreboardView(LoginRequiredMixin, View):
             "team2_hue_class": team2_hue,
             "games_to_win": games_to_win,
             "game_pips": range(games_to_win),
-            "bootstrap": _scoreboard_payload(match, caller=caller),
+            "bootstrap": bootstrap,
             "point_url": reverse("pingpong:live_point", args=[pk]),
             "start_url": reverse("pingpong:live_start", args=[pk]),
             "state_url": reverse("pingpong:live_state", args=[pk]),
@@ -3200,6 +3211,11 @@ class LiveScoreboardView(LoginRequiredMixin, View):
                 # The held /live/state/?wait=1 request's client-side abort
                 # (KAN-168): the server's wait plus slack, in ms, so the
                 # number lives in Python only.
+                # KAN-153: the caller's scorer row and whether the match is
+                # shared. With shared False the client never long-polls and
+                # behaves exactly as the single-scorer client did.
+                "me": me,
+                "shared": shared,
                 "longpoll_abort_ms": (
                     settings.LIVE_LONGPOLL_WAIT + live_longpoll.ABORT_SLACK
                 ) * 1000,
@@ -3352,7 +3368,13 @@ class LiveStateView(LoginRequiredMixin, View):
 
         redirect_url = None
         if not match.is_live:
-            redirect_url = reverse("pingpong:match_detail", args=[match.pk])
+            # The same hand-off live_sync gives (KAN-153): in shared scoring
+            # the phone that did not tap the final point learns of the end
+            # here, and must land on match_confirm like the one that did. A
+            # match that ended without a winner has nothing to confirm.
+            redirect_url = _completion_redirect(match) or reverse(
+                "pingpong:match_detail", args=[match.pk]
+            )
         payload = _scoreboard_payload(match, caller=caller, redirect_url=redirect_url)
         # A scoreboard served from the service worker's cache may carry a
         # token from an older CSRF secret; this one matches the cookie the

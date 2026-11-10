@@ -38,6 +38,7 @@
     rejected: 'The server didn’t accept a point — score reset to the saved one',
     divergence: 'The server didn’t accept a point — score reset to the saved one',
     conflict: 'This match is being scored on another device',
+    'stale-undo': 'Undo didn’t apply: another point came in first. Check the score',
   };
 
   var FOLLOW_POLL_MS = 5000;
@@ -124,10 +125,10 @@
       score.classList.add('score-bump');
     }
 
-    function showError(message) {
+    function showError(message, quiet) {
       el.toast.textContent = message;
       show(el.toast, true);
-      haptic(HAPTICS.error);
+      if (!quiet) haptic(HAPTICS.error);
       clearTimeout(toastTimer);
       toastTimer = setTimeout(function () { show(el.toast, false); }, TOAST_MS);
     }
@@ -135,6 +136,9 @@
     // --- render ------------------------------------------------------------
 
     function syncWords(view) {
+      // Shared scoring: points the other phone's points made impossible
+      // here (it finished the match first). Kept; the server decides.
+      if (view.stuck) return plural(view.stuck, 'point', 'points') + ' waiting to sync';
       if (view.phase === 'offline') return 'Offline — saved on this phone';
       var noun = view.pendingPoints === view.pending ? ['point', 'points'] : ['change', 'changes'];
       return plural(view.pending, noun[0], noun[1]) + ' not saved yet';
@@ -174,6 +178,7 @@
         zone1.style.order = state.side_switched ? '2' : '';
         zone2.style.order = state.side_switched ? '1' : '';
       }
+      if (view.shared) renderShared(view, previous);
       var gameNumber = q('[data-game-number]');
       if (gameNumber) gameNumber.textContent = String(Math.min(state.current_game_number || 1, config.best_of));
 
@@ -194,6 +199,38 @@
       if (view.phase === 'follow') startFollowPoll();
       else stopFollowPoll();
       if (!view.pending && !el.leaveSheet.hidden) show(el.leaveSheet, false);
+    }
+
+    // Shared scoring (KAN-153): the undo label names whose point it removes,
+    // and the opponent's digits pulse when their point arrives. A visual
+    // only: haptics fire in the tap handler and nowhere else.
+    function renderShared(view, previous) {
+      var state = view.state || {};
+      var label = q('[data-undo-label]');
+      if (label) {
+        var events = state.events || [];
+        var last = events[events.length - 1];
+        if (state.started && last && view.trailingSeq >= 1) {
+          var t1 = last.game_end ? last.final_t1 : state.team1_points;
+          var t2 = last.game_end ? last.final_t2 : state.team2_points;
+          var who = root.getAttribute('data-' + last.side + '-label') || '';
+          label.textContent = 'Undo ' + who + '’s point (' + t1 + '–' + t2 + ')';
+        } else {
+          label.textContent = 'Undo';
+        }
+      }
+      var mine = root.getAttribute('data-my-side');
+      if (!mine || !previous) return;
+      var theirs = mine === 'team1' ? 'team2' : 'team1';
+      var before = previous.state || {};
+      var scored = (state[theirs + '_points'] || 0) > (before[theirs + '_points'] || 0) ||
+        (state[theirs + '_games'] || 0) > (before[theirs + '_games'] || 0);
+      if (!scored) return;
+      var digits = q('[data-score="' + theirs + '"]');
+      if (!digits) return;
+      digits.classList.remove('score-pulse');
+      void digits.offsetWidth;
+      digits.classList.add('score-pulse');
     }
 
     function renderSync(view) {
@@ -273,6 +310,11 @@
       bootstrap: bootstrap,
       bestOf: config.best_of,
       maxBatch: config.max_batch,
+      // Shared scoring (KAN-153): rebase on the other phone's ops and keep
+      // one long-poll in flight while visible. False: none of it runs.
+      shared: Boolean(config.shared),
+      longpollAbortMs: config.longpoll_abort_ms,
+      isVisible: function () { return document.visibilityState === 'visible'; },
       isOnline: function () { return navigator.onLine !== false; },
       report: send,
       onChange: render,
@@ -287,7 +329,9 @@
           } catch (e) { /* the redirect evicts it anyway */ }
           window.location.assign(detail.redirectUrl);
         } else if (MESSAGES[type]) {
-          showError(MESSAGES[type]);
+          // A stale undo is the other phone's doing, not a tap of ours that
+          // failed: no buzz.
+          showError(MESSAGES[type], type === 'stale-undo');
         }
       },
     });
@@ -405,7 +449,11 @@
     window.addEventListener('online', function () { session.nudge(); });
     window.addEventListener('offline', function () { render(session.view()); });
     document.addEventListener('visibilitychange', function () {
-      if (document.visibilityState !== 'visible') return;
+      if (document.visibilityState !== 'visible') {
+        // Shared scoring: no request held for a tab nobody looks at.
+        session.pausePolling();
+        return;
+      }
       acquireWakeLock();
       // Flush what is pending, or (nothing pending) re-read the canonical
       // state: a phone that slept, or a match finished from another device,

@@ -213,3 +213,118 @@ Cost, measured on a loaded laptop (other suites running): the fidelity file
 went from ~40 s to ~55-60 s serial; the two-stream tests are ~13 s of call
 time. Two deliveries per seed measured ~25 s more for the same coverage of the
 server code, so the deliveries rotate instead. CI runs pytest with `-n auto`.
+
+## KAN-153: co-scoring client
+
+The rules are in `.claude/rules/live-scoring.md` ("Shared mode"); this
+records the choices behind them.
+
+### One flag, inert when false
+
+`scoreboard-config.shared` is `match.is_shared` (more than one non-revoked
+scorer row). Every shared behaviour in `live_session.js` is keyed on it, so a
+single-scorer page runs exactly the KAN-80/81 client: the unmodified
+`live_session.test.mjs` passes and the e2e network log shows no `?since=`
+request. The "my side" layout is a narrower condition (shared **and** this
+phone lacks `can_score_both`), so a takeover (KAN-154) gets the two zones back
+while still rebasing.
+
+### Ordering two answers: `(rev, applied_seq)`
+
+The flush and the long-poll are independent, so their answers can arrive in
+either order. `rev` alone cannot order two payloads with the same `rev`
+(a rule rejection consumes my seq without bumping `rev`), and `applied_seq`
+alone ignores the other phone. Both only ever grow on the server, so the
+pair, compared lexicographically, orders any two answers in time. An older
+answer is never adopted; if it was a flush answer, only its `rejected` is news.
+
+### "Server wins" only when nobody else moved
+
+With two streams the server's state interleaves the other phone's ops with
+mine in an order the client cannot know, so comparing it with my prediction
+would cry wolf on every overlap. The client compares only when the sum of the
+other scorers' `applied_seq` (from `scorers`) is unchanged between the old
+base and the answer; otherwise it rebases silently. The cost: a real mismatch
+in my own ops that coincides with the other phone's activity goes unreported.
+The ticket's alternative ("`rev - my applied delta` equals the opponent's
+applied count") cannot work, because rule rejections move `applied_seq` but
+not `rev`.
+
+### Undo `expects` for a point still in my outbox
+
+`expects` is fixed **at the tap**, never recomputed at send time: it is the
+trailing sequence the phone shows then, i.e. the base's
+`last_point.sequence`, +1 for each pending point and -1 for each pending undo
+before it. For an undo of my own queued point, that is the sequence the point
+*will* get if nothing else lands first. Two outcomes, both safe:
+
+- Nothing lands between my point and my undo (the usual case: both go in one
+  batch, applied under one lock): the sequences match, the point is deleted.
+- The other phone's point lands first: my point gets a later sequence, the
+  undo is `stale undo`, nothing is deleted, the toast says so, and the
+  scorer sees their point (now trailing, with its real sequence) and can
+  undo again.
+
+Recomputing at send time would be wrong in the other direction: an undo of a
+*server* point tapped before the opponent's next point arrived would then
+name the opponent's point, which the scorer never saw. Fixing the number at
+the tap is what keeps "nobody deletes a point they have not seen". In the
+local replay, a pending undo whose `expects` no longer matches is skipped,
+exactly as the server will refuse it, so the screen does not show an undo
+that will not happen. A queued undo is never cancelled.
+
+Known limit (server side, KAN-150): sequences are reused after an undo, so
+`expects` cannot tell "my #8" from "their new #8" when the other phone undid
+#8 and scored again between my seeing it and my undo landing. It needs an
+undo and a point from the other phone inside one round trip of mine; a
+`(sequence, by)` check would close it.
+
+### Follow mode is per user, and gaps renumber
+
+Another scorer's ops move `rev`, never my stream, so follow mode now means
+only "my stream's `applied_seq` is past what this outbox issued and what this
+page knew": the same user on another device. A per-stream gap means ops this
+outbox issued are gone from storage, not "someone else is scoring", so after
+the retry the pending ops are renumbered from `applied_seq + 1` and sent
+(reported), instead of turning the tab read-only.
+
+### The long-poll loop
+
+One request in flight, its own AbortController and timers, so a held poll
+never delays a flush (pinned with the fake clock). `wait=0` on load, visible
+and `online`, then `wait=1` re-issued at once on 200 and 204. `busy` (the
+previous page's poll still holds the server's slot) and a "held" 204 that
+came back in under a second wait `busyMs` (1 s): the server cannot see a
+client abort, so a reload would otherwise spin on `busy` for up to 20 s. A
+200 that did not move the base to its `rev` (a finished match with my ops
+still queued) also waits, or `since` would differ forever and the loop spin.
+Errors share the flush's 1/2/5/10/30 s + jitter. The abort timeout is the
+bootstrap's `longpoll_abort_ms`, never a JS literal.
+
+### Completion lands on match_confirm on both phones
+
+`LiveStateView` used to hand a finished match's `redirect_url` as
+match_detail while `live_sync` handed match_confirm. The phone that did not
+tap the final point learns of the end from the long-poll, so the two now
+agree: match_confirm whenever the match has a winner, match_detail only for a
+match closed without one.
+
+### The fake server has a contract
+
+`tests/js/live_fakes.mjs` models per-stream seqs, `rev`, the side
+restriction, `expects`, `last_point`, attribution and the long-poll (held
+until the next applied op or the wait on the fake clock, one slot per scorer,
+`busy`, and, like the server, blind to client aborts). Two scripts in
+`pingpong/tests/live_contract.py` run through the real endpoints
+(`test_live_contract.py`) and through the fake (`live_contract.test.mjs`);
+the normalised answers (timestamps dropped, player ids as roles) must be
+identical, and the pytest fails when the committed fixture is stale. Held
+waits are timing and stay out of the fixture.
+
+### Things found on the way
+
+- `.score-bump` (the tap's numeral bump) lived in `@layer components` with a
+  name only JS uses, so Tailwind purged it and it never animated. It moved
+  outside `@layer` with the new `.score-pulse`.
+- Playwright's `use.reducedMotion` does not reach `matchMedia` in WebKit (as
+  `momentum.reduced.spec.js` notes); the reduced spec calls `emulateMedia`.
