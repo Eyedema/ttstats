@@ -5,6 +5,8 @@ paths:
   - "ttstats/pingpong/point_rollups.py"
   - "ttstats/pingpong/views.py"
   - "ttstats/pingpong/live_ops.py"
+  - "ttstats/pingpong/services.py"
+  - "ttstats/pingpong/tests/test_live_scorers.py"
   - "ttstats/pingpong/management/commands/rebuild_point_rollups.py"
   - "ttstats/pingpong/management/commands/point_storage.py"
   - "ttstats/pingpong/templates/pingpong/scoreboard.html"
@@ -112,11 +114,28 @@ synced in a batch runs exactly the code a point tapped online runs.
 
 ## Every op carries a seq; dedupe before `is_live` (KAN-77)
 
-Ops (`start`, `point`, `undo`, `side_switch`) carry a client `seq`: per match,
-from 1, gapless. `Match.live_applied_seq` is the highest applied; it is its own
-column because `live_state` is nulled at match end and the most dangerous
-duplicate is a retried match point.
+Ops (`start`, `point`, `undo`, `side_switch`) carry a client `seq`: **per
+scorer** (KAN-149), from 1, gapless. Each phone is a `LiveScorer` row whose
+`applied_seq` is the highest applied; a match with no rows is the legacy
+shape, whose stream is `Match.live_applied_seq` and whose only scorer is
+`scorekeeper`. Both are columns because `live_state` is nulled at match end
+and the most dangerous duplicate is a retried match point.
 
+- **One lock serializes every stream**: the match row `select_for_update()`,
+  then the scorer rows are re-read (`live_ops.load_scorers`) and the caller
+  re-authorized under it.
+- **New live matches come from `services.create_live_match`**, which writes
+  the host row (`can_score_both=True` for a solo scorer). The host's stream is
+  also mirrored into `live_applied_seq` for one release (rollback safety).
+- The scorer row is written **once per request** (`live_ops.save_scorer`:
+  consumed seq + `last_seen_at`, stamped at most every 5 s), in the op's
+  transaction, so the `live_sync` ceiling did not move.
+- `Match.live_rev` is +1 per op that changed the state, from any stream;
+  duplicates, gaps **and rule rejections** leave it alone.
+- Access: a non-revoked scorer row (or `scorekeeper` on a row-less match), or
+  staff. Revoked or row-less participant is 403; staff without a row writing
+  to a shared match is 409 `not a scorer`.
+- In a shared match an op **without** `seq` is 409 `{"error": "reload"}`.
 - **Check the seq after the lock + `refresh_from_db()` and BEFORE `is_live`**
   (`_check_seq`), or a re-sent match point gets "Match is not live" instead of
   the completion and its `redirect_url`.
@@ -128,7 +147,9 @@ duplicate is a retried match point.
 - `seq` must be an int >= 1; bools and strings are 400.
 - No `seq` is the legacy contract, applied unconditionally and logged. Remove
   once no cached page sends it.
-- `_scoreboard_payload()` carries `applied_seq` (0 before any sequenced op).
+- `_scoreboard_payload()` carries `applied_seq` (the caller's stream, 0 before
+  any sequenced op), `rev`, `scorers` (presence) and `me` (null without a row).
+  Choices: `docs/decisions/kan-149-per-scorer-streams.md`.
 
 ## The batch sync endpoint (`live_sync`, KAN-88)
 

@@ -1,6 +1,11 @@
 """Write-side helpers shared by the match/scheduled-match views."""
+from django.db import transaction
+from django.utils import timezone
+
+from . import live_scoring
 from .models import (
     ChampionshipEntry,
+    LiveScorer,
     MatchParticipant,
     ScheduledMatchParticipant,
     Side,
@@ -10,6 +15,43 @@ from .models import (
 def set_match_sides(match, side1_players, side2_players):
     """Replace a match's participants with the given players."""
     _set_sides(match, MatchParticipant, "match", side1_players, side2_players)
+
+
+def create_live_match(
+    match, *, scorekeeper, side1_players, side2_players, can_score_both=True
+):
+    """Save an unsaved ``Match`` as a live match, with its host scorer row.
+
+    The one way a live match comes into existence (KAN-149): the "Score live"
+    branch of ``MatchCreateView`` and the join flow (KAN-152) both call it.
+    The caller builds ``match`` with its own fields (best of, location, an
+    explicit ``club`` when the viewer's active club may differ); this sets the
+    live fields, writes the sides, recomputes, and creates the host
+    ``LiveScorer`` on the scorekeeper's side (side 1 for a scorekeeper who is
+    not playing). ``can_score_both`` is True for a solo scorer; a shared match
+    passes False and adds the guest row itself.
+    """
+    with transaction.atomic():
+        match.is_live = True
+        match.scorekeeper = scorekeeper
+        match.live_state = live_scoring.initial_state(match.best_of)
+        match.save()
+        set_match_sides(match, side1_players, side2_players)
+        match.save()  # recompute now that the sides exist
+        side = (
+            Side.TWO
+            if any(p.pk == scorekeeper.pk for p in side2_players)
+            else Side.ONE
+        )
+        LiveScorer.objects.create(
+            match=match,
+            player=scorekeeper,
+            side=side,
+            role=LiveScorer.Role.HOST,
+            can_score_both=can_score_both,
+            last_seen_at=timezone.now(),
+        )
+    return match
 
 
 def set_scheduled_match_sides(scheduled_match, side1_players, side2_players):

@@ -67,23 +67,24 @@ docker compose -f compose.prod.yml up --build -d
 ### Factory Reference (`conftest.py`)
 
 ```python
-UserFactory(username="...", is_staff=True, ...)  # Creates User via create_user(), password="testpass123"
-PlayerFactory(name="...", with_user=True)        # with_user=True creates and links a User
+UserFactory(username="...", is_staff=True, ...)  # create_user(), password="testpass123"
+PlayerFactory(name="...", with_user=True)        # Also creates and links a User
 LocationFactory(name="...")
-MatchFactory(player1=p1, player2=p2, best_of=5)  # Singles: one player per side
+MatchFactory(player1=p1, player2=p2, best_of=5)  # Singles
 MatchFactory(team1_players=[p1,p2], team2_players=[p3,p4], is_double=True)  # Doubles match
-MatchFactory(confirmed=True)                     # Auto-confirms match after creation
+MatchFactory(confirmed=True)                     # Auto-confirmed
 GameFactory(match=m, game_number=1, team1_score=11, team2_score=5)
 ScheduledMatchFactory(player1=p1, player2=p2, scheduled_date=date, scheduled_time=time)
-ChampionshipFactory(name="...", with_entries=[[p1], [p2]], created_by=player)  # Round-robin championship
+ChampionshipFactory(name="...", with_entries=[[p1], [p2]], created_by=player)  # Round-robin; with_participants= aliases with_entries
+LiveScorerFactory(match=m, player=p)             # Guest stream, side 2
 ```
 
 `team1_players`/`team2_players` are historical names for side 1 / side 2.
-`ChampionshipFactory(with_participants=...)` is an alias for `with_entries`.
 
 Fixtures and helpers: `complete_match` (finished singles, 3-0 side 1, best of 5),
 `confirm_match(match)`, `confirm_match_silent(match)`,
-`create_match(side1_players, side2_players, **kwargs)`.
+`create_match(side1_players, side2_players, **kwargs)`,
+`live_match(shared=, started=)` (host scorer row included).
 
 ### Known Gotchas
 

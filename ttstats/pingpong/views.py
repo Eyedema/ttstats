@@ -1,5 +1,6 @@
 import json
 import logging
+from dataclasses import dataclass
 from urllib.parse import urlencode
 from datetime import datetime
 from typing import Any
@@ -16,7 +17,7 @@ from django.core.mail import send_mail
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db import transaction
 from django.db.models import Count, F, Prefetch, Q
-from django.http import Http404, HttpResponse, JsonResponse
+from django.http import Http404, HttpResponse, HttpResponseRedirect, JsonResponse
 from django.middleware.csrf import get_token
 from django.urls import reverse
 from django.views.decorators.http import require_POST
@@ -47,9 +48,9 @@ from .forms import GameForm, MatchEditForm, MatchForm, PlayerRegistrationForm, S
 from .achievements import get_achievement_progress
 from . import cache_utils
 from .managers import scope_to_active_club
-from .models import Game, Location, Match, MatchParticipant, Player, UserProfile, MatchConfirmation, ScheduledMatch, ScheduledMatchParticipant, Side, Championship, Club, ClubInvite, ClubMembership, ClubRole, format_side_label, NotificationKind, NotificationPreference, PushSubscription
+from .models import Game, LiveScorer, Location, Match, MatchParticipant, Player, UserProfile, MatchConfirmation, ScheduledMatch, ScheduledMatchParticipant, Side, Championship, Club, ClubInvite, ClubMembership, ClubRole, format_side_label, NotificationKind, NotificationPreference, PushSubscription
 from .emails import send_scheduled_match_email, send_passkey_deleted_email
-from .services import set_match_sides, set_scheduled_match_sides
+from .services import create_live_match, set_match_sides, set_scheduled_match_sides
 
 try:
     from django_otp_webauthn.models import WebAuthnCredential
@@ -1158,10 +1159,17 @@ class MatchCreateView(LoginRequiredMixin, CreateView):
             except (AttributeError, Player.DoesNotExist):
                 messages.error(self.request, "You need a player profile to score live.")
                 return self.form_invalid(form)
-            form.instance.is_live = True
-            form.instance.scorekeeper = user_player
-            form.instance.live_state = live_scoring.initial_state(form.instance.best_of)
             messages.success(self.request, "Live match started — tap a side to score.")
+            # The same service the join flow uses (KAN-152): it saves the
+            # match, its sides and its host LiveScorer row together.
+            self.object = create_live_match(
+                form.save(commit=False),
+                scorekeeper=user_player,
+                side1_players=self._sides[0],
+                side2_players=self._sides[1],
+            )
+            form.save_m2m()
+            return HttpResponseRedirect(self.get_success_url())
         else:
             messages.success(self.request, "Match created successfully!")
 
@@ -2839,30 +2847,135 @@ class ScheduledMatchEditView(LoginRequiredMixin, UpdateView):
 
 
 
-def _get_live_match_for_scorekeeper(request, pk):
-    """Load a live match, enforcing scorekeeper-only access.
+class _Refused(Exception):
+    """A live request answered with a JSON error rather than a 403/404.
 
-    Returns the Match instance. Raises PermissionDenied or Http404 on miss.
-    Uses ``all_objects`` so the default manager's is_live=False filter
-    doesn't hide our target.
+    Raised inside the op's transaction (so it rolls back) and turned into
+    its response by ``_run_live``.
+    """
+
+    def __init__(self, response: JsonResponse):
+        super().__init__(response.content)
+        self.response = response
+
+
+@dataclass
+class _LiveCaller:
+    """Who is driving a live request, and which op stream is theirs.
+
+    ``scorer`` is the stream the caller's seqs are checked against: their own
+    row, the sole active scorer's for staff on a solo match, or ``None`` for
+    a row-less (legacy) match. ``own`` is the scorer only when it is the
+    caller's own row -- presence and ``me`` are never about somebody else.
+    """
+
+    player: Player
+    scorer: LiveScorer | None
+
+    @property
+    def own(self) -> LiveScorer | None:
+        if self.scorer is not None and self.scorer.player_id == self.player.pk:
+            return self.scorer
+        return None
+
+
+def _authorize_scorer(request, match: Match, player: Player, *, writing: bool) -> _LiveCaller:
+    """KAN-149: a non-revoked ``LiveScorer`` row (or, on a row-less match,
+    being its ``scorekeeper``), or staff.
+
+    Staff keep the bypass for viewing, and may still drive a solo match as
+    before (through its one stream), but a staff user without a row posting
+    into a *shared* match is refused with 409 ``not a scorer``: an
+    unattributed write into a two-writer match is undebuggable.
+    """
+    if not match.live_scorers.all():
+        # Legacy shape: a match finished before KAN-149, or a hand-built one.
+        if match.scorekeeper_id == player.pk or request.user.is_staff:
+            return _LiveCaller(player, None)
+        raise PermissionDenied("Only the match scorekeeper can use the scoreboard.")
+
+    own = live_ops.scorer_for(match, player)
+    if own is not None and own.revoked_at is None:
+        return _LiveCaller(player, own)
+    if request.user.is_staff:
+        active = live_ops.active_scorers(match)
+        if writing and len(active) > 1:
+            raise _Refused(JsonResponse({"error": "not a scorer"}, status=409))
+        return _LiveCaller(player, active[0] if len(active) == 1 else None)
+    raise PermissionDenied("Only this match's scorers can use the scoreboard.")
+
+
+def _get_live_match_for_scorer(request, pk, *, writing: bool = False):
+    """Load a live match and authorize the caller as one of its scorers.
+
+    Returns ``(match, _LiveCaller)``; raises Http404 (another club's match, or
+    none) or PermissionDenied, or ``_Refused`` for a staff write into a
+    shared match. The scorer rows come with the match, in one prefetch.
     """
     # all_objects so the default manager's is_live=False filter doesn't hide
     # the target -- but scoped, because bypassing the *user* filter for a
-    # scorekeeper is not a reason to expose another club's match.
-    match = get_object_or_404(scope_to_active_club(Match.all_objects.all()), pk=pk)
+    # scorer is not a reason to expose another club's match.
+    match = get_object_or_404(
+        scope_to_active_club(
+            Match.all_objects.prefetch_related(live_ops.scorers_prefetch())
+        ),
+        pk=pk,
+    )
     try:
         user_player = request.user.player
     except (AttributeError, Player.DoesNotExist):
         raise PermissionDenied("You must have a player profile.")
-
-    if match.scorekeeper_id != user_player.pk and not request.user.is_staff:
-        raise PermissionDenied("Only the match scorekeeper can use the scoreboard.")
-    return match
+    return match, _authorize_scorer(request, match, user_player, writing=writing)
 
 
-def _scoreboard_payload(match: Match, *, redirect_url: str | None = None) -> dict:
-    """JSON-friendly payload for the scoreboard client."""
+def _lock_live_match(request, pk):
+    """Authorize, then lock the match row, refresh, and re-read the scorer
+    rows under the lock (KAN-77 order: lock -> refresh -> seq -> is_live).
+
+    The authorization is re-run on the re-read rows, so a scorer revoked (or
+    a guest who joined) while this request waited for the lock is judged on
+    what is true now. Must run inside ``transaction.atomic()``.
+    """
+    match, caller = _get_live_match_for_scorer(request, pk, writing=True)
+    Match.all_objects.select_for_update().get(pk=match.pk)
+    match.refresh_from_db()
+    live_ops.load_scorers(match)
+    caller = _authorize_scorer(request, match, caller.player, writing=True)
+    live_ops.touch(caller.own)
+    return match, caller
+
+
+def _run_live(request, pk, apply) -> JsonResponse:
+    """The frame every live write runs in: one transaction, the lock, the
+    caller's stream, and one write of that stream at the end.
+
+    ``apply(match, caller)`` returns the response; the scorer row (consumed
+    seq + due presence stamp) is saved before the transaction commits.
+    """
+    try:
+        with transaction.atomic():
+            match, caller = _lock_live_match(request, pk)
+            response = apply(match, caller)
+            live_ops.save_scorer(caller.scorer)
+            return response
+    except _Refused as refused:
+        return refused.response
+
+
+def _scoreboard_payload(
+    match: Match,
+    *,
+    caller: _LiveCaller | None = None,
+    redirect_url: str | None = None,
+) -> dict:
+    """JSON-friendly payload for the scoreboard client.
+
+    ``applied_seq`` is the caller's own stream; ``rev`` is match-wide;
+    ``scorers`` is presence for every phone; ``me`` is the caller's row.
+    """
     state = match.live_state or {}
+    scorer = caller.scorer if caller else None
+    own = caller.own if caller else None
     return {
         "is_live": match.is_live,
         "is_match_complete": not match.is_live and match.live_state is None,
@@ -2872,14 +2985,22 @@ def _scoreboard_payload(match: Match, *, redirect_url: str | None = None) -> dic
             live_scoring.should_prompt_side_switch(state) if state.get("started") else False
         ),
         "redirect_url": redirect_url,
-        "applied_seq": match.live_applied_seq or 0,
+        "applied_seq": live_ops.applied_seq(match, scorer),
+        "rev": match.live_rev,
+        "scorers": live_ops.presence(match),
+        "me": (
+            {"side": own.side, "role": own.role, "can_score_both": own.can_score_both}
+            if own is not None
+            else None
+        ),
     }
 
 
-# --- Op sequence numbers (KAN-77) -------------------------------------------
+# --- Op sequence numbers (KAN-77, per scorer since KAN-149) ----------------
 #
-# Every live op may carry a client-assigned ``seq``: per match, starting at 1,
-# gapless. ``Match.live_applied_seq`` is the highest one applied. The check
+# Every live op may carry a client-assigned ``seq``: per scorer, starting at
+# 1, gapless. The scorer row's ``applied_seq`` (``Match.live_applied_seq`` on
+# a row-less legacy match) is the highest one applied. The check
 # runs right after the row lock + refresh and BEFORE the ``is_live`` check, so
 # a retried match point that arrives after the match completed is answered
 # with the completion rather than "Match is not live".
@@ -2912,47 +3033,74 @@ def _completion_redirect(match: Match) -> str | None:
     return None
 
 
-def _check_seq(match: Match, seq: int | None, op_type: str) -> JsonResponse | None:
+def _check_seq(
+    match: Match, caller: _LiveCaller, seq: int | None, op_type: str
+) -> JsonResponse | None:
     """Answer a duplicate or a gap; ``None`` means go ahead and apply.
 
-    The match must already be locked and refreshed.
+    The match must already be locked and refreshed, and the seq is judged
+    against the **caller's** stream.
     """
     if seq is None:
+        if match.is_shared:
+            # An unsequenced op cannot be deduped against two streams. Only
+            # a page cached from before KAN-77 sends one; it must reload.
+            return JsonResponse({"error": "reload"}, status=409)
         # Legacy client (a page cached from before KAN-77). Applied
         # unconditionally, exactly as before; remove once nothing sends it.
         logger.info(
             "Live %s without seq for match %s (legacy client)", op_type, match.pk
         )
         return None
-    applied = match.live_applied_seq or 0
+    applied = live_ops.applied_seq(match, caller.scorer)
     verdict = _classify_seq(applied, seq)
     if verdict == "duplicate":
         return JsonResponse(
-            _scoreboard_payload(match, redirect_url=_completion_redirect(match))
+            _scoreboard_payload(
+                match, caller=caller, redirect_url=_completion_redirect(match)
+            )
         )
     if verdict == "gap":
         return JsonResponse({"error": "gap", "applied_seq": applied}, status=409)
     return None
 
 
-def _apply_op(match: Match, op: dict) -> JsonResponse:
+def _apply_op(match: Match, caller: _LiveCaller, op: dict) -> JsonResponse:
     """Apply one deduped op through ``live_ops`` and shape the response.
 
     ``_record_point_event`` is looked up here, at call time, so a test can
     substitute a broken writer on this module.
     """
-    result = live_ops.apply_op(match, op, record_point=_record_point_event)
+    result = live_ops.apply_op(
+        match, op, scorer=caller.scorer, record_point=_record_point_event
+    )
     if not result.applied:
-        return _op_error(match, op.get("seq"), result.error, result.status)
-    return JsonResponse(_scoreboard_payload(match, redirect_url=result.redirect_url))
+        return _op_error(match, caller, op.get("seq"), result.error, result.status)
+    return JsonResponse(
+        _scoreboard_payload(match, caller=caller, redirect_url=result.redirect_url)
+    )
 
 
-def _op_error(match: Match, seq: int | None, error: str, status: int = 409) -> JsonResponse:
-    """An op's error body; a sequenced op also learns ``applied_seq``."""
+def _op_error(
+    match: Match, caller: _LiveCaller, seq: int | None, error: str, status: int = 409
+) -> JsonResponse:
+    """An op's error body; a sequenced op also learns its ``applied_seq``."""
     body: dict[str, Any] = {"error": error}
     if seq is not None:
-        body["applied_seq"] = match.live_applied_seq or 0
+        body["applied_seq"] = live_ops.applied_seq(match, caller.scorer)
     return JsonResponse(body, status=status)
+
+
+def _run_op(request, pk, seq: int | None, op_type: str, apply) -> JsonResponse:
+    """A single-op endpoint: dedupe against the caller's stream, then
+    ``apply(match, caller)``."""
+    return _run_live(
+        request,
+        pk,
+        lambda match, caller: (
+            _check_seq(match, caller, seq, op_type) or apply(match, caller)
+        ),
+    )
 
 
 def _lenient_json(request) -> dict:
@@ -2975,7 +3123,7 @@ class LiveScoreboardView(LoginRequiredMixin, View):
     template_name = "pingpong/scoreboard.html"
 
     def get(self, request, pk):
-        match = _get_live_match_for_scorekeeper(request, pk)
+        match, caller = _get_live_match_for_scorer(request, pk)
         if not match.is_live:
             messages.info(request, "This match is no longer live.")
             return redirect("pingpong:match_detail", pk=pk)
@@ -3011,7 +3159,7 @@ class LiveScoreboardView(LoginRequiredMixin, View):
             "team2_hue_class": team2_hue,
             "games_to_win": games_to_win,
             "game_pips": range(games_to_win),
-            "bootstrap": _scoreboard_payload(match),
+            "bootstrap": _scoreboard_payload(match, caller=caller),
             "point_url": reverse("pingpong:live_point", args=[pk]),
             "start_url": reverse("pingpong:live_start", args=[pk]),
             "state_url": reverse("pingpong:live_state", args=[pk]),
@@ -3056,30 +3204,23 @@ class LiveStartView(LoginRequiredMixin, View):
         if error:
             return error
 
-        with transaction.atomic():
-            match = _get_live_match_for_scorekeeper(request, pk)
-            # Re-fetch with lock so concurrent requests serialize
-            Match.all_objects.select_for_update().get(pk=match.pk)
-            match.refresh_from_db()
-
-            answered = _check_seq(match, seq, "start")
-            if answered:
-                return answered
-
+        def apply(match, caller):
             # Legacy clients only: idempotent if already started with the
             # same server. A sequenced re-send is a duplicate and was already
-            # answered by _check_seq above.
+            # answered by _check_seq.
             if (
                 seq is None
                 and match.is_live
                 and (match.live_state or {}).get("started")
                 and match.live_state.get("initial_server") == server
             ):
-                return JsonResponse(_scoreboard_payload(match))
-
+                return JsonResponse(_scoreboard_payload(match, caller=caller))
             return _apply_op(
-                match, {"type": "start", "seq": seq, "initial_server": server}
+                match, caller, {"type": "start", "seq": seq, "initial_server": server}
             )
+
+        # The lock (in _run_op) serializes concurrent requests.
+        return _run_op(request, pk, seq, "start", apply)
 
 
 @method_decorator(require_POST, name="dispatch")
@@ -3099,21 +3240,16 @@ class LivePointView(LoginRequiredMixin, View):
         if error:
             return error
 
-        with transaction.atomic():
-            match = _get_live_match_for_scorekeeper(request, pk)
-            Match.all_objects.select_for_update().get(pk=match.pk)
-            match.refresh_from_db()
-
-            answered = _check_seq(match, seq, "point")
-            if answered:
-                return answered
-
-            return _apply_op(match, {
-                "type": "point",
-                "seq": seq,
-                "side": side,
-                "client_ts": payload.get("client_ts"),
-            })
+        op = {
+            "type": "point",
+            "seq": seq,
+            "side": side,
+            "client_ts": payload.get("client_ts"),
+        }
+        return _run_op(
+            request, pk, seq, "point",
+            lambda match, caller: _apply_op(match, caller, op),
+        )
 
 
 class LiveStateView(LoginRequiredMixin, View):
@@ -3122,25 +3258,21 @@ class LiveStateView(LoginRequiredMixin, View):
     The page calls this when the tab becomes visible again: a phone that
     slept, or a match finished from another device, would otherwise leave
     the scoreboard showing a score the server no longer agrees with.
-    Restricted to the scorekeeper (and staff), like the write endpoints.
+    Restricted to the match's scorers (and staff), like the write endpoints,
+    and the caller's presence stamp is refreshed here (throttled).
     """
 
     def get(self, request, pk):
-        # all_objects so we can return a completed match's redirect too,
-        # scoped so it cannot reach across clubs.
-        match = get_object_or_404(scope_to_active_club(Match.all_objects.all()), pk=pk)
-        try:
-            user_player = request.user.player
-        except (AttributeError, Player.DoesNotExist):
-            raise PermissionDenied
-
-        if match.scorekeeper_id != user_player.pk and not request.user.is_staff:
-            raise PermissionDenied
+        # Scoped all_objects inside, so a completed match's redirect can be
+        # returned too without reaching across clubs.
+        match, caller = _get_live_match_for_scorer(request, pk)
+        live_ops.touch(caller.own)
+        live_ops.save_scorer(caller.own)
 
         redirect_url = None
         if not match.is_live:
             redirect_url = reverse("pingpong:match_detail", args=[match.pk])
-        payload = _scoreboard_payload(match, redirect_url=redirect_url)
+        payload = _scoreboard_payload(match, caller=caller, redirect_url=redirect_url)
         # A scoreboard served from the service worker's cache may carry a
         # token from an older CSRF secret; this one matches the cookie the
         # browser holds now, so the client can retry a refused sync (KAN-81).
@@ -3157,16 +3289,12 @@ class LiveSideSwitchView(LoginRequiredMixin, View):
         if error:
             return error
 
-        with transaction.atomic():
-            match = _get_live_match_for_scorekeeper(request, pk)
-            Match.all_objects.select_for_update().get(pk=match.pk)
-            match.refresh_from_db()
-
-            answered = _check_seq(match, seq, "side_switch")
-            if answered:
-                return answered
-
-            return _apply_op(match, {"type": "side_switch", "seq": seq})
+        return _run_op(
+            request, pk, seq, "side_switch",
+            lambda match, caller: _apply_op(
+                match, caller, {"type": "side_switch", "seq": seq}
+            ),
+        )
 
 
 @method_decorator(require_POST, name="dispatch")
@@ -3178,16 +3306,10 @@ class LiveUndoView(LoginRequiredMixin, View):
         if error:
             return error
 
-        with transaction.atomic():
-            match = _get_live_match_for_scorekeeper(request, pk)
-            Match.all_objects.select_for_update().get(pk=match.pk)
-            match.refresh_from_db()
-
-            answered = _check_seq(match, seq, "undo")
-            if answered:
-                return answered
-
-            return _apply_op(match, {"type": "undo", "seq": seq})
+        return _run_op(
+            request, pk, seq, "undo",
+            lambda match, caller: _apply_op(match, caller, {"type": "undo", "seq": seq}),
+        )
 
 
 SYNC_MAX_OPS = 500
@@ -3277,36 +3399,39 @@ class LiveSyncView(LoginRequiredMixin, View):
         if error:
             return error
 
+        return _run_live(request, pk, lambda match, caller: self._apply(match, caller, ops))
+
+    @staticmethod
+    def _apply(match, caller, ops) -> JsonResponse:
         rejected = None
-        with transaction.atomic():
-            match = _get_live_match_for_scorekeeper(request, pk)
-            Match.all_objects.select_for_update().get(pk=match.pk)
-            match.refresh_from_db()
+        progressed = False
+        for op in ops:
+            applied = live_ops.applied_seq(match, caller.scorer)
+            verdict = _classify_seq(applied, op["seq"])
+            if verdict == "duplicate":
+                continue
+            if verdict == "gap":
+                if not progressed:
+                    return JsonResponse(
+                        {"error": "gap", "applied_seq": applied}, status=409
+                    )
+                rejected = {"seq": op["seq"], "error": "gap"}
+                break
+            if not match.is_live and match.winner_side is not None:
+                rejected = {"seq": op["seq"], "error": "match complete"}
+                break
 
-            progressed = False
-            for op in ops:
-                applied = match.live_applied_seq or 0
-                verdict = _classify_seq(applied, op["seq"])
-                if verdict == "duplicate":
-                    continue
-                if verdict == "gap":
-                    if not progressed:
-                        return JsonResponse(
-                            {"error": "gap", "applied_seq": applied}, status=409
-                        )
-                    rejected = {"seq": op["seq"], "error": "gap"}
-                    break
-                if not match.is_live and match.winner_side is not None:
-                    rejected = {"seq": op["seq"], "error": "match complete"}
-                    break
+            result = live_ops.apply_op(
+                match, op, scorer=caller.scorer, record_point=_record_point_event
+            )
+            progressed = True
+            if not result.applied:
+                rejected = {"seq": op["seq"], "error": result.error}
+                break
 
-                result = live_ops.apply_op(match, op, record_point=_record_point_event)
-                progressed = True
-                if not result.applied:
-                    rejected = {"seq": op["seq"], "error": result.error}
-                    break
-
-        payload = _scoreboard_payload(match, redirect_url=_completion_redirect(match))
+        payload = _scoreboard_payload(
+            match, caller=caller, redirect_url=_completion_redirect(match)
+        )
         payload["rejected"] = rejected
         return JsonResponse(payload)
 

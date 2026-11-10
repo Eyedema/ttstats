@@ -15,6 +15,19 @@ to have passed the sequence-number dedupe already (``views._check_seq``).
 Consuming the op's ``seq`` is part of applying it: an applied op and a rule
 rejection both use it up (the client drops a rejected op and carries on with
 the next number); an op refused because the match is not live does not.
+
+**Seqs are per scorer (KAN-149).** Each phone is a ``LiveScorer`` row with its
+own ``applied_seq``; ``scorer=None`` is the legacy row-less stream,
+``Match.live_applied_seq``. A scorer's seq is consumed in memory here and
+written once per request by :func:`save_scorer`, in the same transaction --
+one UPDATE whatever the batch size, together with the throttled presence
+stamp. The host's stream is mirrored into ``Match.live_applied_seq`` for one
+release, so a rollback finds it where the old code expects it.
+
+``Match.live_rev`` goes up by one for every op that changed the state, from
+any stream. A rule rejection consumes its seq but changes nothing anyone
+renders, so it does **not** bump ``rev``: a poller woken by it would re-fetch
+an identical state. Duplicates and gaps never reach this module.
 """
 from __future__ import annotations
 
@@ -25,12 +38,12 @@ from datetime import timezone as dt_timezone
 from typing import Any, Callable
 
 from django.db import transaction
-from django.db.models import Max
+from django.db.models import Max, Prefetch, prefetch_related_objects
 from django.urls import reverse
 from django.utils import timezone
 
 from . import live_scoring, point_rollups
-from .models import Game, Match, PointEvent, Side
+from .models import Game, LiveScorer, Match, PointEvent, Side
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +163,7 @@ def apply_op(
     match: Match,
     op: dict[str, Any],
     *,
+    scorer: LiveScorer | None = None,
     record_point: Callable[..., None] | None = None,
 ) -> OpResult:
     """Apply one validated op to a locked, refreshed match.
@@ -157,32 +171,140 @@ def apply_op(
     ``op`` is ``{"type": ..., "seq": int | None, ...}`` with the type's own
     field (``initial_server`` for start, ``side`` for point) already checked.
     A point may carry ``client_ts``; it is parsed here and never rejected.
+    ``scorer`` is the stream the op's seq belongs to (``None``: the legacy
+    row-less stream); the caller persists it with :func:`save_scorer`.
     ``record_point`` defaults to :func:`record_point_event`.
     """
     if op["type"] == "point":
-        return _point(match, op, record_point or record_point_event)
-    return _HANDLERS[op["type"]](match, op)
+        return _point(match, op, scorer, record_point or record_point_event)
+    return _HANDLERS[op["type"]](match, op, scorer)
+
+
+# --- scorers and their streams (KAN-149) --------------------------------------
+
+# Presence is written at most this often, so a phone polling every 1.5 s does
+# not become a write every 1.5 s.
+SEEN_EVERY = timedelta(seconds=5)
+
+
+def scorers_prefetch() -> Prefetch:
+    """The scorer rows (with their players) as one prefetch query."""
+    return Prefetch(
+        "live_scorers", queryset=LiveScorer.objects.select_related("player")
+    )
+
+
+def load_scorers(match: Match) -> None:
+    """(Re-)read the match's scorer rows into its prefetch cache.
+
+    Called after the match row lock, so the rows are read under it: the one
+    lock serializes every stream, and what is read here is current.
+    """
+    cache = getattr(match, "_prefetched_objects_cache", None)
+    if cache:
+        cache.pop("live_scorers", None)
+    prefetch_related_objects([match], scorers_prefetch())
+    for scorer in match.live_scorers.all():
+        scorer._saved_applied_seq = scorer.applied_seq
+
+
+def scorer_for(match: Match, player) -> LiveScorer | None:
+    """The player's scorer row on this match, revoked or not; ``None`` if
+    they have none. Reads the prefetch cache when it is loaded."""
+    if player is None:
+        return None
+    for scorer in match.live_scorers.all():
+        if scorer.player_id == player.pk:
+            return scorer
+    return None
+
+
+def active_scorers(match: Match) -> list[LiveScorer]:
+    return [s for s in match.live_scorers.all() if s.revoked_at is None]
+
+
+def applied_seq(match: Match, scorer: LiveScorer | None) -> int:
+    """The highest seq applied in this stream (0 before any)."""
+    if scorer is None:
+        return match.live_applied_seq or 0
+    return scorer.applied_seq
+
+
+def touch(scorer: LiveScorer | None, now: datetime | None = None) -> None:
+    """Mark the scorer seen, in memory, if the stamp is older than
+    :data:`SEEN_EVERY`; :func:`save_scorer` writes it."""
+    if scorer is None:
+        return
+    now = now or timezone.now()
+    if scorer.last_seen_at is None or now - scorer.last_seen_at > SEEN_EVERY:
+        scorer.last_seen_at = now
+        scorer._seen_dirty = True
+
+
+def save_scorer(scorer: LiveScorer | None) -> None:
+    """Write what changed on the scorer row this request: its consumed seq
+    and a due presence stamp. One UPDATE, or none."""
+    if scorer is None:
+        return
+    fields: dict[str, Any] = {}
+    if scorer.applied_seq != getattr(scorer, "_saved_applied_seq", scorer.applied_seq):
+        fields["applied_seq"] = scorer.applied_seq
+    if getattr(scorer, "_seen_dirty", False):
+        fields["last_seen_at"] = scorer.last_seen_at
+    if fields:
+        LiveScorer.objects.filter(pk=scorer.pk).update(**fields)
+    scorer._saved_applied_seq = scorer.applied_seq
+    scorer._seen_dirty = False
+
+
+def presence(match: Match) -> list[dict[str, Any]]:
+    """Every scorer of the match, for the payload's ``scorers``."""
+    return [
+        {
+            "player_id": s.player_id,
+            "name": s.player.name,
+            "side": s.side,
+            "role": s.role,
+            "last_seen_at": s.last_seen_at.isoformat() if s.last_seen_at else None,
+            "applied_seq": s.applied_seq,
+            "revoked": s.revoked_at is not None,
+        }
+        for s in match.live_scorers.all()
+    ]
 
 
 # --- seq bookkeeping ----------------------------------------------------------
 
 
-def _consume(match: Match, op: dict[str, Any]) -> dict[str, Any]:
-    """Mark the op's seq used, in memory; returns the column to write.
+def _consume(
+    match: Match, op: dict[str, Any], scorer: LiveScorer | None
+) -> dict[str, Any]:
+    """Mark the op's seq used, in memory; returns the match columns to write.
 
     In memory first because ``Game.objects.create`` saves this very instance,
-    every field included, and must not write the previous value back.
+    every field included, and must not write the previous value back. A
+    scorer row is written by :func:`save_scorer`; only the host's stream is
+    mirrored into ``Match.live_applied_seq`` (one release, for rollback).
     """
     seq = op.get("seq")
     if seq is None:
         return {}
+    if scorer is not None:
+        if not hasattr(scorer, "_saved_applied_seq"):
+            scorer._saved_applied_seq = scorer.applied_seq
+        scorer.applied_seq = seq
+        if scorer.role != LiveScorer.Role.HOST:
+            return {}
     match.live_applied_seq = seq
     return {"live_applied_seq": seq}
 
 
-def _reject(match: Match, op: dict[str, Any], error: str) -> OpResult:
-    """A rule rejection: nothing applied, but the seq is used up."""
-    fields = _consume(match, op)
+def _reject(
+    match: Match, op: dict[str, Any], scorer: LiveScorer | None, error: str
+) -> OpResult:
+    """A rule rejection: nothing applied, but the seq is used up. Not a state
+    change, so ``live_rev`` stays."""
+    fields = _consume(match, op, scorer)
     if fields:
         Match.all_objects.filter(pk=match.pk).update(**fields)
     return OpResult(applied=False, error=error, status=409)
@@ -192,9 +314,21 @@ def _not_live() -> OpResult:
     return OpResult(applied=False, error=NOT_LIVE, status=409)
 
 
-def _write_state(match: Match, op: dict[str, Any], new_state: dict | None, **extra) -> None:
+def _write_state(
+    match: Match,
+    op: dict[str, Any],
+    scorer: LiveScorer | None,
+    new_state: dict | None,
+    **extra,
+) -> None:
+    """Every applied op writes through here exactly once, so this is where
+    ``live_rev`` goes up."""
+    match.live_rev = (match.live_rev or 0) + 1
     Match.all_objects.filter(pk=match.pk).update(
-        live_state=new_state, **_consume(match, op), **extra
+        live_state=new_state,
+        live_rev=match.live_rev,
+        **_consume(match, op, scorer),
+        **extra,
     )
     match.live_state = new_state
 
@@ -202,22 +336,27 @@ def _write_state(match: Match, op: dict[str, Any], new_state: dict | None, **ext
 # --- the four ops -------------------------------------------------------------
 
 
-def _start(match: Match, op: dict[str, Any]) -> OpResult:
+def _start(match: Match, op: dict[str, Any], scorer: LiveScorer | None) -> OpResult:
     if not match.is_live:
         return _not_live()
     current = match.live_state or live_scoring.initial_state(match.best_of)
     if current.get("started"):
-        return _reject(match, op, ALREADY_STARTED)
+        return _reject(match, op, scorer, ALREADY_STARTED)
     new_state = live_scoring.set_initial_server(current, op["initial_server"])
-    _write_state(match, op, new_state)
+    _write_state(match, op, scorer, new_state)
     return OpResult(applied=True)
 
 
-def _point(match: Match, op: dict[str, Any], record: Callable[..., None]) -> OpResult:
+def _point(
+    match: Match,
+    op: dict[str, Any],
+    scorer: LiveScorer | None,
+    record: Callable[..., None],
+) -> OpResult:
     if not match.is_live:
         return _not_live()
     if not match.live_state or not match.live_state.get("started"):
-        return _reject(match, op, NOT_STARTED)
+        return _reject(match, op, scorer, NOT_STARTED)
 
     side = op["side"]
     # Captured before apply_point: current_server() on the new state names
@@ -226,7 +365,7 @@ def _point(match: Match, op: dict[str, Any], record: Callable[..., None]) -> OpR
     try:
         new_state, completed = live_scoring.apply_point(state_before, side)
     except ValueError as exc:
-        return _reject(match, op, str(exc))
+        return _reject(match, op, scorer, str(exc))
 
     record(
         match,
@@ -238,7 +377,7 @@ def _point(match: Match, op: dict[str, Any], record: Callable[..., None]) -> OpR
     )
 
     if completed is None:
-        _write_state(match, op, new_state)
+        _write_state(match, op, scorer, new_state)
         return OpResult(applied=True)
 
     match_complete = live_scoring.is_match_complete(new_state)
@@ -247,7 +386,7 @@ def _point(match: Match, op: dict[str, Any], record: Callable[..., None]) -> OpR
         # Flip is_live OFF first so the upcoming Game.save() → Match.save()
         # pipeline runs the existing winner / signal / rating cascade as if it
         # were a normal match.
-        _write_state(match, op, None, is_live=False)
+        _write_state(match, op, scorer, None, is_live=False)
         match.is_live = False
         # Hand off to the existing match_confirm flow: running the live
         # scoreboard implicitly attests the score, so the scorekeeper is
@@ -255,7 +394,7 @@ def _point(match: Match, op: dict[str, Any], record: Callable[..., None]) -> OpR
         # still confirms via the email they receive from the post-save signal.
         redirect_url = reverse("pingpong:match_confirm", args=[match.pk])
     else:
-        _write_state(match, op, new_state)
+        _write_state(match, op, scorer, new_state)
 
     # Persist the completed Game row. While is_live=True (mid-match) this
     # triggers Match.save() but the winner-detection guard short-circuits. On
@@ -291,7 +430,7 @@ def _point(match: Match, op: dict[str, Any], record: Callable[..., None]) -> OpR
     )
 
 
-def _undo(match: Match, op: dict[str, Any]) -> OpResult:
+def _undo(match: Match, op: dict[str, Any], scorer: LiveScorer | None) -> OpResult:
     """Undo the most recent point (KAN-10).
 
     If the undone point ended a game, the trailing Game row is deleted and
@@ -334,7 +473,7 @@ def _undo(match: Match, op: dict[str, Any]) -> OpResult:
             game_number=undone_game["game_number"],
         ).delete()
 
-    _write_state(match, op, new_state)
+    _write_state(match, op, scorer, new_state)
 
     if had_events:
         # A match cannot normally be undone after it completes (it is no
@@ -347,11 +486,13 @@ def _undo(match: Match, op: dict[str, Any]) -> OpResult:
     return OpResult(applied=True)
 
 
-def _side_switch(match: Match, op: dict[str, Any]) -> OpResult:
+def _side_switch(
+    match: Match, op: dict[str, Any], scorer: LiveScorer | None
+) -> OpResult:
     """Mark the deciding-game side switch as confirmed (KAN-9)."""
     if not match.is_live or not match.live_state:
         return _not_live()
-    _write_state(match, op, live_scoring.confirm_side_switch(match.live_state))
+    _write_state(match, op, scorer, live_scoring.confirm_side_switch(match.live_state))
     return OpResult(applied=True)
 
 

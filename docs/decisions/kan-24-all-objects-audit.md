@@ -4,8 +4,8 @@
 | Site | Why it bypasses | Resolution |
 |---|---|---|
 | `views.LeaderboardView` | Whole-club table, not "matches I played in" | **Scoped.** Highest risk: it feeds the cached payload |
-| `views._get_live_match_for_scorekeeper` | `is_live=False` default filter hides the target | **Scoped** |
-| `views.LiveStateView` | Must return a completed match's redirect | **Scoped** |
+| `views._get_live_match_for_scorer` (was `_get_live_match_for_scorekeeper`) | `is_live=False` default filter hides the target | **Scoped**; its `LiveScorer` prefetch is filtered by that match (KAN-149) |
+| `views.LiveStateView` | Must return a completed match's redirect | **Scoped** (through `_get_live_match_for_scorer` since KAN-149) |
 | `views.ScheduledMatchConvertView` | Organiser converts a match they don't play in | **Scoped** |
 | `views.ScheduledMatchEditView` | Same | **Scoped** |
 | `context_processors.pingpong_context` | Badge counting only your own championships is not a badge | **Scoped** |

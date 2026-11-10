@@ -491,6 +491,11 @@ class Match(ClubStampedMixin, SideLabelMixin, models.Model):
     # duplicate is a retried match point arriving after it. Written with a
     # queryset ``.update()`` in the op's own transaction, like ``live_state``.
     live_applied_seq = models.PositiveIntegerField(null=True, blank=True)
+    # Match-wide revision of the live state (KAN-149): +1 for every op that
+    # changed it, from any scorer's stream. Duplicates, gaps and rule
+    # rejections leave it alone. Pollers compare it to decide whether to
+    # re-fetch. Written with the state, in the same queryset ``.update()``.
+    live_rev = models.PositiveIntegerField(default=0)
 
     # Set the first time the "match confirmed, here is your Elo" push goes
     # out. Three separate signal paths can reach that point for the same
@@ -560,6 +565,15 @@ class Match(ClubStampedMixin, SideLabelMixin, models.Model):
     @property
     def winner_label(self):
         return self.side_label(self.winner_side) if self.winner_side else ""
+
+    @property
+    def is_shared(self):
+        """True when more than one non-revoked ``LiveScorer`` writes to it.
+
+        Reads the prefetch cache when the live views loaded the scorers
+        (``live_ops.load_scorers``), so it costs nothing there.
+        """
+        return sum(1 for s in self.live_scorers.all() if s.revoked_at is None) > 1
 
     def players_on(self, side):
         """Players on one side of the match, read from MatchParticipant.
@@ -997,6 +1011,55 @@ class PointEvent(models.Model):
         if self.serving_side is None:
             return None
         return self.scoring_side == self.serving_side
+
+
+class LiveScorer(models.Model):
+    """One phone's op stream on a live match (KAN-149).
+
+    Every scorer numbers its own ops from 1 (``applied_seq`` is the highest
+    applied), so two phones scoring one match never look like gaps to each
+    other. The match row lock still serializes the streams.
+
+    A match with no rows at all is the legacy shape: its stream is
+    ``Match.live_applied_seq`` and its only scorer is ``Match.scorekeeper``.
+
+    **Not club-stamped.** It is only ever reached through a match that came
+    through the club-scoped manager, so it is transitively safe (like
+    ``PointEvent``).
+    """
+
+    class Role(models.TextChoices):
+        HOST = "host", "Host"
+        GUEST = "guest", "Guest"
+
+    match = models.ForeignKey(
+        Match, on_delete=models.CASCADE, related_name="live_scorers"
+    )
+    player = models.ForeignKey(
+        Player, on_delete=models.PROTECT, related_name="live_scorer_rows"
+    )
+    side = models.PositiveSmallIntegerField(choices=Side.choices)
+    role = models.CharField(max_length=8, choices=Role.choices)
+    applied_seq = models.PositiveIntegerField(default=0)
+    # True for a solo scorer, who scores both sides. The join flow (KAN-152)
+    # creates both rows with False; S13.6's takeover sets it on the survivor.
+    can_score_both = models.BooleanField(default=False)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    joined_at = models.DateTimeField(default=timezone.now)
+    # Presence. Written at most every live_ops.SEEN_EVERY, so polling does not
+    # turn into a write per poll.
+    last_seen_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["joined_at", "pk"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["match", "player"], name="uniq_live_scorer_match_player"
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.role} {self.player_id} on side {self.side} of match {self.match_id}"
 
 
 class MatchPointSummary(models.Model):
