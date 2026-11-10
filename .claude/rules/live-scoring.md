@@ -35,6 +35,10 @@ paths:
   - "ttstats/pingpong/templates/pingpong/live_lobby.html"
   - "ttstats/pingpong/static/pingpong/js/live_lobby.js"
   - "tests/e2e/shared-scoring*.js"
+  - "tests/e2e/shared-scoreboard*.js"
+  - "ttstats/pingpong/tests/live_contract.py"
+  - "ttstats/pingpong/tests/test_live_contract.py"
+  - "ttstats/pingpong/tests/test_scoreboard_shared.py"
 ---
 
 # Live scoring and the point log
@@ -190,6 +194,9 @@ and the most dangerous duplicate is a retried match point.
 club check run **before** any wait; `last_seen_at` is still stamped.
 
 - No `since`, or a `since` that is not an int: 200, full payload.
+- A finished match's `redirect_url` is **match_confirm**, as `live_sync`'s
+  (KAN-153: the phone that did not tap the final point learns it here);
+  match_detail only for a match closed without a winner.
 - `since != rev`: 200 at once. `since == rev` without `wait=1` (or on a
   finished match): **204, no body**.
 - `wait=1`: held up to `settings.LIVE_LONGPOLL_WAIT` (20 s), then 204. The
@@ -344,9 +351,10 @@ Choices: `docs/decisions/kan-80-81-offline-client.md`; the epic as a whole:
   returns `csrf_token` (`get_token`) and `fetchTransport` keeps it. Only a
   403 with the current token, or a login bounce, means signed out: that
   keeps the outbox and stops the loop until the user
-  signs in (the login view honours a safe `next`). Another device scoring
-  (`applied_seq` past anything we issued, or a gap that does not resolve)
-  switches to read-only follow mode.
+  signs in (the login view honours a safe `next`). **Follow mode** (read-only)
+  is for the same user on another device: my stream's `applied_seq` past
+  anything this outbox issued, or (single-scorer only) a gap that does not
+  resolve.
 - **Overlays start `hidden`** and only `scoreboard.js` reveals them; the inline
   `#scoreboard [hidden]` rule beats Tailwind's display utilities. Classes
   toggled by JS don't exist: Tailwind never scans JS (pips use `data-won`).
@@ -360,3 +368,37 @@ Choices: `docs/decisions/kan-80-81-offline-client.md`; the epic as a whole:
   in `scoreboard-offline-cases.js` (WebKit + desktop Chrome, plus
   dark/reduced/nojs). e2e traps: `releaseProdCSP` before a redirecting
   navigation; `tap()` not `click()` for rapid taps in WebKit.
+
+### Shared mode (KAN-153): `scoreboard-config.shared`
+
+`shared` (`match.is_shared`) and `me` come from the bootstrap. With `shared`
+false nothing below runs and the page sends no long-poll (e2e asserts it).
+
+- **Layout is server-rendered**: `data-shared` + `data-my-side` on
+  `#scoreboard` for a phone without `can_score_both`; the inline CSS stacks
+  the opponent's read-only zone (a `<div>`: no button role, no tabindex, no
+  `.tap-zone`) above my "+1 {name}" button. One template, one sides loop.
+- **Rebase, not follow**: a base is newer by `(rev, applied_seq)`; my pending
+  ops replay on any newer base, silently. Divergence ("server wins") is judged
+  only when no other stream moved (sum of the other `scorers`' `applied_seq`).
+  A gap that does not resolve renumbers my pending ops (`renumberAfter`).
+- **Undo carries `expects`**, fixed at the tap: the trailing sequence this
+  phone shows (base `last_point` +1 per pending point, -1 per pending undo),
+  my own queued point included. A pending undo whose `expects` no longer
+  matches the replay is skipped locally; the server answers `stale undo`
+  (toast, no haptic). Nothing to undo: not queued.
+- **The long-poll loop** (`LiveSession`, `transport.poll`) is independent of
+  the flush: its own request and AbortController (`longpoll_abort_ms`), one
+  in flight, `wait=0` on load / visible / `online`, then `wait=1` re-issued at
+  once; `busy` or a too-fast 204 waits `busyMs` (1 s); errors use the flush
+  backoff. Stopped while hidden (`pausePolling`) and at completion.
+- `ALREADY_STARTED` rebases without a toast. Queued points the new base makes
+  impossible stay queued, shown as "{n} points waiting to sync". A finished
+  match with my ops queued sends them; the server decides.
+- The opponent's digits pulse (`.score-pulse`, outside `@layer`, off under
+  reduced motion); no haptics outside the tap handler.
+- Tests: `live_session_shared.test.mjs` (two sessions, one fake clock);
+  `live_contract.test.mjs` replays `fixtures/live_contract.json`, generated
+  from the real endpoints by `pingpong.tests.live_contract`
+  (`test_live_contract.py` fails when stale); e2e `shared-scoreboard*.spec.js`
+  (the seeded `E2E Partner` match).

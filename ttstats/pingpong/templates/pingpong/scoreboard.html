@@ -17,6 +17,12 @@ removes it. Tailwind's preflight `[hidden]` rule loses to any display utility
 on the same element, so it is restated here with !important, inline, so it
 holds with no stylesheet at all. The game pips are styled by a data attribute
 because scoreboard.js toggles them and Tailwind never scans JS.
+
+Shared scoring (KAN-153): the server renders `data-shared` and `data-my-side`
+on #scoreboard for a phone that scores only its own side, and these rules (not
+a second template, not JS-added classes) turn the row of two zones into a
+column: the opponent's read-only score on top, my "+1" zone filling the rest
+at the bottom, nearest me. The side switch never moves them.
 {% endcomment %}
 {% block extra_css %}
 <style>
@@ -25,6 +31,9 @@ because scoreboard.js toggles them and Tailwind never scans JS.
   #scoreboard [hidden] { display: none !important; }
   #scoreboard [data-pip] { opacity: .25; }
   #scoreboard [data-pip][data-won] { opacity: 1; }
+  #scoreboard[data-shared] [data-sb-board] { flex-direction: column; }
+  #scoreboard[data-shared] [data-zone="theirs"] { flex: 0 0 36%; order: 1; }
+  #scoreboard[data-shared] [data-zone="mine"] { flex: 1 1 auto; order: 2; padding-top: 18px; }
 </style>
 {% endblock %}
 
@@ -70,6 +79,7 @@ JS, so it runs under a CSP with no 'unsafe-eval'. Read
   data-match-detail-url="{% url 'pingpong:match_detail' match.pk %}"
   data-team1-label="{{ team1_label }}"
   data-team2-label="{{ team2_label }}"
+  {% if my_side %}data-shared data-my-side="{{ my_side }}"{% endif %}
 >
   <noscript>
     <div class="flex flex-1 flex-col justify-center gap-4 p-6">
@@ -106,12 +116,21 @@ JS, so it runs under a CSP with no 'unsafe-eval'. Read
     {% comment %}
     There is deliberately NO `disabled` on a tap zone, ever. A tap is applied
     locally and queued in the outbox; nothing about the network may drop it.
+
+    In the "my side" layout (KAN-153) the opponent's zone is a plain <div>:
+    no button role, no tabindex, no .tap-zone, so it cannot be tapped or
+    focused. Their points arrive from the server.
     {% endcomment %}
     {% for side, label, hue in sides %}
-    <button type="button" data-side="{{ side }}"
+    {% if my_side and side != my_side %}
+    <div data-side="{{ side }}" data-zone="theirs"
+         class="hue-fill {{ hue }} flex flex-1 flex-col pt-[calc(52px+env(safe-area-inset-top,0px))] text-left">
+    {% else %}
+    <button type="button" data-side="{{ side }}"{% if my_side %} data-zone="mine"{% endif %}
             class="tap-zone hue-fill {{ hue }} flex flex-1 flex-col pt-[calc(52px+env(safe-area-inset-top,0px))] text-left">
+    {% endif %}
       <span class="flex flex-col gap-0.5 px-[18px]">
-        <span class="text-[19px] font-extrabold leading-tight tracking-[-0.02em]">{{ label }}</span>
+        <span class="text-[19px] font-extrabold leading-tight tracking-[-0.02em]">{% if side == my_side %}+1 {% endif %}{{ label }}</span>
         <span class="flex items-center gap-1.5">
           <span data-serve-dot="{{ side }}" hidden class="dot h-2.5 w-2.5 flex-none bg-current"></span>
           <span data-serve-word="{{ side }}" class="text-[11px] font-extrabold uppercase tracking-[0.12em]">receiving</span>
@@ -128,7 +147,7 @@ JS, so it runs under a CSP with no 'unsafe-eval'. Read
         <span data-pip="{{ side }}" data-pip-index="{{ forloop.counter0 }}" class="h-1.5 w-[26px] bg-current"></span>
         {% endfor %}
       </span>
-    </button>
+    {% if my_side and side != my_side %}</div>{% else %}</button>{% endif %}
     {% endfor %}
   </div>
 
@@ -156,9 +175,10 @@ JS, so it runs under a CSP with no 'unsafe-eval'. Read
   <div data-sb-chrome hidden
        class="flex flex-none items-stretch border-t-2 border-court-line bg-court pb-safe-bottom">
     <button type="button" data-action="undo"
-            class="flex min-h-[60px] min-w-[96px] items-center gap-2 border-r border-court-line px-4 text-[14px] font-extrabold">
+            class="flex min-h-[60px] min-w-[96px] max-w-[48vw] items-center gap-2 border-r border-court-line px-4 text-left text-[14px] font-extrabold leading-tight">
       {% icon "undo-2" size="sm" %}
-      <span>Undo</span>
+      {# Shared scoring: scoreboard.js names whose point it is, "Undo Marco's point (7–5)". #}
+      <span data-undo-label>Undo</span>
     </button>
 
     <div class="flex min-h-[60px] flex-1 flex-col items-center justify-center gap-0.5">

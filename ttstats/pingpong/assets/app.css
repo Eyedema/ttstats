@@ -441,26 +441,6 @@
     filter: brightness(1.18);
   }
 
-  /* Retriggered from JS on every point so the number itself confirms the tap.
-     Slightly under-damped: a point is a momentum-carrying, physical action. */
-  .score-bump {
-    animation: score-bump 220ms cubic-bezier(0.22, 1, 0.36, 1);
-  }
-
-  @keyframes score-bump {
-    0% {
-      transform: scale(1);
-    }
-
-    35% {
-      transform: scale(1.07);
-    }
-
-    100% {
-      transform: scale(1);
-    }
-  }
-
   /* --- Navigation progress ------------------------------------------------ */
 
   /* Fails closed, same contract as the drawer: with no JS this element is
@@ -647,6 +627,40 @@ html.ptr-on { overscroll-behavior-y: contain; }
 
 @keyframes vt-rise-in {
   from { opacity: 0; transform: translateY(6px); }
+}
+
+/* --- Live scoreboard score feedback ----------------------------------------
+   Both classes are added only by scoreboard.js, which Tailwind does not scan,
+   so they live outside @layer: a layered rule it cannot see is purged (the
+   bump was, silently, until KAN-153 moved it here).
+
+   .score-bump: retriggered on every tap so the number itself confirms it.
+   Slightly under-damped: a point is a momentum-carrying, physical action.
+
+   .score-pulse: the opponent's point arrived from the server in shared
+   scoring. Opacity only (no haptic: haptics fire only in the tap handler),
+   and none at all with reduced motion. */
+.score-bump {
+  animation: score-bump 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes score-bump {
+  0% { transform: scale(1); }
+  35% { transform: scale(1.07); }
+  100% { transform: scale(1); }
+}
+
+.score-pulse {
+  animation: score-pulse 600ms ease-out;
+}
+
+@keyframes score-pulse {
+  0% { opacity: 0.3; }
+  100% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .score-pulse { animation: none; }
 }
 
 /* Outside every @layer: these are user preferences and must win over both
