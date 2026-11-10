@@ -1,6 +1,6 @@
 {% extends "pingpong/base.html" %}
 {% load static %}
-{% load icon_tags %}
+{% load icon_tags feature_tags %}
 
 
 {% block title %}{% if object %}Edit Match{% else %}Record New Match{% endif %} - Table Tennis Tracker{% endblock %}
@@ -422,6 +422,16 @@
                         {% icon "check" css="w-4 h-4" %}
                         Score live
                     </button>
+                    {% feature_enabled "shared_scoring" as shared_scoring_on %}
+                    {% if shared_scoring_on %}
+                    {# KAN-151: no opponent needed; formnovalidate so the empty Player 2 doesn't block it. #}
+                    <button type="submit" formaction="{% url 'pingpong:live_lobby_create' %}" formnovalidate
+                            data-testid="score-shared"
+                            class="singles-only flex-1 sm:flex-none inline-flex items-center justify-center gap-2 rounded-md border border-primary bg-card px-4 py-3 text-sm font-medium text-primary hover:bg-secondary transition-colors min-h-[48px]">
+                        {% icon "smartphone" css="w-4 h-4" %}
+                        Score live with a shared link
+                    </button>
+                    {% endif %}
                     {% endif %}
                 </div>
             </form>

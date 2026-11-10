@@ -513,6 +513,12 @@
 .qr-ink { fill: rgb(var(--qr-ink)); }
 .qr-paper { fill: rgb(var(--qr-paper)); }
 
+/* The shared-scoring lobby (KAN-151): Share / Copy start with the `hidden`
+   attribute and live_lobby.js reveals them only where supported. Preflight's
+   [hidden] rule loses to the .btn display, so restate it here, outside
+   @layer. With no stylesheet at all the UA's own [hidden] rule applies. */
+[data-live-lobby] [hidden] { display: none !important; }
+
 /* --- Pull to refresh (KAN-126) ------------------------------------------ */
 
 /* Created by pull_to_refresh.js, never rendered by the server, so without JS

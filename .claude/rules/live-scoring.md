@@ -31,6 +31,10 @@ paths:
   - "tests/e2e/momentum*.js"
   - "tests/e2e/point-stats*.js"
   - "tests/e2e/scoreboard*.js"
+  - "ttstats/pingpong/live_lobby_views.py"
+  - "ttstats/pingpong/templates/pingpong/live_lobby.html"
+  - "ttstats/pingpong/static/pingpong/js/live_lobby.js"
+  - "tests/e2e/shared-scoring*.js"
 ---
 
 # Live scoring and the point log
@@ -208,6 +212,28 @@ club check run **before** any wait; `last_seen_at` is still stamped.
   `(LIVE_LONGPOLL_WAIT + live_longpoll.ABORT_SLACK) * 1000`; never typed in JS.
 - The service worker passes `/live/state/` through (`tests/js/sw_routes.test.mjs`).
 - Choices and the path to real push: `docs/decisions/kan-148-shared-scoring.md`.
+
+## Shared scoring starts from a lobby (KAN-151 / KAN-152)
+
+`live_lobby_views.py`; flag `shared_scoring` gates only the entry points (the
+match form button, `LiveLobbyCreateView` 404s), never an open lobby or a join.
+The join link's credential rules are in `clubs.md`.
+
+- **`LiveLobby` expiry is lazy** (`LOBBY_TTL` 30 min): `current_status` reads
+  an open lobby past `expires_at` as expired; no job flips it. One open lobby
+  per host (`open_lobby` closes the previous; a partial unique index backs it).
+- **`services.start_shared_match(lobby, joiner, request)` is the only join**:
+  conditional `.update()` claim, then `create_live_match(..., can_score_both=
+  False)` with `club=lobby.club`, then the guest row (side 2). Both phones
+  score only their own side once KAN-150 enforces it.
+- **The lobby page works with scripting off**: server SVG QR (`qr_svg`),
+  selectable URL, "Check again" reload, and the view redirects to the
+  scoreboard once joined. `live_lobby.js` (deferred, `json_script` config)
+  polls the status every 2 s while visible and reveals Share/Copy only where
+  supported; they start `hidden`, held by `[data-live-lobby] [hidden]` in
+  app.css. Lobby, status and join pages are `never_cache` (no-store).
+- e2e: the create/cancel POSTs redirect, so `applyProdCSP`'s `route.fetch`
+  keeps the old URL; `releaseProdCSP` first or navigate to the lobby URL.
 
 ## The batch sync endpoint (`live_sync`, KAN-88)
 

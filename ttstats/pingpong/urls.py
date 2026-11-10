@@ -1,5 +1,5 @@
 from django.urls import path
-from . import season_views, views
+from . import live_lobby_views, season_views, views
 
 app_name = "pingpong"
 
@@ -48,6 +48,14 @@ urlpatterns = [
     path("matches/<int:pk>/live/side-switch/", views.LiveSideSwitchView.as_view(), name="live_side_switch"),
     path("matches/<int:pk>/live/undo/", views.LiveUndoView.as_view(), name="live_undo"),
     path("matches/<int:pk>/live/sync/", views.LiveSyncView.as_view(), name="live_sync"),
+    # Shared live scoring (KAN-151 / KAN-152). The lobby is host-only; the
+    # join URL carries a bearer token (TOKEN_PATH_PREFIXES in sentry.py).
+    path("live/lobby/new/", live_lobby_views.LiveLobbyCreateView.as_view(), name="live_lobby_create"),
+    path("live/lobby/<int:pk>/", live_lobby_views.LiveLobbyView.as_view(), name="live_lobby"),
+    path("live/lobby/<int:pk>/status/", live_lobby_views.LiveLobbyStatusView.as_view(), name="live_lobby_status"),
+    path("live/lobby/<int:pk>/cancel/", live_lobby_views.LiveLobbyCancelView.as_view(), name="live_lobby_cancel"),
+    path("live/join/", live_lobby_views.LiveJoinResumeView.as_view(), name="live_join_resume"),
+    path("live/join/<str:token>/", live_lobby_views.LiveJoinView.as_view(), name="live_join"),
     path("matches/schedule/", views.ScheduledMatchCreateView.as_view(), name="match_schedule"),
     path("scheduled-matches/<int:pk>/", views.ScheduledMatchDetailView.as_view(), name="scheduled_match_detail"),
     path("scheduled-matches/<int:scheduled_match_pk>/convert/", views.ScheduledMatchConvertView.as_view(), name="scheduled_match_convert"),

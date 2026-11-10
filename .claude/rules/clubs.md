@@ -6,6 +6,10 @@ paths:
   - "ttstats/pingpong/templates/pingpong/club_*.html"
   - "ttstats/pingpong/tests/test_club*.py"
   - "tests/e2e/club-*.spec.js"
+  - "ttstats/pingpong/live_lobby_views.py"
+  - "ttstats/pingpong/templates/pingpong/live_join.html"
+  - "ttstats/pingpong/tests/test_shared_scoring.py"
+  - "ttstats/ttstats/sentry.py"
 ---
 
 # Clubs: switcher, invites, roles
@@ -49,6 +53,26 @@ It lives in `_nav_menu.html`, rendered by both the drawer and the desktop sideba
 - **The generated link is shown once**, on the redirect after creation.
 - New token-bearing routes must be added to `TOKEN_PATH_PREFIXES` in
   `ttstats/sentry.py` in the same commit.
+
+## A shared-scoring join link is a bearer credential too
+
+`LiveLobby` + `/pingpong/live/join/<token>/` (KAN-152, `live_lobby_views.py`)
+follows every rule above: `uuid4().hex`, `all_objects` lookup by token then
+`compare_digest`, `20/h` by IP (GET and POST), parked in the session
+(`pending_live_join`), registration hooked (`consume_pending_live_join`, after
+`consume_pending_invite`), a real page per dead reason, `live/join` in
+`TOKEN_PATH_PREFIXES`.
+
+- **Login comes back via `live/join/` (resume), never `?next=<join URL>`**, so
+  the token is in no URL but its own. The token is shown only on the host's
+  lobby page (pinned to the host even for staff) and only while open.
+- **Membership of the lobby's club is checked before joining**, and only then
+  `set_active_club`; the match gets `club=lobby.club` explicitly.
+- **The one unverified login**: signup with a parked, open lobby in a club the
+  new account is in (an invite in the same session counts) logs it in and
+  sends it to the confirm page. Unverified players may play; verification is
+  still required for the next login. Nothing else logs in an unverified user.
+- The claim is a conditional `.update()` (`start_shared_match`), like `claim()`.
 
 ## Club roles
 

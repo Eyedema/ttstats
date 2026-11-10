@@ -1,0 +1,91 @@
+{% extends "pingpong/base.html" %}
+{% load static icon_tags qr_tags %}
+
+{% block title %}Waiting for your opponent - TTStats{% endblock %}
+{% block nav_title %}Shared link{% endblock %}
+
+{% comment %}
+The host's lobby (KAN-151). Works with scripting off: the QR code is server-
+rendered SVG, the link is plain selectable text, "Check again" is a reload and
+the view redirects to the scoreboard once someone has joined.
+
+live_lobby.js (deferred, config via json_script, nothing inline) adds the
+2-second poll, Share and Copy. Both buttons start `hidden` and are revealed
+only when the browser supports them: they fail closed.
+{% endcomment %}
+
+{% block content %}
+<div class="mx-auto max-w-md space-y-5" data-live-lobby>
+  <div>
+    <h2 class="label-cap mb-2 block">Score live with a shared link</h2>
+    <span class="rule mb-3"></span>
+    <p class="text-[15px] font-semibold">
+      Ask your opponent to scan this, or send them the link.
+      {% if lobby.club %}They'll need a TTStats account in <strong>{{ lobby.club.name }}</strong>.{% else %}They'll need a TTStats account.{% endif %}
+    </p>
+  </div>
+
+  {% if status == "open" %}
+  <section class="surface p-4 space-y-4">
+    {# ~70% of a phone's width; the SVG fills its box from its viewBox. #}
+    <div class="mx-auto w-[70vw] max-w-[22rem]" data-testid="lobby-qr">
+      {% qr_svg join_url label="QR code for the join link" %}
+    </div>
+
+    <p class="break-all select-all text-center text-[13px] font-semibold text-muted-foreground" data-testid="lobby-url">{{ join_url }}</p>
+
+    <div class="flex gap-3">
+      <button type="button" class="btn-paddle flex-1 min-h-[48px]" data-lobby-share hidden>
+        {% icon "share-2" size="sm" %}
+        <span>Share</span>
+      </button>
+      <button type="button" class="btn-ghost flex-1 min-h-[48px]" data-lobby-copy hidden>
+        {% icon "copy" size="sm" %}
+        <span data-copy-label>Copy link</span>
+        <span data-copied hidden class="inline-flex items-center gap-1 text-success">
+          {% icon "check" size="sm" %}<span>Copied</span>
+        </span>
+      </button>
+    </div>
+  </section>
+
+  <section class="surface p-4 space-y-1 text-[14px] font-semibold">
+    <p>Best of {{ lobby.best_of }}{% if lobby.location %} · {{ lobby.location.name }}{% endif %}</p>
+    <p class="text-muted-foreground">Expires at <span class="n">{{ lobby.expires_at|time:"H:i" }}</span></p>
+    <p class="text-muted-foreground" role="status" aria-live="polite" data-lobby-status>Waiting for your opponent…</p>
+  </section>
+  {% endif %}
+
+  <p class="surface p-4 text-[15px] font-semibold" role="alert" data-lobby-ended {% if status == "open" %}hidden{% endif %}>
+    <span data-lobby-reason>{{ reason }}</span>
+    <a href="{% url 'pingpong:match_add' %}" class="ml-1 underline">Start again</a>
+  </p>
+
+  <div class="space-y-3">
+    {% if status == "open" %}
+    <a href="{% url 'pingpong:live_lobby' lobby.pk %}" class="btn-ghost w-full min-h-[48px]" data-testid="check-again">
+      {% icon "refresh-cw" size="sm" %}
+      <span>Check again</span>
+    </a>
+    <form method="post" action="{% url 'pingpong:live_lobby_cancel' lobby.pk %}">
+      {% csrf_token %}
+      <input type="hidden" name="pick_opponent" value="1">
+      <button type="submit" class="btn-ghost w-full min-h-[48px]">
+        {% icon "users" size="sm" %}
+        <span>Pick opponent instead</span>
+      </button>
+    </form>
+    <form method="post" action="{% url 'pingpong:live_lobby_cancel' lobby.pk %}">
+      {% csrf_token %}
+      <button type="submit" class="btn-quiet w-full min-h-[48px]">
+        {% icon "x" size="sm" %}
+        <span>Cancel</span>
+      </button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+{{ lobby_config|json_script:"live-lobby-config" }}
+<script defer src="{% static 'pingpong/js/live_lobby.js' %}"></script>
+{% endblock %}
