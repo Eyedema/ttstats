@@ -45,6 +45,11 @@ the single source of the namespace.
 - A club-on nav key is `club{player.club_id}:g2_player_rank_{pk}`, and the rank
   inside it is counted in that same club.
 
+- **Live long-poll keys** (KAN-168): `live_rev_key(pk)` =
+  `{club}live_rev_{pk}` (set on commit by `live_ops.publish_rev`) and
+  `live_poll_key(pk, user_pk)` (the one-poll marker). `cache_is_shared()` is
+  False for LocMemCache/DummyCache, which switches on the long-poll's DB fallback.
+
 ## Sessions (`cached_db` in prod)
 
 - `prod.py` uses `cached_db` **only when `REDIS_URL` is set**. Over per-worker

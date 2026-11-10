@@ -28,6 +28,11 @@ release, so a rollback finds it where the old code expects it.
 any stream. A rule rejection consumes its seq but changes nothing anyone
 renders, so it does **not** bump ``rev``: a poller woken by it would re-fetch
 an identical state. Duplicates and gaps never reach this module.
+
+Every bump is also **published** to ``cache_utils.live_rev_key`` on commit
+(:func:`publish_rev`), which is what a held ``/live/state/?wait=1`` request
+reads (KAN-168). On commit, never before: a waiter must not wake to data it
+cannot read yet.
 """
 from __future__ import annotations
 
@@ -42,7 +47,9 @@ from django.db.models import Max, Prefetch, prefetch_related_objects
 from django.urls import reverse
 from django.utils import timezone
 
-from . import live_scoring, point_rollups
+from django.core.cache import cache
+
+from . import cache_utils, live_scoring, point_rollups
 from .models import Game, LiveScorer, Match, PointEvent, Side
 
 logger = logging.getLogger(__name__)
@@ -331,6 +338,30 @@ def _write_state(
         **extra,
     )
     match.live_state = new_state
+    publish_rev(match)
+
+
+def publish_rev(match: Match) -> None:
+    """Set the match's rev key once the op's transaction commits.
+
+    Registered once per transaction per match instance and reading
+    ``match.live_rev`` when it fires, so a 40-op ``live_sync`` batch is one
+    cache write carrying the final rev. A dead cache never fails an op that
+    has already committed: the waiter's DB fallback or its timeout covers it.
+    """
+    if getattr(match, "_rev_publish_pending", False):
+        return
+    match._rev_publish_pending = True
+    key = cache_utils.live_rev_key(match.pk)
+
+    def _publish():
+        match._rev_publish_pending = False
+        try:
+            cache.set(key, match.live_rev, cache_utils.LIVE_REV_TTL)
+        except Exception:
+            logger.warning("Could not publish live rev for match %s", match.pk)
+
+    transaction.on_commit(_publish)
 
 
 # --- the four ops -------------------------------------------------------------

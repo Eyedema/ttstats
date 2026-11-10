@@ -64,4 +64,17 @@ rm -f "$E2E_DB"
 "$PY" manage.py migrate --noinput >/dev/null
 "$PY" manage.py seed_e2e
 
-exec "$PY" manage.py runserver "localhost:$PORT" --noreload --nostatic
+# Prod's worker class (KAN-168): gthread, so a held /live/state/?wait=1
+# request ties up a thread exactly as it does in prod, and the thread-local
+# tenancy state is exercised under thread reuse. ONE worker, not prod's 3:
+# the e2e cache is LocMemCache, per process, and with several workers the
+# long-poll would only see another worker's op through its 2 s DB fallback
+# (and SQLite would take writes from several processes). Static is served by
+# WhiteNoise in the app, as in prod; gunicorn has no static handler.
+exec "$PY" -m gunicorn ttstats.wsgi:application \
+  --bind "localhost:$PORT" \
+  --worker-class gthread \
+  --workers 1 \
+  --threads "${E2E_GUNICORN_THREADS:-8}" \
+  --timeout 60 \
+  --error-logfile -

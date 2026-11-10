@@ -15,7 +15,7 @@ from django.core.cache import cache
 from django.core.exceptions import PermissionDenied
 from django.core.mail import send_mail
 from django.core.serializers.json import DjangoJSONEncoder
-from django.db import transaction
+from django.db import connection, transaction
 from django.db.models import Count, F, Prefetch, Q
 from django.http import Http404, HttpResponse, HttpResponseRedirect, JsonResponse
 from django.middleware.csrf import get_token
@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 from ttstats.middleware import get_current_club
 
-from . import live_ops, live_scoring, notifications, offline, player_hues, point_rollups, point_stats, push, rating_pipeline, ratings
+from . import live_longpoll, live_ops, live_scoring, notifications, offline, player_hues, point_rollups, point_stats, push, rating_pipeline, ratings
 from .forms import GameForm, MatchEditForm, MatchForm, PlayerRegistrationForm, ScheduledMatchForm, MatchConvertForm, \
     ChampionshipCreateForm, ChampionshipEditForm, ScheduledMatchEditForm, LeaderboardScopeForm, DEFAULT_TOP_X
 from .achievements import get_achievement_progress
@@ -3174,6 +3174,12 @@ class LiveScoreboardView(LoginRequiredMixin, View):
                 "user_id": request.user.pk,
                 "best_of": match.best_of,
                 "max_batch": SYNC_MAX_OPS,
+                # The held /live/state/?wait=1 request's client-side abort
+                # (KAN-168): the server's wait plus slack, in ms, so the
+                # number lives in Python only.
+                "longpoll_abort_ms": (
+                    settings.LIVE_LONGPOLL_WAIT + live_longpoll.ABORT_SLACK
+                ) * 1000,
                 "login_url": "{}?{}".format(
                     resolve_url(settings.LOGIN_URL),
                     urlencode({"next": request.get_full_path()}),
@@ -3252,6 +3258,36 @@ class LivePointView(LoginRequiredMixin, View):
         )
 
 
+def _parse_since(raw) -> int | None:
+    """``?since=`` as an int, or None (absent or not an int: ignored)."""
+    if raw is None or not raw.lstrip("-").isdigit():
+        return None
+    return int(raw)
+
+
+def _release_db_connection() -> None:
+    """Give the thread's DB connection back before a held wait.
+
+    A long-poll that kept its connection would pin one of the
+    workers x threads persistent connections for LIVE_LONGPOLL_WAIT seconds
+    doing nothing. Never inside a transaction (ATOMIC_REQUESTS is off; a
+    test's wrapping transaction is the case this guards): closing there
+    would roll it back. The next query reconnects.
+    """
+    if not connection.in_atomic_block:
+        connection.close()
+
+
+def _live_rev_from_db(pk) -> int | None:
+    """The DB fallback of a held wait on a per-process cache. Scoped like
+    the authorization that preceded it."""
+    return (
+        scope_to_active_club(Match.all_objects.filter(pk=pk))
+        .values_list("live_rev", flat=True)
+        .first()
+    )
+
+
 class LiveStateView(LoginRequiredMixin, View):
     """GET the canonical state, for the scoreboard to resync against.
 
@@ -3260,6 +3296,13 @@ class LiveStateView(LoginRequiredMixin, View):
     the scoreboard showing a score the server no longer agrees with.
     Restricted to the match's scorers (and staff), like the write endpoints,
     and the caller's presence stamp is refreshed here (throttled).
+
+    ``?since=<rev>`` (KAN-165): 200 with the payload when ``rev`` moved, 204
+    with no body when it did not. ``&wait=1`` (KAN-168) holds an unchanged
+    answer up to ``LIVE_LONGPOLL_WAIT`` seconds, reading only the
+    ``live_rev_key`` cache entry, and answers the payload as soon as an op
+    commits (204 on timeout). Authorization and the club check run before
+    any wait.
     """
 
     def get(self, request, pk):
@@ -3268,6 +3311,21 @@ class LiveStateView(LoginRequiredMixin, View):
         match, caller = _get_live_match_for_scorer(request, pk)
         live_ops.touch(caller.own)
         live_ops.save_scorer(caller.own)
+
+        since = _parse_since(request.GET.get("since"))
+        if since is not None and since == match.live_rev:
+            # A finished match has no next op to wait for.
+            if request.GET.get("wait") != "1" or not match.is_live:
+                return HttpResponse(status=204)
+            woke = self._hold(request, match, since)
+            if woke is None:
+                return HttpResponse(status=204)
+            if woke is False:
+                response = HttpResponse(status=204)
+                response["X-Longpoll"] = "busy"
+                return response
+            # Re-read and re-authorize: a revocation during the wait counts.
+            match, caller = _get_live_match_for_scorer(request, pk)
 
         redirect_url = None
         if not match.is_live:
@@ -3278,6 +3336,38 @@ class LiveStateView(LoginRequiredMixin, View):
         # browser holds now, so the client can retry a refused sync (KAN-81).
         payload["csrf_token"] = get_token(request)
         return JsonResponse(payload)
+
+    @staticmethod
+    def _hold(request, match: Match, since: int) -> bool | None:
+        """Wait for ``rev`` to move: True when it did, None on timeout,
+        False when this user already has a wait open on this match."""
+        wait = settings.LIVE_LONGPOLL_WAIT
+        marker = cache_utils.live_poll_key(match.pk, request.user.pk)
+        # One held request per (match, user): a buggy client or a reloaded
+        # page must not take a thread each. The TTL outlives the wait, so a
+        # worker killed mid-wait frees the slot on its own.
+        if not cache.add(marker, 1, wait + live_longpoll.ABORT_SLACK):
+            return False
+        try:
+            key = cache_utils.live_rev_key(match.pk)
+            # Seed an absent key (expired, flushed, never written) with what
+            # the DB just said. add(), not set(): an op committed since our
+            # read has already written a newer value, which must win.
+            cache.add(key, match.live_rev, cache_utils.LIVE_REV_TTL)
+            read_db = None
+            if not cache_utils.cache_is_shared():
+                pk = match.pk
+                read_db = lambda: _live_rev_from_db(pk)  # noqa: E731
+            _release_db_connection()
+            changed = live_longpoll.wait_for_change(
+                since,
+                read_cache=lambda: cache.get(key),
+                read_db=read_db,
+                wait=wait,
+            )
+            return True if changed is not None else None
+        finally:
+            cache.delete(marker)
 
 
 @method_decorator(require_POST, name="dispatch")

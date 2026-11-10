@@ -248,6 +248,12 @@ for _flag_name in os.environ.get('TTSTATS_FLAGS_ON', '').split(','):
     if _flag_name in FEATURE_FLAGS:
         FEATURE_FLAGS[_flag_name] = True
 
+# Shared live scoring (KAN-168): how long `GET .../live/state/?wait=1` holds a
+# request before answering 204. Must stay well under gunicorn's --timeout
+# (60, docker/django/entrypoint.sh); the client aborts at this plus
+# live_longpoll.ABORT_SLACK, a number it is sent and never types.
+LIVE_LONGPOLL_WAIT = 20
+
 # Redis Cache Configuration
 REDIS_URL = os.environ.get('REDIS_URL')
 

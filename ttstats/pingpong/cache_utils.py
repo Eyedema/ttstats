@@ -121,6 +121,47 @@ def notification_count_key(user_id, scope, day):
     return f'notif_count:{day:%Y%m%d}:u{user_id}:{scope}'
 
 
+# --- Shared live scoring: the long-poll (KAN-168) ----------------------------
+
+# How long a published rev outlives its last op. A key that expired reads
+# None, which the waiter treats as "don't know" (and the view re-seeds it), so
+# this only bounds how long a finished match's key lingers.
+LIVE_REV_TTL = 6 * 60 * 60
+
+# Backends whose entries live in one process. On these an op committed by
+# another worker never reaches this worker's key, so the long-poll falls back
+# to re-reading the database.
+_PER_PROCESS_BACKENDS = (
+    "django.core.cache.backends.locmem.LocMemCache",
+    "django.core.cache.backends.dummy.DummyCache",
+)
+
+
+def live_rev_key(match_pk):
+    """The last committed ``Match.live_rev`` of a live match.
+
+    Written by ``live_ops`` on commit, read by held ``/live/state/``
+    requests every tick. A match pk is unique, but every key carries its
+    club; the writer and the reader are both requests scoped to the
+    match's club, so the viewer's prefix is the match's.
+    """
+    return f"{club_prefix()}live_rev_{match_pk}"
+
+
+def live_poll_key(match_pk, user_pk):
+    """Marker held while one user's long-poll on one match waits: a second
+    concurrent one is answered 204 at once instead of taking a thread."""
+    return f"{club_prefix()}live_poll_{match_pk}_{user_pk}"
+
+
+def cache_is_shared():
+    """True when every worker reads the same cache (Redis)."""
+    from django.conf import settings
+
+    backend = settings.CACHES.get("default", {}).get("BACKEND", "")
+    return backend not in _PER_PROCESS_BACKENDS
+
+
 def h2h_point_stats_key(player1, player2):
     """The point-level head-to-head fold for a pair, order-independent."""
     low, high = sorted([player1.pk, player2.pk])

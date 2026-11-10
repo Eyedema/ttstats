@@ -7,7 +7,7 @@ by WhiteNoise with hashed names, pre-compressed bodies and immutable caching.
 Without this the byte budgets (tests/e2e/budgets.spec.js) and `npm run perf`
 would measure uncompressed, unhashed, uncacheable files prod never serves.
 
-Run under `runserver --nostatic` (scripts/e2e_server.sh does), or Django's
+Run under gunicorn (scripts/e2e_server.sh, KAN-168) or `runserver --nostatic`; under a bare runserver Django's
 own static handler answers /static/ before WhiteNoise sees it.
 """
 import os

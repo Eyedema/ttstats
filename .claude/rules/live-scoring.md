@@ -5,6 +5,8 @@ paths:
   - "ttstats/pingpong/point_rollups.py"
   - "ttstats/pingpong/views.py"
   - "ttstats/pingpong/live_ops.py"
+  - "ttstats/pingpong/live_longpoll.py"
+  - "ttstats/pingpong/tests/test_live_longpoll.py"
   - "ttstats/pingpong/services.py"
   - "ttstats/pingpong/tests/test_live_scorers.py"
   - "ttstats/pingpong/management/commands/rebuild_point_rollups.py"
@@ -151,6 +153,35 @@ and the most dangerous duplicate is a retried match point.
   any sequenced op), `rev`, `scorers` (presence) and `me` (null without a row).
   Choices: `docs/decisions/kan-149-per-scorer-streams.md`.
 
+## `/live/state/`: instant answer, 204, or a held long-poll (KAN-165, KAN-168)
+
+`GET matches/<pk>/live/state/[?since=<rev>[&wait=1]]`. Authorization and the
+club check run **before** any wait; `last_seen_at` is still stamped.
+
+- No `since`, or a `since` that is not an int: 200, full payload.
+- `since != rev`: 200 at once. `since == rev` without `wait=1` (or on a
+  finished match): **204, no body**.
+- `wait=1`: held up to `settings.LIVE_LONGPOLL_WAIT` (20 s), then 204. The
+  loop (`live_longpoll.wait_for_change`, pure, no Django) reads only
+  `cache_utils.live_rev_key(pk)` every `TICK` (200 ms); on a change the view
+  re-reads and re-authorizes, then answers the payload.
+- **The loop never touches the DB on a shared cache.** On LocMemCache (dev,
+  tests) it also re-reads `live_rev` every `DB_EVERY` (2 s), since another
+  worker's op never reaches this process's key. A key reading `None` is
+  "don't know", never a change; the view seeds an absent key with `add()`.
+- **The connection is closed before waiting** (`_release_db_connection`,
+  skipped inside an atomic block), so held phones don't pin connections.
+- **One held poll per (match, user)**: `live_poll_key` marker via
+  `cache.add`; a second concurrent one is 204 at once with
+  `X-Longpoll: busy` (the client should back off ~1 s on it, not spin).
+- **The key is written on commit, never before** (`live_ops.publish_rev`,
+  registered once per transaction from `_write_state`, so a batch is one
+  write with the final rev). A dead cache never fails a committed op.
+- The client's abort timeout is `scoreboard-config.longpoll_abort_ms` =
+  `(LIVE_LONGPOLL_WAIT + live_longpoll.ABORT_SLACK) * 1000`; never typed in JS.
+- The service worker passes `/live/state/` through (`tests/js/sw_routes.test.mjs`).
+- Choices and the path to real push: `docs/decisions/kan-148-shared-scoring.md`.
+
 ## The batch sync endpoint (`live_sync`, KAN-88)
 
 `POST matches/<pk>/live/sync/` with `{"ops": [{"seq", "type", "side" |
@@ -235,7 +266,7 @@ Choices: `docs/decisions/kan-80-81-offline-client.md`; the epic as a whole:
 - **Plain JS in static files, no Alpine, nothing inline**: scripts load
   `defer` in order `live_rules.js`, `live_outbox.js`, `live_session.js`,
   `scoreboard.js`, after the json_script data (`scoreboard-bootstrap`,
-  `scoreboard-config` with `match_pk`/`user_id`/`login_url`,
+  `scoreboard-config` with `match_pk`/`user_id`/`login_url`/`longpoll_abort_ms`,
   `live-rules-config`). It runs under the e2e `PROD_CSP`; keep it that way.
 - **Every action is an op persisted before anything is sent**
   (`LiveOutbox`, localStorage, keyed by match pk AND user id). Undo of an
