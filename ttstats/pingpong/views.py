@@ -2972,10 +2972,13 @@ def _scoreboard_payload(
 
     ``applied_seq`` is the caller's own stream; ``rev`` is match-wide;
     ``scorers`` is presence for every phone; ``me`` is the caller's row.
+    ``last_point`` is the trailing ``PointEvent`` (KAN-150): its ``sequence``
+    is what a conditional undo sends as ``expects``.
     """
     state = match.live_state or {}
     scorer = caller.scorer if caller else None
     own = caller.own if caller else None
+    trailing = live_ops.trailing_point(match)
     return {
         "is_live": match.is_live,
         "is_match_complete": not match.is_live and match.live_state is None,
@@ -2991,6 +2994,15 @@ def _scoreboard_payload(
         "me": (
             {"side": own.side, "role": own.role, "can_score_both": own.can_score_both}
             if own is not None
+            else None
+        ),
+        "last_point": (
+            {
+                "sequence": trailing.sequence,
+                "side": Side.to_live(trailing.scoring_side),
+                "by": trailing.recorded_by_id,
+            }
+            if trailing is not None
             else None
         ),
     }
@@ -3015,6 +3027,17 @@ def _parse_seq(payload) -> tuple[int | None, JsonResponse | None]:
     if isinstance(seq, bool) or not isinstance(seq, int) or seq < 1:
         return None, JsonResponse({"error": "seq must be an integer >= 1"}, status=400)
     return seq, None
+
+
+def _parse_expects(payload) -> tuple[int | None, JsonResponse | None]:
+    """An undo's ``expects`` (KAN-150): ``(int, None)``, ``(None, None)`` when
+    absent, or a 400. Same shape rules as ``seq``."""
+    expects = payload.get("expects") if isinstance(payload, dict) else None
+    if expects is None:
+        return None, None
+    if isinstance(expects, bool) or not isinstance(expects, int) or expects < 1:
+        return None, JsonResponse({"error": "expects must be an integer >= 1"}, status=400)
+    return expects, None
 
 
 def _classify_seq(applied: int, seq: int) -> str:
@@ -3392,13 +3415,18 @@ class LiveUndoView(LoginRequiredMixin, View):
     """Undo the most recent point (KAN-10); see ``live_ops._undo``."""
 
     def post(self, request, pk):
-        seq, error = _parse_seq(_lenient_json(request))
+        payload = _lenient_json(request)
+        seq, error = _parse_seq(payload)
+        if error:
+            return error
+        expects, error = _parse_expects(payload)
         if error:
             return error
 
+        op = {"type": "undo", "seq": seq, "expects": expects}
         return _run_op(
             request, pk, seq, "undo",
-            lambda match, caller: _apply_op(match, caller, {"type": "undo", "seq": seq}),
+            lambda match, caller: _apply_op(match, caller, op),
         )
 
 
@@ -3460,6 +3488,11 @@ def _parse_sync_ops(request) -> tuple[list[dict] | None, JsonResponse | None]:
                     status=400,
                 )
             op["initial_server"] = raw["initial_server"]
+        elif op_type == "undo":
+            expects, error = _parse_expects(raw)
+            if error:
+                return None, error
+            op["expects"] = expects
         ops.append(op)
 
     ops.sort(key=lambda op: op["seq"])

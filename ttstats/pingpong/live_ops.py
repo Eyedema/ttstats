@@ -59,6 +59,8 @@ OP_TYPES = ("start", "point", "undo", "side_switch")
 NOT_LIVE = "Match is not live"
 NOT_STARTED = "Match has not started — pick an initial server"
 ALREADY_STARTED = "Match already started"
+NOT_YOUR_SIDE = "not your side"
+STALE_UNDO = "stale undo"
 
 
 @dataclass(frozen=True)
@@ -111,7 +113,14 @@ def _client_recorded_at(match: Match, op: dict[str, Any]) -> datetime | None:
 
 
 def record_point_event(
-    match, *, state_before, side, completed, new_state, client_recorded_at=None
+    match,
+    *,
+    state_before,
+    side,
+    completed,
+    new_state,
+    client_recorded_at=None,
+    recorded_by_id=None,
 ):
     """Persist one ``PointEvent`` for a point the server has just applied.
 
@@ -130,6 +139,7 @@ def record_point_event(
     ``state_before`` is passed in because the serving side must be read from
     the state *before* the point: afterwards ``current_server()`` names whoever
     serves next, and that mistake is invisible in the stored data.
+    ``recorded_by_id`` is the player whose stream applied the point (KAN-150).
     """
     try:
         with transaction.atomic():
@@ -158,6 +168,7 @@ def record_point_event(
                 team2_score=team2_score,
                 sequence=next_sequence,
                 client_recorded_at=client_recorded_at,
+                recorded_by_id=recorded_by_id,
             )
     except Exception:
         logger.exception(
@@ -178,6 +189,7 @@ def apply_op(
     ``op`` is ``{"type": ..., "seq": int | None, ...}`` with the type's own
     field (``initial_server`` for start, ``side`` for point) already checked.
     A point may carry ``client_ts``; it is parsed here and never rejected.
+    An undo may carry ``expects`` (KAN-150), already checked to be an int.
     ``scorer`` is the stream the op's seq belongs to (``None``: the legacy
     row-less stream); the caller persists it with :func:`save_scorer`.
     ``record_point`` defaults to :func:`record_point_event`.
@@ -386,15 +398,23 @@ def _point(
 ) -> OpResult:
     if not match.is_live:
         return _not_live()
+    side = op["side"]
+    if (
+        scorer is not None
+        and not scorer.can_score_both
+        and Side.from_live(side) != scorer.side
+    ):
+        # KAN-150: a phone in a shared match scores for its own side only.
+        return _reject(match, op, scorer, NOT_YOUR_SIDE)
     if not match.live_state or not match.live_state.get("started"):
         return _reject(match, op, scorer, NOT_STARTED)
 
-    side = op["side"]
+    by = recorded_by(match, scorer)
     # Captured before apply_point: current_server() on the new state names
     # who serves *next*, not who served this point.
     state_before = match.live_state
     try:
-        new_state, completed = live_scoring.apply_point(state_before, side)
+        new_state, completed = live_scoring.apply_point(state_before, side, by=by)
     except ValueError as exc:
         return _reject(match, op, scorer, str(exc))
 
@@ -405,6 +425,7 @@ def _point(
         completed=completed,
         new_state=new_state,
         client_recorded_at=_client_recorded_at(match, op),
+        recorded_by_id=by,
     )
 
     if completed is None:
@@ -461,14 +482,55 @@ def _point(
     )
 
 
+def recorded_by(match: Match, scorer: LiveScorer | None) -> int | None:
+    """Who a point applied through this stream is attributed to (KAN-150):
+    the stream's player, or the scorekeeper of a row-less (legacy) match.
+    Staff driving a solo match write through the host's stream, so the
+    point is the host's."""
+    if scorer is not None:
+        return scorer.player_id
+    return match.scorekeeper_id
+
+
+def trailing_point(match: Match) -> PointEvent | None:
+    """The match's last persisted point, or ``None``."""
+    return PointEvent.objects.filter(match=match).order_by("-sequence").first()
+
+
+def check_undo_expects(
+    match: Match, op: dict[str, Any], trailing: PointEvent | None
+) -> str | None:
+    """``STALE_UNDO`` when the undo must not apply, else ``None`` (KAN-150).
+
+    ``expects`` is the ``PointEvent.sequence`` the client believes is the
+    trailing point; another phone's point may have landed since. In a shared
+    match it is required -- an unconditional undo could delete the other
+    phone's point. In a single-scorer match it is optional, so a client that
+    does not send it behaves exactly as before.
+    """
+    expects = op.get("expects")
+    if expects is None:
+        return STALE_UNDO if match.is_shared else None
+    if trailing is None or trailing.sequence != expects:
+        return STALE_UNDO
+    return None
+
+
 def _undo(match: Match, op: dict[str, Any], scorer: LiveScorer | None) -> OpResult:
     """Undo the most recent point (KAN-10).
 
     If the undone point ended a game, the trailing Game row is deleted and
-    the in-progress game state is restored from the event log.
+    the in-progress game state is restored from the event log. Either scorer
+    may undo the trailing point, whoever recorded it; ``expects`` is what
+    makes that safe (:func:`check_undo_expects`).
     """
     if not match.is_live or not match.live_state:
         return _not_live()
+
+    trailing = trailing_point(match)
+    stale = check_undo_expects(match, op, trailing)
+    if stale:
+        return _reject(match, op, scorer, stale)
 
     # Whether there was anything to undo at all. undo_last_point() is a no-op
     # on an empty log and returns the state unchanged, and the persisted row
@@ -490,9 +552,6 @@ def _undo(match: Match, op: dict[str, Any], scorer: LiveScorer | None) -> OpResu
         # Unlike the write path, this is NOT best-effort. A failed undo rolls
         # back and the scorekeeper taps again; a log that keeps a point the
         # umpire retracted is silently wrong forever.
-        trailing = (
-            PointEvent.objects.filter(match=match).order_by("-sequence").first()
-        )
         if trailing is not None:
             trailing.delete()
 

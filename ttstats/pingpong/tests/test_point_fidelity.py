@@ -39,9 +39,9 @@ from django.urls import reverse
 
 from pingpong import live_scoring as ls
 from pingpong import views
-from pingpong.models import Game, Match, PointEvent, Side
+from pingpong.models import Game, LiveScorer, Match, PointEvent, Side
 
-from .conftest import MatchFactory, PlayerFactory
+from .conftest import MatchFactory, PlayerFactory, live_match
 
 # Seeds are fixed so a failure is reproducible and CI runtime is bounded. Each
 # seed is an independent generated match; widen the range to search harder.
@@ -461,12 +461,14 @@ def match_record(match):
     m = Match.all_objects.get(pk=match.pk)
     live_state = m.live_state and {
         # Timestamps are wall-clock; everything else must agree. The events
-        # themselves are compared without theirs.
+        # themselves are compared without theirs, and without ``by``: two
+        # matches compared here have different scorers, so attribution is
+        # asserted on its own (``assert_attribution``).
         k: v for k, v in m.live_state.items() if k not in ("events", "last_point_at")
     }
     if live_state is not None:
         live_state["events"] = [
-            {k: v for k, v in e.items() if k != "t"}
+            {k: v for k, v in e.items() if k not in ("t", "by")}
             for e in m.live_state.get("events", [])
         ]
     return {
@@ -688,3 +690,406 @@ class TestTheHarnessCatchesABatchServerIgnoringSeq:
 
         with pytest.raises(AssertionError, match="duplicate delivery changed"):
             assert_same_record(match_record(match), match_record(reference))
+
+
+# ---------------------------------------------------------------------------
+# Two streams (KAN-150 / KAN-161)
+#
+# Two phones score one match: A (the host) on side 1, B (the guest) on side 2,
+# each with its own seq stream. A generated points script is split by side
+# into A's points and B's, and delivered in a seeded interleaving that keeps
+# each stream's order, mixed with what two writers really send: undos with a
+# correct ``expects`` and with a stale (or missing) one, the losing ``start``,
+# a ``side_switch`` from both, and taps for the other side.
+#
+# The oracle is ``live_scoring`` replaying the same arrival order. Whatever
+# the delivery (single-op endpoints with re-sends, or ``live_sync`` in one of
+# four batch splits), the rows (side, game, server, scores, ``recorded_by``)
+# must be the oracle's, the match completes at most once, and ``rev`` equals
+# the number of applied ops. A single-stream replay through the endpoints
+# (one solo host, the same arrival order) must leave the same rows too.
+# Batches never span the other stream's ops, so arrival order is the
+# script's; reordering itself is the documented game-boundary hazard
+# (docs/decisions/kan-148-shared-scoring.md), not something to test away.
+# ---------------------------------------------------------------------------
+
+TWO_STREAM_SEEDS = list(range(50))
+TWO_STREAM_MAX_POINTS = 70
+BATCH_MODES = ("one_op_batches", "random_chunks", "one_batch_per_run", "overlapping_resends")
+# One delivery per seed, rotating. Five is coprime with the starting server
+# (seed % 2) and best-of (seed % 3), so every delivery meets both servers and
+# both lengths; each runs on 10 of the 50 seeds. Two deliveries per seed
+# would cost ~25 s more for the same coverage of the server code.
+DELIVERIES = ("single_op_with_resends",) + BATCH_MODES
+
+
+def _interleave(first, second, rng):
+    """A random merge of two lists that keeps each list's own order."""
+    out, i, j = [], 0, 0
+    while i < len(first) or j < len(second):
+        if j >= len(second) or (i < len(first) and rng.random() < 0.5):
+            out.append(first[i])
+            i += 1
+        else:
+            out.append(second[j])
+            j += 1
+    return out
+
+
+def two_stream_script(seed, best_of):
+    """Ops in arrival order, the oracle's final state, and its rows.
+
+    Each op is ``{"stream", "seq", "type", ..., "applied", "shared_only"}``:
+    ``applied`` is the oracle's verdict and ``shared_only`` marks an op whose
+    refusal holds only in a shared match (a wrong-side tap, an undo without
+    ``expects``), left out of the single-stream replay. Rows are
+    ``(game, scoring side, serving side, team1, team2, stream)``.
+    """
+    rng = random.Random(seed)
+    initial_server = "team1" if seed % 2 == 0 else "team2"
+
+    # A points script, split by side into the two streams, then interleaved.
+    sides = [rng.choice(("team1", "team2")) for _ in range(TWO_STREAM_MAX_POINTS)]
+    stream_a = [s for s in sides if s == "team1"]
+    stream_b = [s for s in sides if s == "team2"]
+    arrival = _interleave(stream_a, stream_b, rng)
+
+    starter = rng.choice(("A", "B"))
+    ops = [{
+        "stream": starter, "type": "start", "initial_server": initial_server,
+        "applied": True, "shared_only": False,
+    }]
+    oracle = ls.set_initial_server(ls.initial_state(best_of), initial_server)
+    rows = []
+    late_start = rng.random() < 0.6
+    switched = False
+
+    def emit(stream, op_type, applied, shared_only=False, **fields):
+        ops.append({"stream": stream, "type": op_type, "applied": applied,
+                    "shared_only": shared_only, **fields})
+
+    for side in arrival:
+        if ls.is_match_complete(oracle):
+            break
+        if late_start and rng.random() < 0.2:
+            # The other phone's start lost the race: ALREADY_STARTED.
+            emit("B" if starter == "A" else "A", "start", False,
+                 initial_server=rng.choice(("team1", "team2")))
+            late_start = False
+        if ls.should_prompt_side_switch(oracle) and not switched:
+            for stream in rng.sample(("A", "B"), 2):
+                emit(stream, "side_switch", True)
+            oracle = ls.confirm_side_switch(oracle)
+            switched = True
+        roll = rng.random()
+        if oracle["events"] and roll < 0.14:
+            stream = rng.choice(("A", "B"))
+            if rng.random() < 0.65:
+                emit(stream, "undo", True, expects=len(rows))
+                oracle, _ = ls.undo_last_point(oracle)
+                rows.pop()
+            elif rng.random() < 0.75:
+                # The other phone's point landed after this one looked.
+                stale = len(rows) - 1 if len(rows) > 1 else len(rows) + 1
+                emit(stream, "undo", False, expects=stale)
+            else:
+                emit(stream, "undo", False, shared_only=True)
+        elif roll < 0.17:
+            stream = rng.choice(("A", "B"))
+            emit(stream, "point", False, shared_only=True,
+                 side="team2" if stream == "A" else "team1")
+        stream = "A" if side == "team1" else "B"
+        serving = ls.current_server(oracle)
+        game = oracle["current_game_number"]
+        oracle, completed = ls.apply_point(oracle, side)
+        t1, t2 = (
+            (completed["team1_score"], completed["team2_score"]) if completed
+            else (oracle["team1_points"], oracle["team2_points"])
+        )
+        rows.append((game, side, serving, t1, t2, stream))
+        emit(stream, "point", True, side=side)
+
+    counters = {"A": 0, "B": 0}
+    for op in ops:
+        counters[op["stream"]] += 1
+        op["seq"] = counters[op["stream"]]
+    return ops, oracle, rows
+
+
+def _wire(op):
+    """The op as a client sends it."""
+    body = {"seq": op["seq"], "type": op["type"]}
+    for key in ("side", "initial_server", "expects"):
+        if key in op:
+            body[key] = op[key]
+    return body
+
+
+def _send_single(client, match, op):
+    body = {k: v for k, v in _wire(op).items() if k != "type"}
+    return _post(client, reverse(f"pingpong:{OP_ENDPOINTS[op['type']]}", args=[match.pk]), body)
+
+
+def deliver_two_streams_single(clients, match, ops, rng):
+    """Every op through the single-op endpoints, with seeded re-sends."""
+    sent = {"A": [], "B": []}
+    for op in ops:
+        resp = _send_single(clients[op["stream"]], match, op)
+        assert resp.status_code == (200 if op["applied"] else 409), (op, resp.content)
+        sent[op["stream"]].append(op)
+        if rng.random() < 0.25:
+            stream = rng.choice([s for s in sent if sent[s]])
+            again = rng.choice(sent[stream])
+            assert _send_single(clients[stream], match, again).status_code == 200
+    for stream, done in sent.items():
+        if done:
+            assert _send_single(clients[stream], match, done[-1]).status_code == 200
+
+
+def _sync_until_applied(client, match, batch):
+    """Post a batch until its last seq is applied: a rule rejection stops a
+    batch after consuming its seq, so the client posts the rest again."""
+    last = batch[-1]["seq"]
+    for _ in range(len(batch) + 1):
+        data = _sync(client, match, batch)
+        if data["applied_seq"] >= last:
+            return data
+    raise AssertionError(f"batch never applied: {batch}")
+
+
+def two_stream_batches(ops, mode, rng):
+    """``[(stream, batch)]`` in delivery order for one of the four splits.
+
+    Batches are cut inside a *run* (consecutive ops of one stream in arrival
+    order), so the arrival order is the script's whatever the split.
+    """
+    runs = []
+    for op in ops:
+        if runs and runs[-1][0] == op["stream"]:
+            runs[-1][1].append(op)
+        else:
+            runs.append((op["stream"], [op]))
+
+    own = {"A": [], "B": []}  # each stream's ops so far, for overlaps
+    batches = []
+    for stream, run in runs:
+        wired = [_wire(op) for op in run]
+        if mode == "one_op_batches":
+            batches += [(stream, [w]) for w in wired]
+        elif mode == "one_batch_per_run":
+            batches.append((stream, wired))
+        else:
+            i = 0
+            while i < len(wired):
+                size = rng.randint(1, 8)
+                chunk = wired[i:i + size]
+                if mode == "overlapping_resends":
+                    # Restart up to 4 of this stream's earlier ops back.
+                    earlier = own[stream] + wired[:i]
+                    chunk = earlier[max(0, len(earlier) - rng.randint(0, 4)):] + chunk
+                batches.append((stream, chunk))
+                i += size
+        own[stream] += wired
+    if mode == "overlapping_resends":
+        # ...and each whole outbox once more at the end.
+        batches += [(stream, own[stream]) for stream in ("A", "B") if own[stream]]
+    return batches
+
+
+def deliver_two_streams_batched(clients, match, ops, mode, rng):
+    for stream, batch in two_stream_batches(ops, mode, rng):
+        _sync_until_applied(clients[stream], match, batch)
+
+
+def _shared_match(auth_client, best_of):
+    match = live_match(best_of=best_of, shared=True)
+    players = {
+        "A": LiveScorer.objects.get(match=match, role=LiveScorer.Role.HOST).player,
+        "B": LiveScorer.objects.get(match=match, role=LiveScorer.Role.GUEST).player,
+    }
+    return match, players, {s: auth_client(p.user) for s, p in players.items()}
+
+
+def _point_rows(match):
+    return list(
+        PointEvent.objects.filter(match=match).values_list(
+            "sequence", "game_number", "scoring_side", "serving_side",
+            "team1_score", "team2_score", "recorded_by",
+        )
+    )
+
+
+def _without_attribution(state):
+    if state is None:
+        return None
+    out = {k: v for k, v in state.items() if k not in ("events", "last_point_at")}
+    out["events"] = [
+        {k: v for k, v in e.items() if k not in ("t", "by")} for e in state["events"]
+    ]
+    return out
+
+
+def assert_two_stream_record(match, *, ops, oracle, rows, players, mode):
+    """The delivered match is what the oracle says the arrival order makes."""
+    actual = _point_rows(match)
+    expected = [
+        (i + 1, game, Side.from_live(side), Side.from_live(serving), t1, t2)
+        for i, (game, side, serving, t1, t2, _) in enumerate(rows)
+    ]
+    assert [r[:6] for r in actual] == expected, (
+        f"{mode}: two-stream delivery diverged from the oracle:\n"
+        f" actual   {[r[:6] for r in actual]}\n expected {expected}"
+    )
+    assert [r[6] for r in actual] == [players[r[5]].pk for r in rows], (
+        f"{mode}: attribution diverged"
+    )
+
+    m = Match.all_objects.get(pk=match.pk)
+    complete = ls.is_match_complete(oracle)
+    assert m.live_rev == sum(op["applied"] for op in ops), f"{mode}: rev != applied ops"
+    for stream, player in players.items():
+        scorer = LiveScorer.objects.get(match=m, player=player)
+        assert scorer.applied_seq == sum(op["stream"] == stream for op in ops), mode
+    expected_state = None if complete else _without_attribution(oracle)
+    assert _without_attribution(m.live_state) == expected_state, mode
+    assert m.is_live is not complete, mode
+    if complete:
+        assert m.winner_side == Side.from_live(ls.match_winner(oracle)), mode
+    assert _completions(m) == (2 if complete else 0), mode
+
+
+@pytest.mark.django_db
+class TestTwoStreams:
+
+    @pytest.mark.parametrize("seed", TWO_STREAM_SEEDS)
+    def test_interleaved_streams_match_the_oracle(self, auth_client, seed):
+        """Single-op delivery with re-sends or one of the four batch splits,
+        rotating with the seed (``DELIVERIES``)."""
+        from unittest import mock
+
+        from pingpong import point_rollups
+
+        best_of = 3 if seed % 3 else 5
+        ops, oracle, rows = two_stream_script(seed, best_of)
+        delivery = DELIVERIES[seed % len(DELIVERIES)]
+
+        match, players, clients = _shared_match(auth_client, best_of)
+        rng = random.Random(seed)
+        with mock.patch.object(
+            point_rollups, "rebuild_match_summaries",
+            wraps=point_rollups.rebuild_match_summaries,
+        ) as rollup:
+            if delivery == "single_op_with_resends":
+                deliver_two_streams_single(clients, match, ops, rng)
+            else:
+                deliver_two_streams_batched(clients, match, ops, delivery, rng)
+        assert_two_stream_record(
+            match, ops=ops, oracle=oracle, rows=rows, players=players, mode=delivery
+        )
+        # Exactly one completion, whatever the delivery.
+        assert rollup.call_count == (1 if ls.is_match_complete(oracle) else 0), delivery
+
+    def test_every_delivery_meets_both_servers_and_both_lengths(self):
+        seen = {
+            (DELIVERIES[s % len(DELIVERIES)], s % 2, 3 if s % 3 else 5)
+            for s in TWO_STREAM_SEEDS
+        }
+        assert seen == {(d, p, b) for d in DELIVERIES for p in (0, 1) for b in (3, 5)}
+
+    @pytest.mark.parametrize("seed", TWO_STREAM_SEEDS[::7])
+    def test_a_single_stream_replay_of_the_arrival_order_leaves_the_same_rows(
+        self, auth_client, seed
+    ):
+        best_of = 3 if seed % 3 else 5
+        ops, _, _ = two_stream_script(seed, best_of)
+
+        shared, _, clients = _shared_match(auth_client, best_of)
+        deliver_two_streams_batched(
+            clients, shared, ops, "one_batch_per_run", random.Random(seed)
+        )
+
+        solo = live_match(best_of=best_of)
+        single = [
+            {**_wire(op), "seq": i + 1}
+            for i, op in enumerate(o for o in ops if not o["shared_only"])
+        ]
+        _sync_until_applied(auth_client(solo.scorekeeper.user), solo, single)
+
+        assert [r[:6] for r in _point_rows(solo)] == [r[:6] for r in _point_rows(shared)]
+        assert match_record(solo)["games"] == match_record(shared)["games"]
+
+    def test_the_scripts_exercise_every_two_writer_case(self):
+        seen = set()
+        for seed in TWO_STREAM_SEEDS:
+            ops, oracle, rows = two_stream_script(seed, 3 if seed % 3 else 5)
+            for op in ops:
+                if op["type"] == "undo":
+                    if op["applied"]:
+                        seen.add("undo applied")
+                    elif "expects" in op:
+                        seen.add("stale expects")
+                    else:
+                        seen.add("undo without expects")
+                elif op["type"] == "start" and not op["applied"]:
+                    seen.add("second start")
+                elif op["type"] == "side_switch":
+                    seen.add("side switch from both")
+                elif op["type"] == "point" and not op["applied"]:
+                    seen.add("wrong side")
+            if ls.is_match_complete(oracle):
+                seen.add("complete")
+            if ops[0]["stream"] == "B":
+                seen.add("guest started")
+            if any(r[0] > 1 for r in rows):
+                seen.add("second game")
+        assert seen == {
+            "undo applied", "stale expects", "undo without expects", "second start",
+            "side switch from both", "wrong side", "complete", "guest started",
+            "second game",
+        }
+
+
+@pytest.mark.django_db
+class TestTheTwoStreamHarnessCatchesBrokenWriters:
+    """Proof the two-stream harness has teeth: each broken writer below is
+    detected by ``assert_two_stream_record``."""
+
+    SEED = 5
+
+    def _deliver_unchecked(self, auth_client):
+        """Deliver seed ``SEED`` as one-op batches without waiting for a
+        rejection: a broken server may apply what should be refused."""
+        best_of = 3 if self.SEED % 3 else 5
+        ops, oracle, rows = two_stream_script(self.SEED, best_of)
+        match, players, clients = _shared_match(auth_client, best_of)
+        for stream, batch in two_stream_batches(ops, "one_op_batches", random.Random(self.SEED)):
+            _post(clients[stream], reverse("pingpong:live_sync", args=[match.pk]), {"ops": batch})
+        return dict(match=match, ops=ops, oracle=oracle, rows=rows, players=players)
+
+    def test_a_writer_dropping_recorded_by_is_detected(self, auth_client, monkeypatch):
+        original = views._record_point_event
+
+        def broken(match, **kwargs):
+            kwargs["recorded_by_id"] = None
+            return original(match, **kwargs)
+
+        monkeypatch.setattr(views, "_record_point_event", broken)
+        delivered = self._deliver_unchecked(auth_client)
+        with pytest.raises(AssertionError, match="attribution diverged"):
+            assert_two_stream_record(mode="canary", **delivered)
+
+    def test_an_undo_ignoring_expects_is_detected(self, auth_client, monkeypatch):
+        from pingpong import live_ops
+
+        monkeypatch.setattr(live_ops, "check_undo_expects", lambda match, op, trailing: None)
+        delivered = self._deliver_unchecked(auth_client)
+        assert any(
+            op["type"] == "undo" and "expects" in op and not op["applied"]
+            for op in delivered["ops"]
+        ), "the canary seed must carry a stale expects"
+        with pytest.raises(AssertionError, match="diverged from the oracle"):
+            assert_two_stream_record(mode="canary", **delivered)
+
+    def test_the_unbroken_server_passes_the_same_check(self, auth_client):
+        """The control: the canaries fail because of the break, not the setup."""
+        assert_two_stream_record(mode="control", **self._deliver_unchecked(auth_client))

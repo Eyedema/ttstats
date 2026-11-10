@@ -9,6 +9,7 @@ paths:
   - "ttstats/pingpong/tests/test_live_longpoll.py"
   - "ttstats/pingpong/services.py"
   - "ttstats/pingpong/tests/test_live_scorers.py"
+  - "ttstats/pingpong/tests/test_live_multiwriter.py"
   - "ttstats/pingpong/management/commands/rebuild_point_rollups.py"
   - "ttstats/pingpong/management/commands/point_storage.py"
   - "ttstats/pingpong/templates/pingpong/scoreboard.html"
@@ -59,6 +60,9 @@ paths:
   with `config` = `rules_config()`, which the template tag
   `{% live_rules_config %}` (`{% load live_tags %}`) emits via `json_script`
   as `#live-rules-config`. The JS test fails on any numeric literal but 0/1/2.
+- An event may carry `by` (who recorded the point, KAN-150): an opaque
+  pass-through (`apply_point(..., by=)` / `applyPoint(state, side, {by})`),
+  read by no rule. Vector ops with an author are `["point", side, now, by]`.
 - Same state shape as `Match.live_state`; functions never mutate their input;
   Python's tuples come back as `[state, extra]`; refused ops throw with
   Python's message.
@@ -89,6 +93,9 @@ row per point, written when the point is applied**, never reconstructed later.
 - **Undo guards on `had_events`**: the in-memory log is capped and the persisted
   one isn't, so without it undo past the cap deletes points never undone.
 - `sequence` is `MAX(sequence) + 1` under the existing `select_for_update()` lock.
+- **`recorded_by` is set on every new point** (KAN-150): the stream's player
+  (`live_ops.recorded_by`; the scorekeeper on a row-less match), also stored
+  as the event's `by`. Rows from before it stay null; never backfill them.
 - **`Side.from_live()` / `Side.to_live()` are the only translation** between
   `"team1"`/`"team2"` and `Side`.
 - **`tests/test_point_fidelity.py` is the guard.** It replays generated points
@@ -98,6 +105,13 @@ row per point, written when the point is applied**, never reconstructed later.
   It also replays every script with duplicate re-sends and through
   `live_sync` in four batch splits (1-op, random chunks, one batch,
   overlapping re-sends): same rows, exactly one completion.
+  **Two streams** (KAN-150, `TestTwoStreams`, 50 seeds): A's and B's points
+  interleaved with stale/correct `expects`, a losing `start`, both
+  `side_switch`es and wrong-side taps; one delivery per seed (single-op with
+  re-sends or a batch split, rotating by 5). The oracle is `live_scoring` on
+  the same arrival order: rows incl. `recorded_by`, one completion, `rev` =
+  applied ops. Canaries: a writer dropping `recorded_by`, an undo ignoring
+  `expects` (`live_ops.check_undo_expects`).
 - **No starting server means no point.** `apply_point()` raises unless the state
   is `started` **and** names `initial_server`; `live_ops` rejects the point (409) before
   writing. `PointEvent.serving_side` stays nullable only as a defensive fallback.
@@ -146,11 +160,24 @@ and the most dangerous duplicate is a retried match point.
 - **A rule rejection consumes its seq** (the client drops the op and carries
   on); an op refused because the match is not live does not.
 - Undo is an op with its own seq, never a decrement.
+- **A scorer without `can_score_both` scores only their own side**: anything
+  else is 409 `not your side`, a rule rejection (consumes the seq). Solo hosts
+  have `can_score_both=True`.
+- **Conditional undo** (KAN-150): an undo may carry `expects`, the
+  `PointEvent.sequence` it believes is trailing; a mismatch (or nothing to
+  undo) is 409 `stale undo`, a rule rejection. **Required in a shared match**
+  (missing = stale), optional on a solo one. Either scorer may undo the
+  trailing point, whoever recorded it. `expects` must be an int >= 1 (400).
+- Two `start`s: the first wins, the second is `ALREADY_STARTED`. Two
+  `side_switch`es both apply (it sets a flag). Points apply in **arrival**
+  order: `docs/decisions/kan-148-shared-scoring.md`.
 - `seq` must be an int >= 1; bools and strings are 400.
 - No `seq` is the legacy contract, applied unconditionally and logged. Remove
   once no cached page sends it.
 - `_scoreboard_payload()` carries `applied_seq` (the caller's stream, 0 before
-  any sequenced op), `rev`, `scorers` (presence) and `me` (null without a row).
+  any sequenced op), `rev`, `scorers` (presence), `me` (null without a row)
+  and `last_point` (`{sequence, side, by}` of the trailing row, or null): the
+  sequence a conditional undo sends as `expects`.
   Choices: `docs/decisions/kan-149-per-scorer-streams.md`.
 
 ## `/live/state/`: instant answer, 204, or a held long-poll (KAN-165, KAN-168)
@@ -185,7 +212,7 @@ club check run **before** any wait; `last_seen_at` is still stamped.
 ## The batch sync endpoint (`live_sync`, KAN-88)
 
 `POST matches/<pk>/live/sync/` with `{"ops": [{"seq", "type", "side" |
-"initial_server", "client_ts"?}, ...]}`; the scoreboard gets the URL as
+"initial_server", "client_ts"?, "expects"?}, ...]}`; the scoreboard gets the URL as
 `data-sync-url`.
 
 - **Validate the whole batch first** (400; more than `SYNC_MAX_OPS` = 500 is

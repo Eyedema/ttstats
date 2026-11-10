@@ -986,6 +986,16 @@ class PointEvent(models.Model):
     # server minutes late, so ``created_at`` (server time) stops meaning "when
     # it happened"; momentum and duration features should prefer this when set.
     client_recorded_at = models.DateTimeField(null=True, blank=True)
+    # Who tapped the point (KAN-150): the scorer whose stream applied it, on
+    # every match including single-scorer ones. Null on rows from before the
+    # field existed (never backfilled) and if the player is deleted.
+    recorded_by = models.ForeignKey(
+        "Player",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="recorded_points",
+    )
 
     class Meta:
         ordering = ["sequence"]
