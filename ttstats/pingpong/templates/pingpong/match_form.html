@@ -406,6 +406,21 @@
 
                 <div class="border-t pt-6"></div>
 
+                {% if not object %}
+                {% feature_enabled "shared_scoring" as shared_scoring_on %}
+                {% if shared_scoring_on %}
+                {# KAN-157: only "Score live with a shared link" reads it. Checked by default; unchecked posts nothing = off. #}
+                <label class="singles-only flex items-start gap-3 cursor-pointer" data-testid="lobby-open-to-club">
+                    <input type="checkbox" name="open_to_club" value="1" checked
+                        class="mt-0.5 w-5 h-5 rounded border-input text-primary focus:ring-ring">
+                    <span class="text-sm">
+                        <span class="block font-medium">Let anyone in the club join</span>
+                        <span class="block text-muted-foreground">With a shared link, your match also shows on clubmates' Today, so they can join without scanning.</span>
+                    </span>
+                </label>
+                {% endif %}
+                {% endif %}
+
 
                 <!-- Form Actions -->
                 <div class="flex flex-col sm:flex-row gap-3 sm:justify-end">

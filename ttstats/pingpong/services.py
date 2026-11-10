@@ -57,7 +57,7 @@ def create_live_match(
     return match
 
 
-def open_lobby(host, *, best_of, location=None):
+def open_lobby(host, *, best_of, location=None, open_to_club=True):
     """Open a shared-scoring lobby for ``host`` (KAN-151), closing any other.
 
     At most one open lobby per host: an earlier open one is cancelled (or
@@ -81,7 +81,11 @@ def open_lobby(host, *, best_of, location=None):
                     )
                 )
                 lobby = LiveLobby(
-                    host=host, best_of=best_of, location=location, created_at=now
+                    host=host,
+                    best_of=best_of,
+                    location=location,
+                    open_to_club=open_to_club,
+                    created_at=now,
                 )
                 lobby.save()
                 return lobby

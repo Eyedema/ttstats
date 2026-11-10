@@ -54,6 +54,7 @@ urlpatterns = [
     path("live/lobby/<int:pk>/", live_lobby_views.LiveLobbyView.as_view(), name="live_lobby"),
     path("live/lobby/<int:pk>/status/", live_lobby_views.LiveLobbyStatusView.as_view(), name="live_lobby_status"),
     path("live/lobby/<int:pk>/cancel/", live_lobby_views.LiveLobbyCancelView.as_view(), name="live_lobby_cancel"),
+    path("live/lobby/<int:pk>/join/", live_lobby_views.LiveLobbyClubJoinView.as_view(), name="live_lobby_join"),
     path("live/join/", live_lobby_views.LiveJoinResumeView.as_view(), name="live_join_resume"),
     path("live/join/<str:token>/", live_lobby_views.LiveJoinView.as_view(), name="live_join"),
     path("matches/schedule/", views.ScheduledMatchCreateView.as_view(), name="match_schedule"),

@@ -58,6 +58,35 @@ before you read what.
   </section>
   {% endfor %}
 
+  {% comment %}
+  Waiting for an opponent (KAN-157): a clubmate started a shared-scoring
+  lobby and opened it to the club. Not amber -- nobody is playing yet -- and
+  no auto-refresh: it appears on the next load or pull-to-refresh.
+  {% endcomment %}
+  {% if waiting_lobbies %}
+  <section data-testid="waiting-lobbies">
+    <h2 class="label-cap mb-2 block">Waiting for an opponent</h2>
+    <span class="rule mb-3"></span>
+
+    <div class="space-y-2">
+      {% for lobby in waiting_lobbies %}
+      <article class="surface flex" data-testid="waiting-lobby">
+        <span class="{{ lobby.host|hue }} hue-bar w-1"></span>
+        <div class="flex min-w-0 flex-1 items-center gap-3 p-2.5">
+          <div class="min-w-0 flex-1">
+            <p class="text-[15px] font-extrabold leading-tight">{{ lobby.host.name }} is waiting for an opponent</p>
+            <p class="mt-0.5 text-[12px] font-semibold text-muted-foreground">
+              Best of {{ lobby.best_of }}{% if lobby.location %} · {{ lobby.location.name }}{% endif %} · started {{ lobby.created_at|timesince }} ago
+            </p>
+          </div>
+          <a href="{% url 'pingpong:live_lobby_join' lobby.pk %}" class="btn-paddle min-h-[44px] flex-none px-4 text-[13px]">Join</a>
+        </div>
+      </article>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
   {# ---------------------------------------------------------------- #}
   {# Waiting on you. Only matches this player still has to act on -- a #}
   {# match waiting on the *other* player is not waiting on you, and    #}

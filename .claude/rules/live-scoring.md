@@ -232,6 +232,10 @@ The join link's credential rules are in `clubs.md`.
   polls the status every 2 s while visible and reveals Share/Copy only where
   supported; they start `hidden`, held by `[data-live-lobby] [hidden]` in
   app.css. Lobby, status and join pages are `never_cache` (no-store).
+- **Today lists clubmates' open lobbies** (KAN-157, `lobbies_waiting_for`):
+  open, unexpired, `open_to_club`, active club, not the viewer's, newest 3.
+  Queried on every load (no cache to invalidate), never amber. Choices:
+  `docs/decisions/kan-151-152-live-lobby.md`.
 - e2e: the create/cancel POSTs redirect, so `applyProdCSP`'s `route.fetch`
   keeps the old URL; `releaseProdCSP` first or navigate to the lobby URL.
 

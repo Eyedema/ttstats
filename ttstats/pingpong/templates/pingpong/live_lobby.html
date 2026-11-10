@@ -52,6 +52,7 @@ only when the browser supports them: they fail closed.
   <section class="surface p-4 space-y-1 text-[14px] font-semibold">
     <p>Best of {{ lobby.best_of }}{% if lobby.location %} · {{ lobby.location.name }}{% endif %}</p>
     <p class="text-muted-foreground">Expires at <span class="n">{{ lobby.expires_at|time:"H:i" }}</span></p>
+    <p class="text-muted-foreground" data-testid="lobby-visibility">{% if lobby.open_to_club %}Clubmates can also join from Today.{% else %}Only someone with this code can join.{% endif %}</p>
     <p class="text-muted-foreground" role="status" aria-live="polite" data-lobby-status>Waiting for your opponent…</p>
   </section>
   {% endif %}

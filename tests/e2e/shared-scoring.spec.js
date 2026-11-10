@@ -148,4 +148,28 @@ test.describe('shared scoring lobby', () => {
     await tap(page.getByRole('button', { name: 'Pick opponent instead' }));
     await expect(page).toHaveURL(/\/pingpong\/matches\/add\/\?best_of=\d/);
   });
+
+  test('"Let anyone in the club join" is on by default and reaches the lobby', async ({ page }) => {
+    // KAN-157. The Today card itself is server-rendered (pytest covers it).
+    await page.goto('/pingpong/matches/add/');
+    const box = page.getByTestId('lobby-open-to-club').locator('input[type=checkbox]');
+    await expect(box).toBeVisible();
+    await expect(box).toBeChecked();
+    await expectNoHorizontalScroll(page);
+    await openLobby(page);
+    await expect(page.getByTestId('lobby-visibility')).toHaveText(
+      'Clubmates can also join from Today.',
+    );
+  });
+
+  test('unticking it keeps the lobby to code holders', async ({ page }) => {
+    await page.goto('/pingpong/matches/add/');
+    await page.getByTestId('lobby-open-to-club').locator('input[type=checkbox]').uncheck();
+    await page.getByTestId('score-shared').click();
+    const again = page.getByTestId('check-again');
+    await page.goto(await again.getAttribute('href'));
+    await expect(page.getByTestId('lobby-visibility')).toHaveText(
+      'Only someone with this code can join.',
+    );
+  });
 });

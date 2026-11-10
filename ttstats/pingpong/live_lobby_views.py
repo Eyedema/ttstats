@@ -28,6 +28,7 @@ from django_ratelimit.decorators import ratelimit
 
 from . import flags
 from .forms import LiveLobbyForm
+from .managers import scope_to_active_club
 from .models import LiveLobby, Player
 from .services import cancel_lobby, open_lobby, start_shared_match
 
@@ -96,6 +97,7 @@ class LiveLobbyCreateView(LoginRequiredMixin, View):
             host,
             best_of=form.cleaned_data["best_of"],
             location=form.cleaned_data.get("location"),
+            open_to_club=form.cleaned_data["open_to_club"],
         )
         return redirect("pingpong:live_lobby", pk=lobby.pk)
 
@@ -194,14 +196,17 @@ def find_lobby(token):
     return lobby
 
 
-def _join_page(request, lobby, state, *, status=200, **extra):
+def _join_page(request, lobby, state, *, status=200, join_path=None, **extra):
+    """``join_path`` is where the confirm form posts and "Not you?" returns:
+    the token URL by default, the token-free club route from Today (KAN-157),
+    which must never put the token on the page."""
     context = {"lobby": lobby, "state": state, **extra}
     if lobby is not None:
-        context["join_path"] = reverse("pingpong:live_join", args=[lobby.token])
+        context["join_path"] = join_path or reverse("pingpong:live_join", args=[lobby.token])
     return render(request, "pingpong/live_join.html", context, status=status)
 
 
-def _resolve_join(request, lobby):
+def _resolve_join(request, lobby, join_path=None):
     """What this visitor sees for this lobby: a response, or None to mean
     "may join" (the confirm page on GET, the join itself on POST)."""
     if lobby is None:
@@ -215,9 +220,13 @@ def _resolve_join(request, lobby):
         # The rejoin path: whoever is on the match goes back to it.
         if player is not None and lobby.match_id and player.pk in _match_scorer_ids(lobby):
             return redirect("pingpong:live_scoreboard", pk=lobby.match_id)
-        return _join_page(request, lobby, "ended", status=410, reason=lobby.ended_reason)
+        return _join_page(
+            request, lobby, "ended", status=410, reason=lobby.ended_reason, join_path=join_path
+        )
     if status != LiveLobby.Status.OPEN:
-        return _join_page(request, lobby, "ended", status=410, reason=lobby.ended_reason)
+        return _join_page(
+            request, lobby, "ended", status=410, reason=lobby.ended_reason, join_path=join_path
+        )
 
     if not user.is_authenticated:
         request.session[PENDING_LIVE_JOIN_SESSION_KEY] = lobby.token
@@ -232,11 +241,11 @@ def _resolve_join(request, lobby):
         )
 
     if player is not None and player.pk == lobby.host_id:
-        return _join_page(request, lobby, "own")
+        return _join_page(request, lobby, "own", join_path=join_path)
     if player is None or (
         lobby.club_id is not None and not lobby.club.user_is_member(user)
     ):
-        return _join_page(request, lobby, "not_member")
+        return _join_page(request, lobby, "not_member", join_path=join_path)
     return None
 
 
@@ -277,6 +286,97 @@ class LiveJoinView(View):
             lobby.refresh_from_db()
             return _resolve_join(request, lobby)
         request.session.pop(PENDING_LIVE_JOIN_SESSION_KEY, None)
+        messages.success(request, "You're in. Score your side.")
+        return redirect("pingpong:live_scoreboard", pk=match.pk)
+
+
+# ---------------------------------------------------------------------------
+# Join from Today, without the token (KAN-157)
+# ---------------------------------------------------------------------------
+
+# How many waiting lobbies Today lists. Past this it is a list, not a card.
+TODAY_LOBBY_LIMIT = 3
+
+
+def _club_lobbies():
+    """Open, unexpired, open-to-club lobbies of the viewer's active club.
+
+    ``all_objects`` because the scoped manager shows a player only lobbies
+    they host; ``scope_to_active_club`` puts the club filter back (KAN-24
+    audit): staff or not, nobody sees another club's lobby.
+    """
+    from django.utils import timezone
+
+    return scope_to_active_club(
+        LiveLobby.all_objects.filter(
+            status=LiveLobby.Status.OPEN,
+            expires_at__gt=timezone.now(),
+            open_to_club=True,
+        )
+    )
+
+
+def lobbies_waiting_for(player):
+    """The Today card: lobbies this player could join, newest first.
+
+    Never the viewer's own. Read on every load, never cached: a lobby lives
+    30 minutes and a cached list would show a dead one or hide a live one.
+    """
+    if player is None:
+        return []
+    return list(
+        _club_lobbies()
+        .exclude(host=player)
+        .select_related("host", "location")
+        .order_by("-created_at")[:TODAY_LOBBY_LIMIT]
+    )
+
+
+def _club_lobby_or_404(pk):
+    """A lobby by pk for the Today join: in the viewer's active club and
+    opened to it by the host. Any status, so a joined lobby can still send
+    its players back to the scoreboard and a dead one can say why."""
+    lobby = (
+        scope_to_active_club(LiveLobby.all_objects.filter(pk=pk, open_to_club=True))
+        .select_related("host", "club", "location")
+        .first()
+    )
+    if lobby is None:
+        raise Http404
+    return lobby
+
+
+@method_decorator(never_cache, name="dispatch")
+class LiveLobbyClubJoinView(LoginRequiredMixin, View):
+    """``live/lobby/<pk>/join/``: the Today card's Join (KAN-157).
+
+    The same confirm page and the same ``start_shared_match`` as the token
+    link; only the lookup differs. Membership of the lobby's club is the
+    authorization (the active club is only ever one the viewer belongs to,
+    and ``_resolve_join`` checks membership again), so it needs no token and
+    no rate limit, and a lobby the host did not open to the club is a 404.
+    """
+
+    def get(self, request, pk):
+        lobby = _club_lobby_or_404(pk)
+        join_path = reverse("pingpong:live_lobby_join", args=[lobby.pk])
+        response = _resolve_join(request, lobby, join_path)
+        if response is not None:
+            return response
+        return _join_page(
+            request, lobby, "confirm", player=request.user.player, join_path=join_path
+        )
+
+    def post(self, request, pk):
+        lobby = _club_lobby_or_404(pk)
+        join_path = reverse("pingpong:live_lobby_join", args=[lobby.pk])
+        response = _resolve_join(request, lobby, join_path)
+        if response is not None:
+            return response
+        match = start_shared_match(lobby, request.user.player, request)
+        if match is None:
+            lobby.refresh_from_db()
+            return _resolve_join(request, lobby, join_path)
         messages.success(request, "You're in. Score your side.")
         return redirect("pingpong:live_scoreboard", pk=match.pk)
 

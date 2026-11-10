@@ -40,6 +40,31 @@ token.
 The invite accept limits GET only; a POST to the join URL is the same oracle,
 so both count against `20/h` by IP. A legitimate join is about four requests.
 
+## "Waiting for an opponent" on Today (KAN-157)
+
+- **The host opts in, default on.** The card widens who can join from "whoever
+  holds the code" to "any member of the club", so the match form has a
+  "Let anyone in the club join" checkbox, rendered checked
+  (`LiveLobby.open_to_club`, default True). An unchecked box posts nothing,
+  so a missing field reads as off (fail closed); the lobby page says which
+  it is. Default on because at the club both players are usually signed in
+  already, which is the whole point of the card.
+- **A token-free route, `live/lobby/<pk>/join/`,** reached only from the
+  card. The lookup is `LiveLobby.all_objects` + `scope_to_active_club` +
+  `open_to_club=True` (KAN-24 audit), so another club's lobby or a private
+  one is a 404 whoever asks (staff included). It renders the same
+  `live_join.html` and posts through the same `start_shared_match`; every
+  identity branch (own, ended, rejoin, lost race) is `_resolve_join`, shared
+  with the token link. The confirm form and "Not you?" point at the pk
+  route, so the token never reaches a non-host's page. No rate limit: a pk
+  is not a credential, and the route only shows what Today already lists.
+- **Not cached, not amber, not refreshed.** `DashboardView._waiting_lobbies`
+  queries on every load (Today has no fragment cache; only "Lately" is in
+  the cache and it is unaffected), so no invalidation is needed. Gated on
+  the `shared_scoring` flag like the other entry points; the route itself is
+  not, like the token link.
+- Newest first, at most 3 (`TODAY_LOBBY_LIMIT`), never the viewer's own.
+
 ## Not done here
 
 - A "Score live with a shared link" entry on Today: Today has no "Score live"

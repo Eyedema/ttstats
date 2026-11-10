@@ -1124,6 +1124,10 @@ class LiveLobby(ClubStampedMixin, models.Model):
         blank=True,
         related_name="lobby",
     )
+    # KAN-157: listed on Today for the rest of the club, who can join by pk
+    # without the token. The host opts out on the match form; off means only
+    # a token holder can join.
+    open_to_club = models.BooleanField(default=True)
     created_at = models.DateTimeField(default=timezone.now)
     expires_at = models.DateTimeField()
 

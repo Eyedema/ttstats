@@ -73,6 +73,10 @@ follows every rule above: `uuid4().hex`, `all_objects` lookup by token then
   sends it to the confirm page. Unverified players may play; verification is
   still required for the next login. Nothing else logs in an unverified user.
 - The claim is a conditional `.update()` (`start_shared_match`), like `claim()`.
+- **The Today card's join is not a credential path** (KAN-157):
+  `live/lobby/<pk>/join/` finds the lobby through `scope_to_active_club` and
+  only if the host left `open_to_club` on; it shares `_resolve_join` and
+  `start_shared_match` with the link and never renders the token.
 
 ## Club roles
 

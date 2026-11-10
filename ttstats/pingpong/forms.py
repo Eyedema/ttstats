@@ -687,6 +687,9 @@ class LiveLobbyForm(forms.Form):
     best_of = _best_of_field()
     location = forms.ModelChoiceField(queryset=Location.objects.none(), required=False)
     is_double = forms.NullBooleanField(required=False)
+    # KAN-157: "Let anyone in the club join", rendered checked. An unchecked
+    # box posts nothing, so a missing field means off: fail closed.
+    open_to_club = forms.BooleanField(required=False)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

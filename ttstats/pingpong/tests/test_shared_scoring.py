@@ -815,3 +815,277 @@ class TestSharedScoringIntegration:
         assert MatchConfirmation.objects.filter(match=match).count() == 2
         assert Match.all_objects.get(pk=match.pk).is_confirmed is True
         assert match.club == club
+
+
+# ---------------------------------------------------------------------------
+# "Waiting for an opponent" on Today, and the token-free join (KAN-157)
+# ---------------------------------------------------------------------------
+
+
+def _today(player):
+    return _client(player).get(reverse("pingpong:dashboard"))
+
+
+def _card_lobbies(resp):
+    return list(resp.context["waiting_lobbies"])
+
+
+def _club_join_url(lobby):
+    return reverse("pingpong:live_lobby_join", args=[lobby.pk])
+
+
+@pytest.mark.django_db
+class TestOpenToClubOptIn:
+    def test_the_model_defaults_to_open(self):
+        assert LiveLobbyFactory().open_to_club is True
+
+    def test_the_match_form_checkbox_is_checked_by_default(self, flags_on, club):
+        html = _client(_member(club)).get(reverse("pingpong:match_add")).content.decode()
+        box = re.search(r'<input type="checkbox" name="open_to_club"[^>]*>', html).group(0)
+        assert "checked" in box
+        assert "Let anyone in the club join" in html
+
+    def test_flag_off_no_checkbox(self, settings, club):
+        settings.FEATURE_FLAGS = {**FLAGS_ON, "shared_scoring": False}
+        html = _client(_member(club)).get(reverse("pingpong:match_add")).content.decode()
+        assert 'name="open_to_club"' not in html
+
+    @pytest.mark.parametrize("posted,expected", [({"open_to_club": "1"}, True), ({}, False)])
+    def test_create_records_the_choice(self, flags_on, club, posted, expected):
+        """Unchecked posts nothing, so a missing field is off: fail closed."""
+        host_client = _client(_member(club))
+        host_client.post(reverse("pingpong:live_lobby_create"), {"best_of": 5, **posted})
+        lobby = LiveLobby.all_objects.get()
+        assert lobby.open_to_club is expected
+        html = host_client.get(_lobby_url(lobby)).content.decode()
+        expected_text = (
+            "Clubmates can also join from Today." if expected
+            else "Only someone with this code can join."
+        )
+        assert expected_text in html
+
+    def test_open_lobby_passes_it_through(self, club):
+        lobby = open_lobby(PlayerFactory(club=club), best_of=3, open_to_club=False)
+        assert lobby.open_to_club is False
+
+
+@pytest.mark.django_db
+class TestTodayCard:
+    """The visibility matrix: same club yes; host, other club, and every
+    closed or private lobby no."""
+
+    def test_a_clubmate_sees_it(self, flags_on, club):
+        location = LocationFactory(club=club, name="Back room")
+        lobby = LiveLobbyFactory(
+            host=_member(club, name="Ubaldo"), club=club, best_of=5, location=location
+        )
+        resp = _today(_member(club))
+        assert _card_lobbies(resp) == [lobby]
+        html = resp.content.decode()
+        assert "Ubaldo is waiting for an opponent" in html
+        assert "Best of 5 · Back room · started" in html
+        assert f'href="{_club_join_url(lobby)}"' in html
+        # The token is never on Today.
+        assert lobby.token not in html
+
+    def test_not_amber(self, flags_on, club):
+        LiveLobbyFactory(host=_member(club), club=club)
+        html = _today(_member(club)).content.decode()
+        card = re.search(
+            r'<section data-testid="waiting-lobbies">.*?</section>', html, re.S
+        ).group(0)
+        for amber in ("label-live", "live-dot", "ball"):
+            assert amber not in card
+
+    def test_the_host_does_not_see_their_own(self, flags_on, club):
+        lobby = LiveLobbyFactory(host=_member(club), club=club)
+        resp = _today(lobby.host)
+        assert _card_lobbies(resp) == []
+        assert 'data-testid="waiting-lobbies"' not in resp.content.decode()
+
+    def test_another_club_does_not_see_it(self, flags_on, club):
+        LiveLobbyFactory(host=_member(club), club=club)
+        assert _card_lobbies(_today(_member(ClubFactory()))) == []
+
+    def test_staff_of_another_club_do_not_see_it(self, flags_on, club):
+        LiveLobbyFactory(host=_member(club), club=club)
+        staff = _member(ClubFactory())
+        staff.user.is_staff = True
+        staff.user.save()
+        assert _card_lobbies(_today(staff)) == []
+
+    def test_a_member_of_both_sees_it_only_in_that_club(self, flags_on, club):
+        lobby = LiveLobbyFactory(host=_member(club), club=club)
+        viewer = _member(club)
+        elsewhere = ClubFactory()
+        ClubMembershipFactory(club=elsewhere, user=viewer.user)
+        client = _client(viewer)
+        client.post(reverse("pingpong:club_switch"), {"club_id": elsewhere.pk})
+        assert _card_lobbies(client.get(reverse("pingpong:dashboard"))) == []
+        client.post(reverse("pingpong:club_switch"), {"club_id": club.pk})
+        assert _card_lobbies(client.get(reverse("pingpong:dashboard"))) == [lobby]
+
+    @pytest.mark.parametrize(
+        "closed", ["expired", "expired_unflipped", "joined", "cancelled", "private"]
+    )
+    def test_closed_or_private_lobbies_are_not_listed(self, flags_on, club, closed):
+        lobby = LiveLobbyFactory(host=_member(club), club=club)
+        rows = LiveLobby.all_objects.filter(pk=lobby.pk)
+        if closed == "expired":
+            rows.update(status=LiveLobby.Status.EXPIRED)
+        elif closed == "expired_unflipped":
+            # Lazy expiry: still "open" in the row, past expires_at.
+            rows.update(expires_at=timezone.now() - timedelta(seconds=1))
+        elif closed == "joined":
+            start_shared_match(lobby, _member(club), _FakeRequest())
+        elif closed == "cancelled":
+            cancel_lobby(lobby)
+        else:
+            rows.update(open_to_club=False)
+        assert _card_lobbies(_today(_member(club))) == []
+
+    def test_newest_first_at_most_three(self, flags_on, club):
+        now = timezone.now()
+        lobbies = [
+            LiveLobbyFactory(
+                host=_member(club), club=club, created_at=now - timedelta(minutes=m)
+            )
+            for m in (4, 1, 3, 2)
+        ]
+        listed = _card_lobbies(_today(_member(club)))
+        assert listed == [lobbies[1], lobbies[3], lobbies[2]]
+
+    def test_flag_off_no_card(self, settings, club):
+        settings.FEATURE_FLAGS = {**FLAGS_ON, "shared_scoring": False}
+        LiveLobbyFactory(host=_member(club), club=club)
+        assert _card_lobbies(_today(_member(club))) == []
+
+    def test_no_cache_hides_a_new_or_dead_lobby(self, flags_on, club):
+        """Read on every load: a lobby opened after Today was rendered shows
+        on the next load, and one cancelled since is gone."""
+        viewer = _member(club)
+        assert _card_lobbies(_today(viewer)) == []
+        lobby = LiveLobbyFactory(host=_member(club), club=club)
+        assert _card_lobbies(_today(viewer)) == [lobby]
+        cancel_lobby(lobby)
+        assert _card_lobbies(_today(viewer)) == []
+
+
+@pytest.mark.django_db
+class TestClubJoinView:
+    def _lobby(self, club, **kwargs):
+        return LiveLobbyFactory(host=_member(club, name="Ubaldo"), club=club, **kwargs)
+
+    def test_a_clubmate_gets_the_same_confirm_page_without_the_token(self, flags_on, club):
+        lobby = self._lobby(club)
+        resp = _client(_member(club, name="Marco")).get(_club_join_url(lobby))
+        html = resp.content.decode()
+        assert resp.context["state"] == "confirm"
+        assert "Ubaldo wants to score a match with you" in html
+        assert "Join as Marco?" in html
+        assert f'action="{_club_join_url(lobby)}"' in html
+        assert f'name="next" value="{_club_join_url(lobby)}"' in html
+        assert lobby.token not in html
+        assert not Match.all_objects.exists()
+        assert "no-store" in resp["Cache-Control"]
+
+    def test_post_joins_and_goes_to_the_scoreboard(self, flags_on, club):
+        lobby = self._lobby(club)
+        joiner = _member(club)
+        resp = _client(joiner).post(_club_join_url(lobby))
+        match = Match.all_objects.get()
+        assert resp.url == reverse("pingpong:live_scoreboard", args=[match.pk])
+        assert list(match.side2_players) == [joiner]
+
+    def test_not_open_to_the_club_is_404(self, flags_on, club):
+        lobby = self._lobby(club, open_to_club=False)
+        client = _client(_member(club))
+        assert client.get(_club_join_url(lobby)).status_code == 404
+        assert client.post(_club_join_url(lobby)).status_code == 404
+        assert not Match.all_objects.exists()
+
+    def test_another_clubs_member_gets_404(self, flags_on, club):
+        lobby = self._lobby(club)
+        client = _client(_member(ClubFactory()))
+        for resp in (client.get(_club_join_url(lobby)), client.post(_club_join_url(lobby))):
+            assert resp.status_code == 404
+            assert "Ubaldo" not in resp.content.decode()
+        assert not Match.all_objects.exists()
+
+    def test_anonymous_goes_to_login(self, flags_on, club):
+        lobby = self._lobby(club)
+        client = Client()
+        resp = client.get(_club_join_url(lobby))
+        assert resp.status_code == 302 and "accounts/login" in resp.url
+        assert PENDING_LIVE_JOIN_SESSION_KEY not in client.session
+
+    def test_the_host_is_told_it_is_their_own(self, flags_on, club):
+        lobby = self._lobby(club)
+        resp = _client(lobby.host).post(_club_join_url(lobby))
+        assert resp.context["state"] == "own"
+        assert not Match.all_objects.exists()
+
+    def test_a_dead_lobby_says_why(self, flags_on, club):
+        lobby = self._lobby(club)
+        cancel_lobby(lobby)
+        resp = _client(_member(club)).get(_club_join_url(lobby))
+        assert resp.status_code == 410
+        assert "This match was cancelled." in resp.content.decode()
+
+    def test_the_joiner_rejoins_the_scoreboard(self, flags_on, club):
+        lobby = self._lobby(club)
+        client = _client(_member(club))
+        client.post(_club_join_url(lobby))
+        match = Match.all_objects.get()
+        assert client.get(_club_join_url(lobby)).url == reverse(
+            "pingpong:live_scoreboard", args=[match.pk]
+        )
+
+    def test_losing_the_race_shows_already_joined(self, flags_on, club):
+        lobby = self._lobby(club)
+        first, second = _client(_member(club)), _client(_member(club))
+        first.post(_club_join_url(lobby))
+        resp = second.post(_club_join_url(lobby))
+        assert resp.status_code == 410
+        assert "Someone else has already joined" in resp.content.decode()
+        assert Match.all_objects.count() == 1
+
+
+@pytest.mark.django_db
+class TestCardAndLinkJoinAgree:
+    """One shared service: joining from the Today card and from the link
+    produce the same match and the same scorer rows."""
+
+    def _join(self, url_for):
+        club = ClubFactory()
+        location = LocationFactory(club=club)
+        host, joiner = _member(club), _member(club)
+        lobby = LiveLobbyFactory(host=host, club=club, best_of=3, location=location)
+        resp = _client(joiner).post(url_for(lobby))
+        match = Match.all_objects.get(lobby=lobby)
+        assert resp.url == reverse("pingpong:live_scoreboard", args=[match.pk])
+        who = {host.pk: "host", joiner.pk: "joiner"}
+        return {
+            "best_of": match.best_of,
+            "club": match.club_id == club.pk,
+            "location": match.location_id == location.pk,
+            "is_live": match.is_live,
+            "scorekeeper": who[match.scorekeeper_id],
+            "side1": [who[p.pk] for p in match.side1_players],
+            "side2": [who[p.pk] for p in match.side2_players],
+            "scorers": sorted(
+                (who[r.player_id], r.side, r.role, r.can_score_both, r.revoked_at)
+                for r in LiveScorer.objects.filter(match=match)
+            ),
+            "lobby": LiveLobby.all_objects.get(pk=lobby.pk).status,
+        }
+
+    def test_same_match_and_scorer_rows(self, flags_on):
+        by_card = self._join(_club_join_url)
+        by_link = self._join(_join_url)
+        assert by_card == by_link
+        assert by_card["scorers"] == [
+            ("host", Side.ONE, LiveScorer.Role.HOST, False, None),
+            ("joiner", Side.TWO, LiveScorer.Role.GUEST, False, None),
+        ]
+        assert (by_card["side1"], by_card["side2"]) == (["host"], ["joiner"])

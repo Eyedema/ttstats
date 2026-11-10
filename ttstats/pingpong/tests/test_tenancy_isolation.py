@@ -215,6 +215,10 @@ URL_EXPECTATIONS = {
     "live_lobby": ("detail", "lobby"),
     "live_lobby_status": ("detail", "lobby"),
     "live_lobby_cancel": ("detail", "lobby"),
+    # KAN-157: the Today card's token-free join. all_objects scoped to the
+    # active club, so another club's lobby pk 404s; its own host gets the
+    # "your own lobby" page.
+    "live_lobby_join": ("detail", "lobby"),
     "live_lobby_create": (
         "agnostic",
         "Creates a lobby stamped with the viewer's club; reads no club data. "

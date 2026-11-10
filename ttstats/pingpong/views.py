@@ -671,6 +671,7 @@ class DashboardView(LoginRequiredMixin, TemplateView):
         context.update(
             {
                 "live_matches": self._live_matches(player),
+                "waiting_lobbies": self._waiting_lobbies(player),
                 "pending_confirmations": self._pending_confirmations(player),
                 "rivalries": self._rivalries(player),
                 "fixtures": self._fixtures(player),
@@ -723,6 +724,22 @@ class DashboardView(LoginRequiredMixin, TemplateView):
                 }
             )
         return live
+
+    # --- Waiting for an opponent (KAN-157) ---------------------------------
+
+    def _waiting_lobbies(self, player):
+        """Clubmates' open shared-scoring lobbies you could join.
+
+        Behind the ``shared_scoring`` entry-point flag, and never cached (see
+        ``live_lobby_views.lobbies_waiting_for``). Not amber: nobody is
+        playing yet.
+        """
+        from pingpong import flags
+        from .live_lobby_views import lobbies_waiting_for
+
+        if not flags.is_enabled("shared_scoring", self.request.user):
+            return []
+        return lobbies_waiting_for(player)
 
     # --- Waiting on you -----------------------------------------------------
 
