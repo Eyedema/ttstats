@@ -77,6 +77,12 @@
      -- the part that actually says "this is the layer above" -- does not
      change, because that is the signal and this is only depth. */
   --overlay-shadow: 0 18px 40px rgb(0 0 0 / 0.55);
+
+  /* QR code ink and paper (KAN-163). Deliberately absent from the light
+     override below and never inverted for dark: phone scanners expect dark
+     modules on a light field, and many fail to read an inverted code. */
+  --qr-ink: 0 0 0;
+  --qr-paper: 255 255 255;
 }
 
 /* Only surfaces flip. Paddle, ball and every player hue are identities and are
@@ -497,6 +503,15 @@
     }
   }
 }
+
+/* --- QR code (KAN-163) ----------------------------------------------------
+   Drawn by {% qr_svg %} (templatetags/qr_tags.py): one <rect> for the paper,
+   one <path> for the dark modules, sized by its viewBox to the container's
+   width. Outside @layer because the class names live only in Python, which
+   Tailwind does not scan, and a layered rule it cannot see is purged. */
+.qr { display: block; width: 100%; height: auto; }
+.qr-ink { fill: rgb(var(--qr-ink)); }
+.qr-paper { fill: rgb(var(--qr-paper)); }
 
 /* --- Pull to refresh (KAN-126) ------------------------------------------ */
 
