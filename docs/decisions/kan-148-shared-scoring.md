@@ -110,10 +110,14 @@ the decision waits for real two-phone usage.
 
 `tests/test_point_fidelity.py::TestTwoStreams` generates a points script,
 splits it by side into stream A (side 1) and stream B (side 2), and delivers
-it in a seeded interleaving that keeps each stream's order, through the
-single-op endpoints (with re-sends) and through `live_sync` (one batch mode
-per seed: 1-op, random chunks, maximal runs, overlapping re-sends). Batches
-never span the other stream's ops, so the arrival order is the script's.
+it in a seeded interleaving that keeps each stream's order. Each of the 50
+seeds is delivered one way, rotating through five: the single-op endpoints
+with random re-sends, or `live_sync` in 1-op batches, random chunks, one
+batch per run, or overlapping re-sends. Five is coprime with the starting
+server (`seed % 2`) and the best-of (`seed % 3`), so every delivery meets
+both servers and both lengths (a rotation by four would have given each batch
+split a single starting server). Batches never span the other stream's ops,
+so the arrival order is the script's.
 Undos with a correct `expects`, undos with a stale one, the second `start`,
 both `side_switch`es and wrong-side taps are mixed in.
 
@@ -124,3 +128,8 @@ single-stream replay through the endpoints (one solo host, the same arrival
 order) must leave the same rows apart from `recorded_by`. Two canaries prove
 it fails against a writer that drops `recorded_by` and an undo that ignores
 `expects`.
+
+Cost, measured on a loaded laptop (other suites running): the fidelity file
+went from ~40 s to ~55-60 s serial; the two-stream tests are ~13 s of call
+time. Two deliveries per seed measured ~25 s more for the same coverage of the
+server code, so the deliveries rotate instead. CI runs pytest with `-n auto`.

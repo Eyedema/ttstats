@@ -103,6 +103,13 @@ row per point, written when the point is applied**, never reconstructed later.
   It also replays every script with duplicate re-sends and through
   `live_sync` in four batch splits (1-op, random chunks, one batch,
   overlapping re-sends): same rows, exactly one completion.
+  **Two streams** (KAN-150, `TestTwoStreams`, 50 seeds): A's and B's points
+  interleaved with stale/correct `expects`, a losing `start`, both
+  `side_switch`es and wrong-side taps; one delivery per seed (single-op with
+  re-sends or a batch split, rotating by 5). The oracle is `live_scoring` on
+  the same arrival order: rows incl. `recorded_by`, one completion, `rev` =
+  applied ops. Canaries: a writer dropping `recorded_by`, an undo ignoring
+  `expects` (`live_ops.check_undo_expects`).
 - **No starting server means no point.** `apply_point()` raises unless the state
   is `started` **and** names `initial_server`; `live_ops` rejects the point (409) before
   writing. `PointEvent.serving_side` stays nullable only as a defensive fallback.
