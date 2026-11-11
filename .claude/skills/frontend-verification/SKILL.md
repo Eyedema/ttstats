@@ -73,10 +73,36 @@ string is not evidence for it. Say so plainly rather than implying coverage.
 
 ## Running the suite
 
+**When you (the agent) run it, always use `test:e2e:quiet`, and run only
+the specs your change touches.** The plain `list` output costs hundreds of
+lines of context per run. The full matrix runs in CI on every PR (`e2e` job in
+`.github/workflows/main.yml`), so running it again locally adds nothing.
+
 ```bash
-npm run test:e2e                       # everything
-npm run test:e2e -- --project=iphone-safari
-npm run test:e2e -- mobile-drawer      # one file
+npm run test:e2e:quiet -- mobile-drawer --project=iphone-safari   # the usual case
+npm run test:e2e:quiet -- --only-changed=master                   # specs changed vs master
+npm run test:e2e:quiet -- --project=iphone-safari --project=iphone-no-js mobile-drawer
+```
+
+It prints one count line and, per failure, `[project] file:line › title`
+plus the first line of the error. The full output is in
+`tests/e2e/.last-run/output.log`. On a failure, `grep -n -A30 '<test title>'`
+that log rather than reading all of it. Open traces or the HTML report only if
+the log isn't enough.
+
+Pick specs by what the change touches: the spec named for the component, plus
+`csp.spec.js` if scripts changed, `budgets.spec.js` if page weight changed, and
+the `.nojs`/`.reduced` variants for any overlay or motion change.
+Don't use `--project=setup` on its own: Playwright adds it automatically as a
+dependency.
+
+**A CI failure:** `gh run view <run-id> --log-failed | tail -100`. Don't re-run
+the whole suite locally to reproduce it; run only the failing spec.
+
+For the user, or for interactive debugging (verbose output is fine here):
+
+```bash
+npm run test:e2e                       # everything, list reporter
 npm run test:e2e:ui                    # interactive, for debugging
 npx playwright show-report             # last run's HTML report
 ```
@@ -153,7 +179,8 @@ a guess.
 ## Before you say a frontend change is verified
 
 1. `cd ttstats && ../.venv/bin/python -m pytest -q` — markup and view logic.
-2. `npm run test:e2e` — the browser reality.
+2. `npm run test:e2e:quiet -- <specs the change touches>` — the browser
+   reality. The full matrix is the PR's CI `e2e` job; check it is green.
 3. Anything you could **not** exercise (haptics, a real device, an OS setting
    you cannot emulate) gets stated as unverified. Do not let "looks right in a
    screenshot" stand in for a test.
