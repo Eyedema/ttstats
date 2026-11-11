@@ -42,3 +42,18 @@ STORAGES = {
 WHITENOISE_AUTOREFRESH = False
 WHITENOISE_USE_FINDERS = False
 WHITENOISE_MAX_AGE = 60  # prod's default for non-hashed files (DEBUG=False)
+
+# --- Shared scoring timings (KAN-155) ----------------------------------------
+# The two-phone specs wait out a hold and the presence thresholds for real
+# (takeover after the other phone dies), so they are short here and
+# env-tunable. IN_SYNC stays above live_ops.SEEN_EVERY (5 s), or a phone that
+# is between two polls would read as "last seen" for a moment.
+LIVE_LONGPOLL_WAIT = int(os.environ.get('E2E_LONGPOLL_WAIT', '6'))
+LIVE_PRESENCE_IN_SYNC = int(os.environ.get('E2E_PRESENCE_IN_SYNC', '6'))
+LIVE_PRESENCE_LOST = int(os.environ.get('E2E_PRESENCE_LOST', '20'))
+
+# Rate limits off. The suite repeats the join link (20/h by IP) and the
+# login form (5/15 min by IP) far past any per-IP budget, every request from
+# 127.0.0.1, and `--repeat-each=10` multiplies that. The limits themselves
+# are pytest's (test_club_invites.py, test_shared_scoring.py, test_views.py).
+RATELIMIT_ENABLE = False

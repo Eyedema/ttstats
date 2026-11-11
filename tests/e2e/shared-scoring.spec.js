@@ -1,5 +1,6 @@
 const { test, expect } = require('@playwright/test');
 const { applyProdCSP, releaseProdCSP } = require('./helpers');
+const { defineTwoPhoneCases } = require('./shared-scoring-two-phones');
 
 /**
  * The host's shared-scoring lobby (KAN-151 / KAN-164), in WebKit at iPhone
@@ -11,7 +12,8 @@ const { applyProdCSP, releaseProdCSP } = require('./helpers');
  * and does the static poll script run under the CSP and move the host on.
  *
  * The seeded e2e user has the `shared_scoring` override (seed_e2e). The
- * two-phone scoring e2e comes with the scoreboard work (KAN-148, later).
+ * two-phone cases (KAN-155) are at the end: two browser contexts, the host
+ * and the guest, scoring one match (shared-scoring-two-phones.js).
  */
 
 async function openLobby(page) {
@@ -172,4 +174,8 @@ test.describe('shared scoring lobby', () => {
       'Only someone with this code can join.',
     );
   });
+});
+
+test.describe('two phones, one match', () => {
+  defineTwoPhoneCases();
 });

@@ -13,8 +13,8 @@ from django.utils import timezone
 
 from pingpong import live_scoring as ls, point_rollups, services
 from pingpong.models import (
-    Club, ClubInvite, ClubMembership, ClubRole, FeatureFlagOverride, Game, LiveScorer,
-    Match, MatchConfirmation, Player, PlayerRating, Season, SeasonStanding, Side,
+    Club, ClubInvite, ClubMembership, ClubRole, FeatureFlagOverride, Game, LiveLobby,
+    LiveScorer, Match, MatchConfirmation, Player, PlayerRating, Season, SeasonStanding, Side,
 )
 
 E2E_USERNAME = "e2e"
@@ -32,8 +32,15 @@ E2E_GLICKO_USERNAME = "e2e-glicko"
 # E2E Opponent's, which the season and Glicko specs read.
 E2E_CHAOS_OPPONENT = "e2e-chaos"
 # Shared scoring (KAN-153): the guest scorer of a seeded two-phone match, so
-# the scoreboard's "my side" layout can be opened without the join flow.
+# the scoreboard's "my side" layout can be opened without the join flow. Since
+# KAN-155 it also logs in (same password, its own storageState) as the second
+# phone of the two-context specs, and is a member of the e2e club so it may
+# join the host's lobbies.
 E2E_PARTNER = "e2e-partner"
+# KAN-155: a lobby whose link has expired, at a fixed token, so the dead-link
+# spec can open it without waiting out LOBBY_TTL. Hosted by E2E Opponent so
+# E2E Player's own lobbies (one open per host) never touch it.
+E2E_EXPIRED_LOBBY_TOKEN = "e2e0expired0lobby000000000000000"
 # Every player the seed rates. A re-seed starts them from scratch.
 E2E_PLAYER_NAMES = (
     "E2E Player", "E2E Opponent", "E2E Momentum", "E2E Seasons Player",
@@ -127,6 +134,7 @@ class Command(BaseCommand):
         )
 
         shared_match = self._seed_shared_live_match(club, player)
+        self._seed_expired_lobby(club, opponent)
 
         season = self._seed_season(club, player, opponent)
         glicko_match = self._seed_glicko(club, opponent)
@@ -178,8 +186,13 @@ class Command(BaseCommand):
         partner_user, _ = User.objects.get_or_create(
             username=E2E_PARTNER, defaults={"email": "e2e-partner@example.test"}
         )
+        partner_user.set_password(E2E_PASSWORD)
+        partner_user.save()
         partner_user.profile.email_verified = True
         partner_user.profile.save()
+        ClubMembership.objects.get_or_create(
+            club=club, user=partner_user, defaults={"role": ClubRole.MEMBER}
+        )
         partner, _ = Player.objects.get_or_create(name="E2E Partner")
         partner.user = partner_user
         partner.club = club
@@ -195,6 +208,19 @@ class Command(BaseCommand):
             match=match, player=partner, side=Side.TWO, role=LiveScorer.Role.GUEST
         )
         return match
+
+    def _seed_expired_lobby(self, club, host):
+        """A lobby past its expiry at a known token (KAN-155's dead link)."""
+        LiveLobby.all_objects.filter(token=E2E_EXPIRED_LOBBY_TOKEN).delete()
+        now = timezone.now()
+        LiveLobby.all_objects.create(
+            token=E2E_EXPIRED_LOBBY_TOKEN,
+            host=host,
+            club=club,
+            best_of=3,
+            status=LiveLobby.Status.EXPIRED,
+            expires_at=now - timedelta(hours=1),
+        )
 
     def _seed_season(self, club, player, opponent):
         """A current season with confirmed singles results, for the season table.
