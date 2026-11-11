@@ -683,7 +683,12 @@ class DashboardView(LoginRequiredMixin, TemplateView):
     # --- Live now -----------------------------------------------------------
 
     def _live_matches(self, player):
-        """Matches this user is scorekeeping right now.
+        """Live matches this user is scoring right now.
+
+        Any non-revoked scorer row counts (KAN-154): the guest of a shared
+        match sees it as well as the host. A row-less (legacy) live match
+        counts for its scorekeeper. The score reads from the viewer's side:
+        "mine" first, then the opponent's.
 
         Never cached: amber means live *this second*, and the whole point of
         the block is that the score is current.
@@ -691,25 +696,37 @@ class DashboardView(LoginRequiredMixin, TemplateView):
         if player is None:
             return []
 
-        live_qs = Match.live_objects.filter(
-            scorekeeper=player, is_live=True
-        ).prefetch_related(participants_prefetch())
+        live_qs = (
+            Match.live_objects.filter(is_live=True)
+            .filter(
+                Q(live_scorers__player=player, live_scorers__revoked_at__isnull=True)
+                | Q(scorekeeper=player, live_scorers__isnull=True)
+            )
+            .distinct()
+            .prefetch_related(participants_prefetch(), live_ops.scorers_prefetch())
+        )
 
         live = []
         for m in live_qs:
             state = m.live_state or {}
             cache_side_players(m)
-            opponents = [p for p in m.cached_team2_players]
+            own = live_ops.scorer_for(m, player)
+            mine, theirs = ("team1", "team2")
+            if own is not None and own.side == Side.TWO:
+                mine, theirs = ("team2", "team1")
+            my_players = getattr(m, f"cached_{mine}_players")
+            opponents = list(getattr(m, f"cached_{theirs}_players"))
             live.append(
                 {
                     "pk": m.pk,
+                    "shared": m.is_shared,
                     "opponent": " & ".join(p.name for p in opponents),
                     "opponent_player": opponents[0] if opponents else None,
-                    "team1_label": " & ".join(p.name for p in m.cached_team1_players),
-                    "team1_games": state.get("team1_games", 0),
-                    "team2_games": state.get("team2_games", 0),
-                    "team1_points": state.get("team1_points", 0),
-                    "team2_points": state.get("team2_points", 0),
+                    "team1_label": " & ".join(p.name for p in my_players),
+                    "team1_games": state.get(f"{mine}_games", 0),
+                    "team2_games": state.get(f"{theirs}_games", 0),
+                    "team1_points": state.get(f"{mine}_points", 0),
+                    "team2_points": state.get(f"{theirs}_points", 0),
                     "game_number": state.get("team1_games", 0) + state.get("team2_games", 0) + 1,
                     # Parsed to a datetime here rather than passed through as
                     # the raw JSON string. live_state stores it as ISO text,
@@ -2901,6 +2918,10 @@ class _Refused(Exception):
         self.response = response
 
 
+# The 403 body a removed scorer gets on every live endpoint (KAN-154).
+REMOVED = "removed"
+
+
 @dataclass
 class _LiveCaller:
     """Who is driving a live request, and which op stream is theirs.
@@ -2939,6 +2960,10 @@ def _authorize_scorer(request, match: Match, player: Player, *, writing: bool) -
     own = live_ops.scorer_for(match, player)
     if own is not None and own.revoked_at is None:
         return _LiveCaller(player, own)
+    if own is not None and not request.user.is_staff:
+        # KAN-154: the host removed this phone. A JSON 403 the client can
+        # tell apart from a stale CSRF token or an expired session.
+        raise _Refused(JsonResponse({"error": REMOVED}, status=403))
     if request.user.is_staff:
         active = live_ops.active_scorers(match)
         if writing and len(active) > 1:
@@ -3034,10 +3059,18 @@ def _scoreboard_payload(
         "rev": match.live_rev,
         "scorers": live_ops.presence(match),
         "me": (
-            {"side": own.side, "role": own.role, "can_score_both": own.can_score_both}
+            {
+                "player_id": own.player_id,
+                "side": own.side,
+                "role": own.role,
+                "can_score_both": own.can_score_both,
+            }
             if own is not None
             else None
         ),
+        # The presence strip (KAN-154) measures last_seen_at against this,
+        # not against the phone's own clock.
+        "server_now": timezone.now().isoformat(),
         "last_point": (
             {
                 "sequence": trailing.sequence,
@@ -3071,15 +3104,27 @@ def _parse_seq(payload) -> tuple[int | None, JsonResponse | None]:
     return seq, None
 
 
-def _parse_expects(payload) -> tuple[int | None, JsonResponse | None]:
-    """An undo's ``expects`` (KAN-150): ``(int, None)``, ``(None, None)`` when
-    absent, or a 400. Same shape rules as ``seq``."""
-    expects = payload.get("expects") if isinstance(payload, dict) else None
+def _parse_expects(payload, key="expects") -> tuple[int | None, JsonResponse | None]:
+    """An undo's ``expects`` (KAN-150) or ``expects_by`` (KAN-154, a player
+    id): ``(int, None)``, ``(None, None)`` when absent, or a 400. Same shape
+    rules as ``seq``."""
+    expects = payload.get(key) if isinstance(payload, dict) else None
     if expects is None:
         return None, None
     if isinstance(expects, bool) or not isinstance(expects, int) or expects < 1:
-        return None, JsonResponse({"error": "expects must be an integer >= 1"}, status=400)
+        return None, JsonResponse({"error": f"{key} must be an integer >= 1"}, status=400)
     return expects, None
+
+
+def _parse_undo_condition(payload) -> tuple[dict, JsonResponse | None]:
+    """``{"expects", "expects_by"}`` of an undo, or a 400."""
+    expects, error = _parse_expects(payload)
+    if error:
+        return {}, error
+    expects_by, error = _parse_expects(payload, "expects_by")
+    if error:
+        return {}, error
+    return {"expects": expects, "expects_by": expects_by}, None
 
 
 def _classify_seq(applied: int, seq: int) -> str:
@@ -3188,7 +3233,13 @@ class LiveScoreboardView(LoginRequiredMixin, View):
     template_name = "pingpong/scoreboard.html"
 
     def get(self, request, pk):
-        match, caller = _get_live_match_for_scorer(request, pk)
+        try:
+            match, caller = _get_live_match_for_scorer(request, pk)
+        except _Refused:
+            # Only a removed scorer is refused on a read (KAN-154). Today,
+            # not the match: a live match has no detail page yet.
+            messages.info(request, "You were removed from scoring this match.")
+            return redirect("pingpong:dashboard")
         if not match.is_live:
             messages.info(request, "This match is no longer live.")
             return redirect("pingpong:match_detail", pk=pk)
@@ -3258,6 +3309,12 @@ class LiveScoreboardView(LoginRequiredMixin, View):
                 # behaves exactly as the single-scorer client did.
                 "me": me,
                 "shared": shared,
+                # KAN-154: the presence strip's thresholds, in seconds, and
+                # where the host removes a phone (0 = the player's pk).
+                "presence": live_ops.presence_thresholds(),
+                "remove_url_template": reverse(
+                    "pingpong:live_remove_scorer", args=[pk, 0]
+                ),
                 "longpoll_abort_ms": (
                     settings.LIVE_LONGPOLL_WAIT + live_longpoll.ABORT_SLACK
                 ) * 1000,
@@ -3387,6 +3444,12 @@ class LiveStateView(LoginRequiredMixin, View):
     """
 
     def get(self, request, pk):
+        try:
+            return self._get(request, pk)
+        except _Refused as refused:
+            return refused.response
+
+    def _get(self, request, pk):
         # Scoped all_objects inside, so a completed match's redirect can be
         # returned too without reaching across clubs.
         match, caller = _get_live_match_for_scorer(request, pk)
@@ -3483,15 +3546,44 @@ class LiveUndoView(LoginRequiredMixin, View):
         seq, error = _parse_seq(payload)
         if error:
             return error
-        expects, error = _parse_expects(payload)
+        condition, error = _parse_undo_condition(payload)
         if error:
             return error
 
-        op = {"type": "undo", "seq": seq, "expects": expects}
+        op = {"type": "undo", "seq": seq, **condition}
         return _run_op(
             request, pk, seq, "undo",
             lambda match, caller: _apply_op(match, caller, op),
         )
+
+
+@method_decorator(require_POST, name="dispatch")
+class LiveRemoveScorerView(LoginRequiredMixin, View):
+    """The host removes another phone from a shared match (KAN-154).
+
+    Host only (403 ``host only``). Sets the guest row's ``revoked_at`` and
+    the host's ``can_score_both``, under the match lock, and answers the
+    host's payload. The removed phone's next op or poll gets 403
+    ``removed``; its outbox stays on the phone.
+    """
+
+    def post(self, request, pk, player_pk):
+        def apply(match, caller):
+            host = caller.own
+            if host is None or host.role != LiveScorer.Role.HOST:
+                return JsonResponse({"error": "host only"}, status=403)
+            target = next(
+                (s for s in match.live_scorers.all() if s.player_id == player_pk),
+                None,
+            )
+            if target is None or target.pk == host.pk:
+                return JsonResponse({"error": "no such scorer"}, status=404)
+            result = live_ops.remove_scorer(match, host, target)
+            if not result.applied:
+                return _op_error(match, caller, None, result.error, result.status)
+            return JsonResponse(_scoreboard_payload(match, caller=caller))
+
+        return _run_live(request, pk, apply)
 
 
 SYNC_MAX_OPS = 500
@@ -3553,10 +3645,11 @@ def _parse_sync_ops(request) -> tuple[list[dict] | None, JsonResponse | None]:
                 )
             op["initial_server"] = raw["initial_server"]
         elif op_type == "undo":
-            expects, error = _parse_expects(raw)
+            condition, error = _parse_undo_condition(raw)
             if error:
                 return None, error
-            op["expects"] = expects
+            op.update(condition)
+        # take_over / release (KAN-154) carry nothing but their seq.
         ops.append(op)
 
     ops.sort(key=lambda op: op["seq"])

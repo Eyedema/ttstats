@@ -258,6 +258,13 @@ for _flag_name in os.environ.get('TTSTATS_FLAGS_ON', '').split(','):
 # live_longpoll.ABORT_SLACK, a number it is sent and never types.
 LIVE_LONGPOLL_WAIT = 20
 
+# Presence of the other phone in a shared match (KAN-154), in seconds since
+# its last_seen_at: "in sync" under IN_SYNC, "last seen ... ago" past it, and
+# "not seen for ..." plus the "Score for both" action past LOST. Sent to the
+# scoreboard in its bootstrap (scoreboard-config.presence); never typed in JS.
+LIVE_PRESENCE_IN_SYNC = 10
+LIVE_PRESENCE_LOST = 120
+
 # Redis Cache Configuration
 REDIS_URL = os.environ.get('REDIS_URL')
 

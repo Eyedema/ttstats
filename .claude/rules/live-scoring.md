@@ -39,6 +39,8 @@ paths:
   - "ttstats/pingpong/tests/live_contract.py"
   - "ttstats/pingpong/tests/test_live_contract.py"
   - "ttstats/pingpong/tests/test_scoreboard_shared.py"
+  - "ttstats/pingpong/tests/test_live_takeover.py"
+  - "ttstats/ttstats/settings/e2e.py"
 ---
 
 # Live scoring and the point log
@@ -131,7 +133,7 @@ row per point, written when the point is applied**, never reconstructed later.
 ## `live_ops.apply_op` is the one way an op is applied (KAN-87)
 
 `live_ops.py` (Django layer; rules still from `live_scoring`) applies `start`,
-`point`, `undo`, `side_switch` and returns an `OpResult`. The four single-op
+`point`, `undo`, `side_switch`, `take_over`, `release` and returns an `OpResult`. The four single-op
 views and `live_sync` are thin wrappers: parse, lock, dedupe, call, shape. The
 caller owns the transaction and the `select_for_update()` lock, so a point
 synced in a batch runs exactly the code a point tapped online runs.
@@ -176,6 +178,21 @@ and the most dangerous duplicate is a retried match point.
   undo) is 409 `stale undo`, a rule rejection. **Required in a shared match**
   (missing = stale), optional on a solo one. Either scorer may undo the
   trailing point, whoever recorded it. `expects` must be an int >= 1 (400).
+  **`expects_by`** (KAN-154, optional, a player id): the trailing row's
+  `recorded_by` must match too, because sequences are reused after an undo.
+  `expects` alone stays valid (older clients); the client sends both.
+- **`take_over` / `release`** (KAN-154) set / clear `can_score_both` on the
+  **requester's own** row; never the other scorer's (its queued points still
+  land). Sequenced and deduped like any op; a no-op (already so) consumes the
+  seq without a rev; `release` by the only active scorer is `only scorer`, a
+  row-less match is `not a scorer` (both rule rejections). Batch path only
+  (`live_sync`): the single-op endpoints serve pre-KAN-88 pages that never
+  send them. Authorization, not scoring: never in `live_rules.js` or vectors.
+- **Remove a phone** (KAN-154): `POST live/scorers/<player_pk>/remove/`, host
+  only (403 `host only`), under the match lock: `revoked_at` on the guest,
+  `can_score_both` on the host, one rev bump (wakes held polls). Not an op.
+  A removed scorer gets **403 `{"error": "removed"}`** on every live endpoint
+  (the scoreboard page redirects to Today with a message); staff keep viewing.
 - Two `start`s: the first wins, the second is `ALREADY_STARTED`. Two
   `side_switch`es both apply (it sets a flag). Points apply in **arrival**
   order: `docs/decisions/kan-148-shared-scoring.md`.
@@ -183,9 +200,11 @@ and the most dangerous duplicate is a retried match point.
 - No `seq` is the legacy contract, applied unconditionally and logged. Remove
   once no cached page sends it.
 - `_scoreboard_payload()` carries `applied_seq` (the caller's stream, 0 before
-  any sequenced op), `rev`, `scorers` (presence), `me` (null without a row)
-  and `last_point` (`{sequence, side, by}` of the trailing row, or null): the
-  sequence a conditional undo sends as `expects`.
+  any sequenced op), `rev`, `scorers` (presence: `last_seen_at`,
+  `can_score_both`, `polling` = holds a long-poll now), `me` (`player_id`,
+  side, role, `can_score_both`; null without a row), `server_now`, and
+  `last_point` (`{sequence, side, by}` of the trailing row, or null): what a
+  conditional undo sends as `expects` / `expects_by`.
   Choices: `docs/decisions/kan-149-per-scorer-streams.md`.
 
 ## `/live/state/`: instant answer, 204, or a held long-poll (KAN-165, KAN-168)
@@ -397,8 +416,38 @@ false nothing below runs and the page sends no long-poll (e2e asserts it).
   match with my ops queued sends them; the server decides.
 - The opponent's digits pulse (`.score-pulse`, outside `@layer`, off under
   reduced motion); no haptics outside the tap handler.
+
+### Presence, takeover, removal (KAN-154)
+
+- **Presence thresholds are settings** (`LIVE_PRESENCE_IN_SYNC` 10 s,
+  `LIVE_PRESENCE_LOST` 120 s) sent as `scoreboard-config.presence`; never in
+  JS. The words come from `LiveSession.presenceLine` (unit-tested): age =
+  `server_now - last_seen_at` + time since the answer arrived (no clock
+  skew); `polling` means in sync. IN_SYNC must stay above `SEEN_EVERY` (5 s).
+- A held poll that times out (204) is followed by one plain read (no
+  `since`) so presence is never older than one hold. Word plus glyph, in the
+  other side's zone, **never amber**.
+- `take_over` / `release` are outbox ops; `view.canScoreBoth` applies my
+  pending ones, so the layout switches at the tap, offline too.
+  `scoreboard.js` `applyLayout` swaps the opponent's `<div>` for a
+  `<button>` (and back) keeping the template's classes and attributes.
+- The board loses no height to this: "Score for both" gets a bar only while
+  the other phone is lost; release and remove live in the Phones sheet
+  (chrome button). Remove is online only, behind the `data-remove-sheet`
+  in-page confirm.
+  `removed` (403 body) stops every loop and keeps the outbox; the
+  CSRF-retry-once never retries it, and it is never read as signed out.
+- Today lists the live match for **every non-revoked scorer row** (row-less:
+  the scorekeeper), the score read from the viewer's side.
 - Tests: `live_session_shared.test.mjs` (two sessions, one fake clock);
   `live_contract.test.mjs` replays `fixtures/live_contract.json`, generated
   from the real endpoints by `pingpong.tests.live_contract`
   (`test_live_contract.py` fails when stale); e2e `shared-scoreboard*.spec.js`
   (the seeded `E2E Partner` match).
+- **Two-phone e2e** (KAN-155): `shared-scoring-two-phones.js`, run by
+  `shared-scoring.spec.js` and `.desktop.spec.js`: two contexts (host
+  `user.json`, guest `partner.json`); a new context needs an explicit empty
+  `storageState` to be anonymous (the runner injects the project's). Offline
+  via `offline-proxy.js`; the guest's match_confirm is stubbed so these
+  matches stay unconfirmed. `settings/e2e.py` shortens the hold (6 s) and
+  presence (6 / 20 s) and turns rate limits off (repeated join and login).

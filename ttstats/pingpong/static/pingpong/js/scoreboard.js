@@ -11,7 +11,11 @@
  *   - wires the triggers: online, visible again, wake lock;
  *   - guards leaving with unsaved ops (beforeunload + the leave sheet);
  *   - shows the finish screen, the re-auth prompt, the follow banner and the
- *     rejected/divergence toast.
+ *     rejected/divergence toast;
+ *   - shared scoring (KAN-154): the presence strip, "Score for both" /
+ *     "Stop scoring for both" (take_over / release ops), the host's "Remove
+ *     {name}'s phone" behind an in-page sheet, the removed banner, and the
+ *     switch between the "my side" layout and the two zones.
  *
  * Every overlay starts `hidden` in the markup and only this file reveals it,
  * so with scripting off nothing can render open (fail closed).
@@ -39,10 +43,14 @@
     divergence: 'The server didn’t accept a point — score reset to the saved one',
     conflict: 'This match is being scored on another device',
     'stale-undo': 'Undo didn’t apply: another point came in first. Check the score',
+    'remove-failed': 'Couldn’t remove the phone. Check the connection and try again',
   };
 
   var FOLLOW_POLL_MS = 5000;
   var TOAST_MS = 4000;
+  // How often the presence strip re-words itself ("last seen 12 s ago"):
+  // a display tick, not a threshold (those come from the bootstrap).
+  var PRESENCE_TICK_MS = 1000;
 
   function readJSON(id) {
     var el = document.getElementById(id);
@@ -105,7 +113,19 @@
       leaveSheet: q('[data-leave-sheet]'),
       leaveCount: q('[data-leave-count]'),
       leaveGo: q('[data-leave-go]'),
+      sharedActions: q('[data-sb-shared-actions]'),
+      removed: q('[data-sb-removed]'),
+      removeSheet: q('[data-remove-sheet]'),
+      phonesSheet: q('[data-phones-sheet]'),
+      phonesButton: q('[data-action="phones"]'),
     };
+
+    // Shared scoring (KAN-154): my side and the presence thresholds, from
+    // the bootstrap. `mySide` is null for a phone with no scorer row.
+    var me = config.me || null;
+    var mySide = me ? (me.side === 1 ? 'team1' : 'team2') : null;
+    var thresholds = config.presence || null;
+    var removeTarget = null;
 
     var lastView = null;
     var toastTimer = null;
@@ -178,7 +198,11 @@
         zone1.style.order = state.side_switched ? '2' : '';
         zone2.style.order = state.side_switched ? '1' : '';
       }
-      if (view.shared) renderShared(view, previous);
+      if (view.shared) {
+        applyLayout(view.canScoreBoth);
+        renderShared(view, previous);
+        renderPresence(view);
+      }
       var gameNumber = q('[data-game-number]');
       if (gameNumber) gameNumber.textContent = String(Math.min(state.current_game_number || 1, config.best_of));
 
@@ -189,6 +213,11 @@
       renderSync(view);
       renderFinish(view);
       show(el.follow, view.phase === 'follow');
+      show(el.removed, view.phase === 'removed');
+      if (view.phase === 'removed') {
+        show(el.removeSheet, false);
+        show(el.phonesSheet, false);
+      }
       show(el.reauth, view.phase === 'auth' && !view.complete);
       var reauthCount = q('[data-reauth-count]');
       if (reauthCount) {
@@ -219,9 +248,8 @@
           label.textContent = 'Undo';
         }
       }
-      var mine = root.getAttribute('data-my-side');
-      if (!mine || !previous) return;
-      var theirs = mine === 'team1' ? 'team2' : 'team1';
+      if (!mySide || !previous) return;
+      var theirs = mySide === 'team1' ? 'team2' : 'team1';
       var before = previous.state || {};
       var scored = (state[theirs + '_points'] || 0) > (before[theirs + '_points'] || 0) ||
         (state[theirs + '_games'] || 0) > (before[theirs + '_games'] || 0);
@@ -231,6 +259,116 @@
       digits.classList.remove('score-pulse');
       void digits.offsetWidth;
       digits.classList.add('score-pulse');
+    }
+
+    // --- shared: layout, presence, actions (KAN-154) -------------------------
+
+    // The "my side" layout (opponent's zone a read-only <div>) for a phone
+    // restricted to its side; the two zones once it scores both. Same
+    // elements and classes the template rendered, so nothing depends on a
+    // class Tailwind never saw.
+    function applyLayout(scoresBoth) {
+      var want = mySide && !scoresBoth ? mySide : null;
+      if ((root.getAttribute('data-my-side') || null) === want) return;
+      ['team1', 'team2'].forEach(function (side) {
+        var zone = q('[data-sb-board] > [data-side="' + side + '"]');
+        if (!zone) return;
+        var theirs = Boolean(want) && side !== want;
+        var tag = theirs ? 'DIV' : 'BUTTON';
+        if (zone.tagName !== tag) {
+          var swapped = document.createElement(tag);
+          Array.prototype.forEach.call(zone.attributes, function (attr) {
+            if (attr.name !== 'type') swapped.setAttribute(attr.name, attr.value);
+          });
+          if (tag === 'BUTTON') swapped.setAttribute('type', 'button');
+          while (zone.firstChild) swapped.appendChild(zone.firstChild);
+          zone.parentNode.replaceChild(swapped, zone);
+          zone = swapped;
+        }
+        zone.classList.toggle('tap-zone', !theirs);
+        zone.style.order = '';
+        if (want) zone.setAttribute('data-zone', theirs ? 'theirs' : 'mine');
+        else zone.removeAttribute('data-zone');
+        var plusOne = zone.querySelector('[data-plus-one]');
+        if (plusOne) plusOne.hidden = !(want && side === want);
+      });
+      if (want) {
+        root.setAttribute('data-shared', '');
+        root.setAttribute('data-my-side', want);
+      } else {
+        root.removeAttribute('data-shared');
+        root.removeAttribute('data-my-side');
+      }
+    }
+
+    // The other phones: every scorer row that is not mine and not removed.
+    function others(view) {
+      if (!me) return [];
+      var rows = (view.presence && view.presence.scorers) || [];
+      return rows.filter(function (s) { return !s.revoked && s.player_id !== me.player_id; });
+    }
+
+    function renderPresence(view) {
+      var lines = {};
+      var lost = false;
+      var active = view.phase !== 'removed' && view.phase !== 'follow' && !view.complete;
+      if (thresholds && active) {
+        others(view).forEach(function (scorer) {
+          var line = window.LiveSession.presenceLine(scorer, {
+            nowMs: Date.now(),
+            receivedAtMs: view.presence.receivedAt,
+            serverNow: view.presence.serverNow,
+            inSyncS: thresholds.in_sync_s,
+            lostS: thresholds.lost_s,
+          });
+          if (!line) return;
+          lines[scorer.side === 1 ? 'team1' : 'team2'] = line;
+          if (line.status === 'lost') lost = true;
+        });
+      }
+      ['team1', 'team2'].forEach(function (side) {
+        var strip = q('[data-presence="' + side + '"]');
+        if (!strip) return;
+        var line = lines[side];
+        show(strip, Boolean(line));
+        if (!line) return;
+        strip.setAttribute('data-status', line.status);
+        strip.querySelector('[data-presence-text]').textContent = line.text;
+        ['sync', 'behind', 'lost'].forEach(function (status) {
+          show(strip.querySelector('[data-presence-glyph="' + status + '"]'), line.status === status);
+        });
+      });
+
+      var other = others(view)[0] || null;
+      var started = Boolean((view.state || {}).started);
+      var scoreBoth = Boolean(other) && !view.canScoreBoth;
+      var release = Boolean(other) && view.canScoreBoth;
+      var removable = Boolean(other) && Boolean(me) && me.role === 'host';
+      // The bar: only while the other phone is lost. The sheet: always
+      // offers taking over (a phone can be "in sync" and still misbehave).
+      show(el.sharedActions, active && started && scoreBoth && lost);
+      show(q('[data-phones-sheet] [data-action="score-both"]'), scoreBoth);
+      show(q('[data-phones-sheet] [data-action="release"]'), release);
+      show(q('[data-phones-sheet] [data-action="remove-ask"]'), removable);
+      qa('[data-remove-name]').forEach(function (n) { n.textContent = other ? other.name : ''; });
+      removeTarget = other ? other.player_id : null;
+      var summary = q('[data-phones-presence]');
+      if (summary) {
+        var line = other && lines[other.side === 1 ? 'team1' : 'team2'];
+        summary.textContent = line ? line.text : (view.canScoreBoth ? 'You are scoring both sides.' : '');
+      }
+      var anyAction = scoreBoth || release || removable;
+      show(el.phonesButton, active && anyAction);
+      if (!active || !anyAction) show(el.phonesSheet, false);
+    }
+
+    function removeOther() {
+      show(el.removeSheet, false);
+      if (removeTarget === null || !config.remove_url_template) return;
+      var url = config.remove_url_template.replace(/\/0\/remove\/$/, '/' + removeTarget + '/remove/');
+      session.removeScorer(url).then(function (result) {
+        if (!result.ok) showError(MESSAGES['remove-failed']);
+      });
     }
 
     function renderSync(view) {
@@ -353,7 +491,7 @@
 
     function addPoint(side) {
       var view = session.view();
-      if (view.shouldPromptSideSwitch || view.complete || view.phase === 'follow') return;
+      if (view.shouldPromptSideSwitch || view.complete || view.phase === 'follow' || view.phase === 'removed') return;
       var result = session.dispatch({ type: 'point', side: side });
       if (!result.ok) return;
       bumpScore(side);
@@ -379,6 +517,30 @@
           return;
         case 'take-over':
           session.takeOver();
+          return;
+        case 'score-both':
+          show(el.phonesSheet, false);
+          session.dispatch({ type: 'take_over' });
+          return;
+        case 'release':
+          show(el.phonesSheet, false);
+          session.dispatch({ type: 'release' });
+          return;
+        case 'phones':
+          show(el.phonesSheet, true);
+          return;
+        case 'phones-close':
+          show(el.phonesSheet, false);
+          return;
+        case 'remove-ask':
+          show(el.phonesSheet, false);
+          show(el.removeSheet, true);
+          return;
+        case 'remove-cancel':
+          show(el.removeSheet, false);
+          return;
+        case 'remove-confirm':
+          removeOther();
           return;
         default:
       }
@@ -461,6 +623,13 @@
       session.nudge();
     });
     acquireWakeLock();
+
+    // The presence strip ages between answers ("last seen 12 s ago").
+    if (config.shared) {
+      setInterval(function () {
+        if (document.visibilityState === 'visible') renderPresence(session.view());
+      }, PRESENCE_TICK_MS);
+    }
 
     // A test and debugging handle; nothing in the page reads it.
     root.scoreboard = { session: session, outbox: outbox };

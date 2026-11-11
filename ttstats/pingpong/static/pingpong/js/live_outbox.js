@@ -41,7 +41,8 @@
 
   var VERSION = 1;
   var KEY_PREFIX = 'ttstats:live-outbox:v' + VERSION + ':';
-  var OP_TYPES = ['start', 'point', 'undo', 'side_switch'];
+  // take_over / release: KAN-154 (who scores the other side).
+  var OP_TYPES = ['start', 'point', 'undo', 'side_switch', 'take_over', 'release'];
 
   function storageKey(matchPk, userId) {
     return KEY_PREFIX + String(matchPk) + ':' + String(userId);

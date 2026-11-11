@@ -209,6 +209,9 @@ URL_EXPECTATIONS = {
     "live_side_switch": ("detail", "live_match"),
     "live_undo": ("detail", "live_match"),
     "live_sync": ("detail", "live_match"),
+    # KAN-154: the host removes a phone; the match is looked up like the
+    # other live routes (scoped all_objects), so another club's pk 404s.
+    "live_remove_scorer": ("detail", "live_match"),
     # --- Shared scoring (KAN-151 / KAN-152) ----------------------------------
     # The lobby is host-only through the scoped LiveLobby manager; another
     # club's lobby pk 404s like any detail row.
@@ -249,6 +252,7 @@ POST_ONLY = {
     "live_side_switch",
     "live_undo",
     "live_sync",
+    "live_remove_scorer",
     "push_subscribe",
     "push_unsubscribe",
     "push_test",
@@ -259,6 +263,12 @@ POST_ONLY = {
 PK_KWARG = {
     "game_add": "match_pk",
     "scheduled_match_convert": "scheduled_match_pk",
+}
+
+# Routes with a second kwarg besides the object's pk. Any value: the match
+# lookup (the tenancy boundary) runs first.
+EXTRA_KWARGS = {
+    "live_remove_scorer": {"player_pk": 1},
 }
 
 # A *valid* body for the endpoints that validate their payload before they look
@@ -408,7 +418,8 @@ def _url(name, tenant):
     if kind != "detail":
         return reverse(f"pingpong:{name}")
     kwarg = PK_KWARG.get(name, "pk")
-    return reverse(f"pingpong:{name}", kwargs={kwarg: tenant.pk_for(arg)})
+    kwargs = {kwarg: tenant.pk_for(arg), **EXTRA_KWARGS.get(name, {})}
+    return reverse(f"pingpong:{name}", kwargs=kwargs)
 
 
 def _fetch(client, name, url):

@@ -12,7 +12,7 @@ const { expect } = require('@playwright/test');
 async function openSharedScoreboard(page) {
   await page.goto('/pingpong/');
   await page.locator('section', { hasText: 'E2E Partner' })
-    .getByRole('link', { name: /Resume/i }).first().click();
+    .getByTestId('live-resume-link').first().click();
   await expect(page.locator('#scoreboard')).toBeVisible();
 }
 

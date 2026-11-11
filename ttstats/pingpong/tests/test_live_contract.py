@@ -27,11 +27,21 @@ def _run(script, auth_client):
     for step in script["steps"]:
         client = clients[step["as"]]
         if step["call"] == "sync":
+            ops = [
+                {**op, "expects_by": scorers[op["expects_by"]].player_id}
+                if "expects_by" in op else op
+                for op in step["ops"]
+            ]
             resp = client.post(
                 reverse("pingpong:live_sync", args=[match.pk]),
-                data=json.dumps({"ops": step["ops"]}),
+                data=json.dumps({"ops": ops}),
                 content_type="application/json",
             )
+        elif step["call"] == "remove":
+            resp = client.post(reverse(
+                "pingpong:live_remove_scorer",
+                args=[match.pk, scorers[step["target"]].player_id],
+            ))
         else:
             params = {}
             since = step.get("since")
@@ -74,6 +84,6 @@ class TestFakeServerContract:
             (a.get("rejected") or {}).get("error") for a in answers
         }
         assert {"gap", "not your side", "stale undo", "Match already started",
-                "match complete"} <= errors
+                "match complete", "removed", "only scorer"} <= errors
         assert any(a["status"] == 204 for a in answers)
         assert any(a.get("redirect_url") == "confirm" for a in answers)

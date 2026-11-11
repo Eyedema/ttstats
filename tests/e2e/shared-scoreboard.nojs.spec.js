@@ -11,12 +11,16 @@ const HIDDEN = [
   '[data-sync-indicator]', '[data-sync-sheet]', '[data-leave-sheet]', '[data-sb-finish]',
   '[data-sb-reauth]', '[data-sb-follow]', '[data-sb-switch]', '[data-sb-toast]',
   '[data-sb-picker]', '[data-sb-board]',
+  // KAN-154: presence, the takeover bar, the Phones and Remove sheets, the
+  // removed banner.
+  '[data-presence="team1"]', '[data-presence="team2"]', '[data-sb-shared-actions]',
+  '[data-action="phones"]', '[data-phones-sheet]', '[data-remove-sheet]', '[data-sb-removed]',
 ];
 
 test('the shared scoreboard fails closed without JavaScript', async ({ page }) => {
   await page.goto('/pingpong/');
   await page.locator('section', { hasText: 'E2E Partner' })
-    .getByRole('link', { name: /Resume/i }).first().click();
+    .getByTestId('live-resume-link').first().click();
   const root = page.locator('#scoreboard');
   await expect(root).toBeVisible();
   await expect(root).toHaveAttribute('data-shared', '');

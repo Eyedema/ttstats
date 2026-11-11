@@ -45,7 +45,10 @@ class TestBootstrap:
         resp = _scoreboard(auth_client(_scorer(match, "host").user), match)
         config = _config(resp)
         assert config["shared"] is False
-        assert config["me"] == {"side": 1, "role": "host", "can_score_both": True}
+        assert config["me"] == {
+            "player_id": _scorer(match, "host").pk,
+            "side": 1, "role": "host", "can_score_both": True,
+        }
         assert "longpoll_abort_ms" in config
 
     def test_shared_match_tells_each_phone_who_it_is(self, auth_client):
@@ -53,8 +56,14 @@ class TestBootstrap:
         host = _config(_scoreboard(auth_client(_scorer(match, "host").user), match))
         guest = _config(_scoreboard(auth_client(_scorer(match, "guest").user), match))
         assert host["shared"] is True and guest["shared"] is True
-        assert host["me"] == {"side": 1, "role": "host", "can_score_both": False}
-        assert guest["me"] == {"side": 2, "role": "guest", "can_score_both": False}
+        assert host["me"] == {
+            "player_id": _scorer(match, "host").pk,
+            "side": 1, "role": "host", "can_score_both": False,
+        }
+        assert guest["me"] == {
+            "player_id": _scorer(match, "guest").pk,
+            "side": 2, "role": "guest", "can_score_both": False,
+        }
 
 
 @pytest.mark.django_db
@@ -66,7 +75,8 @@ class TestMySideLayout:
         assert "data-shared" not in root and "data-my-side" not in root
         html = resp.content.decode()
         assert len(re.findall(r'<button type="button" data-side="team[12]"', html)) == 2
-        assert "+1 " not in html
+        # The "+1" prefix is there for a takeover's layout switch, hidden.
+        assert re.findall(r"<span data-plus-one[^>]*>", html) == ["<span data-plus-one hidden>"] * 2
 
     @pytest.mark.parametrize("role,mine,theirs", [("host", "team1", "team2"), ("guest", "team2", "team1")])
     def test_shared_renders_my_zone_as_the_only_button(self, auth_client, role, mine, theirs):
@@ -80,7 +90,7 @@ class TestMySideLayout:
         # My side: the big "+1 {name}" button.
         mine_zone = re.search(rf'<button type="button" data-side="{mine}" data-zone="mine"[^>]*>', html)
         assert mine_zone and "tap-zone" in mine_zone.group(0)
-        assert f"+1 {player.name}" in html
+        assert f"<span data-plus-one>+1 </span>{player.name}" in html
         # Theirs: read-only digits. No button, no role, no tabindex, no tap-zone.
         theirs_zone = re.search(rf'<div data-side="{theirs}" data-zone="theirs"[^>]*>', html, re.S)
         assert theirs_zone is not None
@@ -132,3 +142,38 @@ class TestFinishedMatchRedirect:
             reverse("pingpong:live_state", args=[match.pk])
         )
         assert resp.json()["redirect_url"] == reverse("pingpong:match_detail", args=[match.pk])
+
+
+@pytest.mark.django_db
+class TestPresenceAndTakeoverMarkup:
+    """KAN-154: everything scoreboard.js reveals starts hidden (fail closed)."""
+
+    def _html(self, auth_client, role="guest"):
+        match = live_match(started=True, shared=True)
+        return _scoreboard(auth_client(_scorer(match, role).user), match).content.decode()
+
+    def test_a_presence_strip_per_side_starts_hidden(self, auth_client):
+        html = self._html(auth_client)
+        strips = re.findall(r'<span data-presence="(team[12])" hidden', html)
+        assert strips == ["team1", "team2"]
+        for status in ("sync", "behind", "lost"):
+            assert f'data-presence-glyph="{status}" hidden' in html
+
+    def test_actions_sheet_and_removed_banner_start_hidden(self, auth_client):
+        html = self._html(auth_client, "host")
+        for hook in ("data-sb-shared-actions hidden", "data-remove-sheet hidden",
+                     "data-sb-removed hidden", "data-phones-sheet hidden",
+                     'data-action="phones" hidden', 'data-action="score-both" hidden',
+                     'data-action="release" hidden', 'data-action="remove-ask" hidden'):
+            assert hook in html, hook
+
+    def test_no_browser_dialogs(self, auth_client):
+        html = self._html(auth_client, "host")
+        assert "confirm(" not in html and "alert(" not in html
+
+    def test_the_presence_glyphs_are_in_the_sprite(self):
+        from pathlib import Path
+
+        sprite = (Path(__file__).resolve().parents[1] / "templates" / "pingpong" / "_icons.html").read_text()
+        for name in ("check", "clock", "wifi-off", "smartphone"):
+            assert f'id="i-{name}"' in sprite

@@ -48,6 +48,11 @@ urlpatterns = [
     path("matches/<int:pk>/live/side-switch/", views.LiveSideSwitchView.as_view(), name="live_side_switch"),
     path("matches/<int:pk>/live/undo/", views.LiveUndoView.as_view(), name="live_undo"),
     path("matches/<int:pk>/live/sync/", views.LiveSyncView.as_view(), name="live_sync"),
+    path(
+        "matches/<int:pk>/live/scorers/<int:player_pk>/remove/",
+        views.LiveRemoveScorerView.as_view(),
+        name="live_remove_scorer",
+    ),
     # Shared live scoring (KAN-151 / KAN-152). The lobby is host-only; the
     # join URL carries a bearer token (TOKEN_PATH_PREFIXES in sentry.py).
     path("live/lobby/new/", live_lobby_views.LiveLobbyCreateView.as_view(), name="live_lobby_create"),

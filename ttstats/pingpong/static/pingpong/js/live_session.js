@@ -29,6 +29,9 @@
  *   conflict    another device is scoring this match: read-only follow mode
  *   auth        403 or a redirect to the login page: the outbox is kept and
  *               the loop stops until the user signs in again
+ *   removed     403 {"error": "removed"}: the host removed this phone from
+ *               the match (KAN-154). The outbox is kept (it is the user's
+ *               data) and every loop stops; nothing is retried
  *
  * Shared scoring (KAN-153, `options.shared`): two phones, one stream each.
  * With `shared` false none of this runs and the client is the KAN-80/81 one.
@@ -53,6 +56,19 @@
  *   - Pending points the mirror refuses on the new base (the other phone
  *     finished the match first) stay queued and are counted as `stuck`;
  *     the server decides when they arrive.
+ *
+ * Presence and takeover (KAN-154):
+ *   - `take_over` / `release` are ops like any other (persisted, sequenced
+ *     in my stream, never cancelled); they change no score. `view.canScoreBoth`
+ *     is the base's `me.can_score_both` with my pending ones applied, so the
+ *     layout switches at the tap, offline too.
+ *   - Undo also names the recorder of the point it removes (`expects_by`),
+ *     when this phone knows it: sequences are reused after an undo.
+ *   - Presence (`view.presence`) is the newest `scorers` any answer carried,
+ *     with when it arrived and the server's clock then; `presenceLine`
+ *     words it. A held poll that times out (204) is followed by one instant
+ *     full read (no `since`), so the other phone's presence is never older
+ *     than one hold.
  *
  * No DOM. Everything with a side effect (fetch, timers, clock, randomness,
  * connectivity) is injected, so tests/js/live_session.test.mjs drives it with
@@ -105,6 +121,7 @@
     if (op.type === 'point') out.side = op.side;
     if (op.type === 'start') out.initial_server = op.initial_server;
     if (op.type === 'undo' && Number.isInteger(op.expects)) out.expects = op.expects;
+    if (op.type === 'undo' && Number.isInteger(op.expects_by)) out.expects_by = op.expects_by;
     if (op.client_ts) out.client_ts = op.client_ts;
     return out;
   }
@@ -153,6 +170,10 @@
       return resp;
     }
 
+    function isRemoved(resp) {
+      return resp.status === 403 && Boolean(resp.body) && resp.body.error === 'removed';
+    }
+
     function state(opts) {
       return doFetch(options.stateUrl, {
         credentials: 'same-origin',
@@ -165,10 +186,13 @@
     // The shared-scoring long-poll (KAN-168): `?since=<rev>[&wait=1]`.
     // Answers {status, body, loginRedirect, busy}; `busy` is the server's
     // `X-Longpoll: busy` (another held poll of this user has the slot).
+    // `since: null` is a plain full read (KAN-154's presence refresh).
     function poll(opts) {
       var sep = options.stateUrl.indexOf('?') === -1 ? '?' : '&';
-      var url = options.stateUrl + sep + 'since=' + encodeURIComponent(String(opts.since)) +
-        (opts.wait ? '&wait=1' : '');
+      var url = opts.since === null || opts.since === undefined
+        ? options.stateUrl
+        : options.stateUrl + sep + 'since=' + encodeURIComponent(String(opts.since)) +
+          (opts.wait ? '&wait=1' : '');
       return doFetch(url, {
         credentials: 'same-origin',
         cache: 'no-store',
@@ -181,6 +205,17 @@
           return keepToken(out);
         });
       });
+    }
+
+    // The host removes another phone (KAN-154): POST, no body.
+    function remove(url, opts) {
+      return doFetch(url, {
+        method: 'POST',
+        credentials: 'same-origin',
+        cache: 'no-store',
+        headers: { Accept: 'application/json', 'X-CSRFToken': token() },
+        signal: opts && opts.signal,
+      }).then(normalise);
     }
 
     function postSync(ops, opts) {
@@ -204,7 +239,8 @@
       // ops carry seqs, so nothing is applied twice.
       sync: function (ops, opts) {
         return postSync(ops, opts).then(function (resp) {
-          if (resp.status !== 403 || resp.loginRedirect) return resp;
+          // "removed" is the server's answer, not a stale token: no retry.
+          if (resp.status !== 403 || resp.loginRedirect || isRemoved(resp)) return resp;
           var before = token();
           return state(opts).then(function (fresh) {
             if (fresh.status !== 200 || fresh.loginRedirect || token() === before) return resp;
@@ -214,7 +250,68 @@
       },
       state: state,
       poll: poll,
+      remove: remove,
     };
+  }
+
+  // --- presence (KAN-154) -------------------------------------------------
+
+  function parseTime(value) {
+    var t = typeof value === 'string' ? Date.parse(value) : NaN;
+    return isNaN(t) ? null : t;
+  }
+
+  function ago(seconds) {
+    var s = Math.max(0, Math.floor(seconds));
+    var minute = 60;
+    var hour = minute * minute;
+    if (s < minute) return s + ' s';
+    if (s < hour) return Math.floor(s / minute) + ' min';
+    return Math.floor(s / hour) + ' h';
+  }
+
+  /**
+   * One line of the presence strip for another phone.
+   *
+   *   scorer  a `scorers` row from the payload
+   *   opts    {nowMs, receivedAtMs, serverNow, inSyncS, lostS}: the phone's
+   *           clock now and when the payload arrived, the server's clock in
+   *           that payload, and the thresholds from the bootstrap
+   *
+   * Age = (serverNow - last_seen_at) + (now - receivedAt): measured on the
+   * server's clock, then aged on this phone's, so neither clock's offset
+   * matters. A phone holding a long-poll (`polling`) is in sync whatever its
+   * stamp says. Returns {status: 'sync'|'behind'|'lost', ageS, text}, or null
+   * for a removed phone.
+   */
+  function presenceLine(scorer, opts) {
+    if (!scorer || scorer.revoked) return null;
+    var name = (scorer.name || 'The other') + '’s phone';
+    var both = scorer.can_score_both ? ' · scoring both sides' : '';
+    var ageS;
+    if (scorer.polling) {
+      ageS = 0;
+    } else {
+      var seen = parseTime(scorer.last_seen_at);
+      if (seen === null) {
+        return { status: 'lost', ageS: null, text: name + ' · not seen yet' + both };
+      }
+      var serverNow = parseTime(opts.serverNow);
+      var received = Number.isFinite(opts.receivedAtMs) ? opts.receivedAtMs : opts.nowMs;
+      var base = serverNow === null ? opts.nowMs - seen : serverNow - seen;
+      ageS = Math.max(0, (base + (opts.nowMs - received)) / 1000);
+    }
+    if (ageS < opts.inSyncS) {
+      return { status: 'sync', ageS: ageS, text: name + ' · in sync' + both };
+    }
+    if (ageS < opts.lostS) {
+      return {
+        status: 'behind',
+        ageS: ageS,
+        text: name + ' · last seen ' + ago(ageS) + ' ago, their points will arrive when it reconnects' + both,
+      };
+    }
+    return { status: 'lost', ageS: ageS, text: name + ' · not seen for ' + ago(ageS) + both };
   }
 
   function create(options) {
@@ -253,6 +350,9 @@
 
     var follow = false;
     var authRequired = false;
+    var removed = false;
+    // The newest presence any answer carried (KAN-154).
+    var presence = { scorers: [], receivedAt: null, serverNow: null, rev: -1 };
     var completedUrl = null;
     var lastFlushFailed = false;
     var failures = 0;
@@ -265,7 +365,15 @@
     var stopped = false;
     // The long-poll (shared only): one request at a time, its own controller.
     var poll = { inFlight: false, controller: null, deadline: null, timer: null, failures: 0, token: 0 };
+    notePresence(base.payload);
     var local = derive();
+
+    function notePresence(payload) {
+      if (!payload || !Array.isArray(payload.scorers)) return;
+      var rev = Number.isInteger(payload.rev) ? payload.rev : 0;
+      if (rev < presence.rev) return; // an older answer arriving late
+      presence = { scorers: payload.scorers, receivedAt: now(), serverNow: payload.server_now || null, rev: rev };
+    }
 
     function revOf(payload) {
       return payload && Number.isInteger(payload.rev) ? payload.rev : 0;
@@ -310,6 +418,17 @@
       return last && Number.isInteger(last.sequence) ? last.sequence : 0;
     }
 
+    // Who recorded the base's trailing point (`last_point.by`), or null.
+    function lastPointBy(payload) {
+      var last = payload && payload.last_point;
+      return last && Number.isInteger(last.by) ? last.by : null;
+    }
+
+    function myPlayerId() {
+      var me = base.payload && base.payload.me;
+      return me && Number.isInteger(me.player_id) ? me.player_id : null;
+    }
+
     function baseState() {
       var state = base.payload && base.payload.state;
       if (!state || typeof state !== 'object' || !('started' in state)) {
@@ -329,6 +448,10 @@
           return rules.undoLastPoint(state);
         case 'side_switch':
           return [rules.confirmSideSwitch(state), null];
+        case 'take_over':
+        case 'release':
+          // Authorization, not scoring (KAN-154): the state is unchanged.
+          return [state, null];
         default:
           throw new Error('unknown op ' + op.type);
       }
@@ -341,33 +464,52 @@
     // will have (the base's last_point, +1 per point, -1 per undo), an undo
     // whose `expects` does not match it is skipped (the server answers
     // "stale undo"), and refused points are counted as `stuck`.
-    function replay(state, ops, trailingStart) {
+    //
+    // `byStack` follows who recorded each point this phone can name, from the
+    // base's last_point down: a pending point is mine, an undo pops. Below the
+    // base's trailing point the recorder is unknown (null), and the undo then
+    // goes out with `expects` alone.
+    function replay(state, ops, trailingStart, byStart) {
       var games = {};
       var trailing = trailingStart || 0;
+      var byStack = trailing > 0 ? [byStart === undefined ? null : byStart] : [];
+      var mine = myPlayerId();
       var stuck = 0;
       (state.events || []).forEach(function (e) {
         if (e.game_end) games[e.game] = [e.final_t1, e.final_t2];
       });
       ops.forEach(function (op) {
-        if (shared && op.type === 'undo' && op.expects !== trailing) return;
+        if (shared && op.type === 'undo') {
+          if (op.expects !== trailing) return;
+          // The same sequence recorded by someone else: the server will
+          // refuse it too ("stale undo"). Unknown recorder: cannot tell.
+          var top = byStack.length ? byStack[byStack.length - 1] : null;
+          if (Number.isInteger(op.expects_by) && Number.isInteger(top) && op.expects_by !== top) return;
+        }
         try {
           var hadEvents = Boolean((state.events || []).length);
           var result = applyOp(state, op);
           state = result[0];
           var done = op.type === 'point' ? result[1] : null;
           if (done) games[done.game_number] = [done.team1_score, done.team2_score];
-          if (op.type === 'point') trailing += 1;
-          else if (op.type === 'undo' && hadEvents) trailing -= 1;
+          if (op.type === 'point') {
+            trailing += 1;
+            byStack.push(mine);
+          } else if (op.type === 'undo' && hadEvents) {
+            trailing -= 1;
+            byStack.pop();
+          }
         } catch (err) {
           // Refused locally; see above.
           if (op.type === 'point') stuck += 1;
         }
       });
-      return { state: state, games: games, trailing: trailing, stuck: stuck };
+      var top = byStack.length ? byStack[byStack.length - 1] : null;
+      return { state: state, games: games, trailing: trailing, trailingBy: top === undefined ? null : top, stuck: stuck };
     }
 
     function derive() {
-      var replayed = replay(baseState(), outbox.pending(), lastPointSeq(base.payload));
+      var replayed = replay(baseState(), outbox.pending(), lastPointSeq(base.payload), lastPointBy(base.payload));
       var state = replayed.state;
       // Games before the current one: from the events, then from what this
       // outbox remembered (the events list is capped).
@@ -379,7 +521,22 @@
         }
       });
       outbox.saveGames(games);
-      return { state: state, games: games, trailing: replayed.trailing, stuck: shared ? replayed.stuck : 0 };
+      return {
+        state: state, games: games, trailing: replayed.trailing, trailingBy: replayed.trailingBy,
+        stuck: shared ? replayed.stuck : 0,
+      };
+    }
+
+    // This phone's can_score_both: the base's, then my pending take_over /
+    // release in order. No row (staff, legacy): the two-zone layout.
+    function canScoreBoth() {
+      var me = base.payload && base.payload.me;
+      var value = me ? Boolean(me.can_score_both) : true;
+      outbox.pending().forEach(function (op) {
+        if (op.type === 'take_over') value = true;
+        else if (op.type === 'release') value = false;
+      });
+      return value;
     }
 
     function view() {
@@ -387,6 +544,7 @@
       var pending = outbox.pending();
       var phase;
       if (completedUrl) phase = 'completed';
+      else if (removed) phase = 'removed';
       else if (follow) phase = 'follow';
       else if (authRequired) phase = 'auth';
       else if (!pending.length) phase = 'synced';
@@ -419,6 +577,13 @@
         rev: revOf(base.payload),
         scorers: (base.payload && base.payload.scorers) || [],
         me: (base.payload && base.payload.me) || null,
+        // KAN-154. `trailingBy`: the recorder an undo tapped now names
+        // (`expects_by`), null when unknown. `canScoreBoth` includes my
+        // pending take_over / release. `presence`: see notePresence.
+        trailingBy: local.trailingBy,
+        canScoreBoth: canScoreBoth(),
+        presence: presence,
+        removed: removed,
       };
     }
 
@@ -469,6 +634,24 @@
       onEvent('completed', { redirectUrl: url });
     }
 
+    // The host removed this phone (KAN-154). Every loop stops; the outbox is
+    // the user's data and stays (a later "rejoin" cannot reach the stream,
+    // but nothing here deletes what they tapped).
+    function enterRemoved() {
+      if (removed) return;
+      removed = true;
+      if (timer !== null) timers.clearTimeout(timer);
+      timer = null;
+      stopPoll();
+      report('live sync: this phone was removed from the match', { applied_seq: base.applied });
+      onChange(view());
+      onEvent('removed', {});
+    }
+
+    function isRemoved(resp) {
+      return Boolean(resp) && resp.status === 403 && Boolean(resp.body) && resp.body.error === 'removed';
+    }
+
     function enterFollow(payload, why) {
       follow = true;
       outbox.clear();
@@ -481,6 +664,7 @@
     }
 
     function reconcile(body, sent) {
+      notePresence(body);
       if (body.redirect_url && body.is_live === false) {
         complete(body.redirect_url);
         return;
@@ -591,7 +775,7 @@
     // --- the flush --------------------------------------------------------
 
     function flush() {
-      if (stopped || completedUrl || follow) return Promise.resolve();
+      if (stopped || completedUrl || follow || removed) return Promise.resolve();
       if (inFlight) {
         again = true;
         return inFlight;
@@ -632,6 +816,10 @@
       inFlight = settled.then(function (resp) {
         timers.clearTimeout(deadline);
         inFlight = null;
+        if (isRemoved(resp)) {
+          enterRemoved();
+          return;
+        }
         if (resp.loginRedirect || resp.status === 401 || resp.status === 403) {
           authRequired = true;
           lastFlushFailed = true;
@@ -672,11 +860,16 @@
     // Re-read the canonical state (LiveStateView). Only adopted when the
     // outbox is empty, or in follow mode, or when forced.
     function refresh(opts) {
-      if (stopped || completedUrl || !transport.state) return Promise.resolve();
+      if (stopped || completedUrl || removed || !transport.state) return Promise.resolve();
       var force = opts && opts.force;
       return Promise.resolve(transport.state({})).then(function (resp) {
+        if (isRemoved(resp)) {
+          enterRemoved();
+          return;
+        }
         if (!resp || !resp.body || resp.status !== 200) return;
         var body = resp.body;
+        notePresence(body);
         if (shared && !follow && !force) {
           adoptRemote(body);
           return;
@@ -703,7 +896,8 @@
     // pending ops replay on top of it. Never "server wins" -- this is not an
     // answer to my ops.
     function adoptRemote(body) {
-      if (!body || completedUrl) return;
+      if (!body || completedUrl || removed) return;
+      notePresence(body);
       if (body.redirect_url && body.is_live === false) {
         // The match is over. With nothing of mine queued, follow the
         // server. Otherwise send what is queued: the server decides (it
@@ -742,7 +936,7 @@
     // held poll never delays sending my ops. At most one in flight.
 
     function pollAllowed() {
-      return shared && !stopped && !completedUrl && !authRequired &&
+      return shared && !stopped && !completedUrl && !authRequired && !removed &&
         typeof transport.poll === 'function' && isVisible();
     }
 
@@ -771,6 +965,10 @@
       }, ms);
     }
 
+    // `wait`: true = held (`since` + wait=1), false = instant (`since`),
+    // 'fresh' = a plain full read (no `since`), after a held poll timed
+    // out: nothing moved, but the other phone's presence may have.
+
     function pollFailed() {
       poll.failures += 1;
       if (pollAllowed()) schedulePoll(backoffDelay(poll.failures), true);
@@ -789,9 +987,11 @@
       poll.controller = controller;
       var startedAt = now();
       var request;
+      var fresh = wait === 'fresh';
+      if (fresh) wait = false;
       try {
         request = Promise.resolve(transport.poll({
-          since: revOf(base.payload),
+          since: fresh ? null : revOf(base.payload),
           wait: Boolean(wait),
           signal: controller ? controller.signal : undefined,
         }));
@@ -816,6 +1016,10 @@
         poll.deadline = null;
         poll.inFlight = false;
         poll.controller = null;
+        if (isRemoved(resp)) {
+          enterRemoved();
+          return;
+        }
         if (resp.loginRedirect || resp.status === 401 || resp.status === 403) {
           authRequired = true;
           onChange(view());
@@ -824,7 +1028,10 @@
         }
         if (resp.status === 200 && resp.body) {
           poll.failures = 0;
+          var before = presence;
           adoptRemote(resp.body);
+          // Presence alone moved (a fresh read with nothing new): repaint.
+          if (presence !== before && !completedUrl) onChange(view());
           // Re-issued at once with the server's rev. If the base does not
           // carry that rev (the match is over with ops queued, or a base
           // that claims a rev the server never had), `since` would differ
@@ -839,7 +1046,8 @@
           // same thing in effect. Either way, never spin.
           var quick = wait && now() - startedAt < cfg.minHoldMs;
           if (resp.busy || quick) schedulePoll(cfg.busyMs, true);
-          else if (pollAllowed()) startPoll(true);
+          // A hold that ran out: one full read for the presence, then hold.
+          else if (pollAllowed()) startPoll(wait ? 'fresh' : true);
         } else {
           pollFailed();
         }
@@ -871,14 +1079,19 @@
       // {ok, op, completedGame} or {ok:false, error}.
       dispatch: function (op) {
         if (completedUrl) return { ok: false, error: 'Match is already complete' };
+        if (removed) return { ok: false, error: 'Removed from scoring this match' };
         if (follow) return { ok: false, error: 'Read-only: another device is scoring' };
         if (shared && op.type === 'undo') {
           // A shared undo names the point it removes (KAN-150 `expects`):
           // the sequence the trailing point has in what this phone shows,
           // fixed now, at the tap. If anything lands before it, the server
           // refuses it ("stale undo") rather than delete a point not seen.
+          // KAN-154: and who recorded it, when known, since a sequence is
+          // reused once the other phone undoes and scores again.
           if (local.trailing < 1) return { ok: false, error: 'Nothing to undo' };
-          op = Object.assign({}, op, { expects: local.trailing });
+          var condition = { expects: local.trailing };
+          if (Number.isInteger(local.trailingBy)) condition.expects_by = local.trailingBy;
+          op = Object.assign({}, op, condition);
         }
         var result;
         try {
@@ -914,6 +1127,26 @@
 
       refresh: refresh,
 
+      // The host removes another phone (KAN-154). Online only: it is a
+      // decision, not a tap to replay. Resolves {ok, error}.
+      removeScorer: function (url) {
+        if (!transport.remove) return Promise.resolve({ ok: false, error: 'unsupported' });
+        return Promise.resolve(transport.remove(url)).then(function (resp) {
+          if (isRemoved(resp)) {
+            enterRemoved();
+            return { ok: false, error: 'removed' };
+          }
+          if (resp && resp.status === 200 && resp.body) {
+            adoptRemote(resp.body);
+            onChange(view());
+            return { ok: true };
+          }
+          return { ok: false, error: (resp && resp.body && resp.body.error) || 'status ' + (resp && resp.status) };
+        }, function () {
+          return { ok: false, error: 'network' };
+        });
+      },
+
       // Leave follow mode and score on this device from the server's state.
       takeOver: function () {
         follow = false;
@@ -944,6 +1177,7 @@
   return Object.freeze({
     create: create,
     fetchTransport: fetchTransport,
+    presenceLine: presenceLine,
     comparable: comparable,
     DEFAULTS: DEFAULTS,
   });

@@ -277,7 +277,8 @@ Known limit (server side, KAN-150): sequences are reused after an undo, so
 `expects` cannot tell "my #8" from "their new #8" when the other phone undid
 #8 and scored again between my seeing it and my undo landing. It needs an
 undo and a point from the other phone inside one round trip of mine; a
-`(sequence, by)` check would close it.
+`(sequence, by)` check would close it. Closed by KAN-154 (`expects_by`,
+below), except for one recorder re-scoring its own number.
 
 ### Follow mode is per user, and gaps renumber
 
@@ -328,3 +329,98 @@ waits are timing and stay out of the fixture.
   outside `@layer` with the new `.score-pulse`.
 - Playwright's `use.reducedMotion` does not reach `matchMedia` in WebKit (as
   `momentum.reduced.spec.js` notes); the reduced spec calls `emulateMedia`.
+
+## KAN-154: presence, takeover and recovery
+
+The rules are in `.claude/rules/live-scoring.md` ("Presence, takeover,
+removal"); this records the choices.
+
+### Undo names its recorder: `(sequence, by)`
+
+KAN-153's known limit, closed. `PointEvent.sequence` is `MAX + 1`, so after
+an undo the next point reuses the number: phone A sees B's #8, B undoes it
+and scores a new #8, and A's undo of "#8" (sent with `expects` alone) would
+delete a point A never saw. An undo now also carries `expects_by`, the player
+the client believes recorded the trailing point, and `check_undo_expects`
+refuses `stale undo` when the trailing row's `recorded_by` differs.
+
+- The client knows the recorder of the base's `last_point` (`by`) and of its
+  own queued points (itself, `me.player_id`). Below the base's trailing
+  point it does not, and that undo goes out with `expects` alone. A pending
+  undo whose recorder no longer matches is skipped in the local replay, as
+  the server will refuse it.
+- `expects` alone stays valid: older cached pages send only it, and a row
+  written before KAN-150 has no `recorded_by` (`by` null, so nothing to send).
+- **Remaining window:** the same recorder undoing and re-scoring the same
+  number (B's old #8, B's new #8) is still indistinguishable. It needs B to
+  undo its own point and score again within one round trip of A's undo; a
+  per-row identity in `last_point` (the row id) would close it, at the cost
+  of a field every client and the fake must carry. Not done until seen.
+- The two-stream fidelity harness sends `expects_by` on half its correct
+  undos and adds a "right sequence, wrong recorder" stale case; a canary
+  proves it fails against a check that ignores the recorder.
+
+### Takeover is an op, removal is not
+
+`take_over` / `release` are sequenced in the requester's stream because they
+must be ordered with that phone's points: a takeover tapped offline, then
+points for the other side, must land in that order or the points are `not
+your side`. Queued, they are also never lost. Removal is the host's online
+decision about *another* phone; replaying it from an outbox after the fact
+would be surprising, so it is a plain POST under the match lock, with no
+seq.
+
+- A takeover never touches the other row. If that phone was only in a dead
+  zone, its queued points land on return (arrival order), and both phones'
+  presence then shows that both score: the decision record's game-boundary
+  hazard applies to them like to any two writers.
+- `take_over` when already scoring both (a solo host) is applied with no rev
+  bump: nothing anyone renders changed. `release` by the only active scorer
+  is refused: nobody could then score the other side.
+- Single-op endpoints: not added. They exist for pages cached from before
+  KAN-88, which never send these ops.
+
+### Removed is its own 403
+
+A removed phone's requests are 403 `{"error": "removed"}` (JSON), so the
+client can tell it from a CSRF failure (Django's HTML 403) and from a
+session bounce. The transport's CSRF retry-once skips it, and the session
+enters a `removed` phase: loops stop, taps are ignored, the outbox stays
+(it is the user's data; nothing deletes it). The scoreboard page itself
+redirects a removed scorer to Today with the message; match detail is not
+an option while the match is live (the default manager hides live matches).
+Staff keep their viewing bypass even with a revoked row of their own.
+
+### Presence without a write per poll
+
+`last_seen_at` is stamped at most every `SEEN_EVERY` (5 s) and only when a
+request arrives, and a long-poll holds for 20 s, so a healthy phone's stamp
+can be 25 s old. Lowering the throttle would turn every poll into a write;
+instead the payload says `polling: true` for a scorer whose
+`live_poll_key` marker is set (one `get_many`, no query): a phone holding a
+poll is present. When the phone dies, its held request ends within one hold
+and the marker goes, so "not seen" is at most a hold late.
+
+The other half: a phone learns presence only from answers, and a held poll
+with nothing new ends in a bodyless 204. So a 204 after a full hold is
+followed by one plain read (no `since`), at most one extra request per hold
+per phone. Age is measured on the server's clock (`server_now -
+last_seen_at`) and then advanced by the phone's own clock since the answer
+arrived, so neither clock's offset matters.
+
+### Today for every scorer
+
+`_live_matches` reads scorer rows (non-revoked), plus the row-less legacy
+shape for its scorekeeper, and words the score from the viewer's side, so the
+guest's card is "3-1 up on Host", not the host's view. The link reads "You're
+scoring this match · Resume" (existing specs find it by "Resume").
+
+### e2e: timings and rate limits
+
+`settings/e2e.py` sets the hold to 6 s and presence to 6 s / 20 s (env
+`E2E_LONGPOLL_WAIT`, `E2E_PRESENCE_IN_SYNC`, `E2E_PRESENCE_LOST`), so the
+takeover spec waits about 30 s, not two minutes. IN_SYNC stays above
+`SEEN_EVERY`, or a phone between two polls flickers to "last seen". The e2e
+server also turns `django-ratelimit` off: the join link (20/h) and the login
+form (5/15 min) are per IP, every spec request is 127.0.0.1, and
+`--repeat-each=10` alone exceeds both; the limits are pytest's.

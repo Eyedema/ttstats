@@ -699,8 +699,10 @@ class TestTheHarnessCatchesABatchServerIgnoringSeq:
 # each with its own seq stream. A generated points script is split by side
 # into A's points and B's, and delivered in a seeded interleaving that keeps
 # each stream's order, mixed with what two writers really send: undos with a
-# correct ``expects`` and with a stale (or missing) one, the losing ``start``,
-# a ``side_switch`` from both, and taps for the other side.
+# correct ``expects`` and with a stale (or missing) one, with and without
+# ``expects_by`` (KAN-154: the right sequence recorded by the wrong phone is
+# stale too), the losing ``start``, a ``side_switch`` from both, and taps for
+# the other side.
 #
 # The oracle is ``live_scoring`` replaying the same arrival order. Whatever
 # the delivery (single-op endpoints with re-sends, or ``live_sync`` in one of
@@ -784,14 +786,23 @@ def two_stream_script(seed, best_of):
         roll = rng.random()
         if oracle["events"] and roll < 0.14:
             stream = rng.choice(("A", "B"))
-            if rng.random() < 0.65:
-                emit(stream, "undo", True, expects=len(rows))
+            kind = rng.random()
+            if kind < 0.6:
+                # Half name the recorder (``expects_by``), half do not: an
+                # older client sends the sequence alone.
+                by = {"expects_by": rows[-1][5]} if rng.random() < 0.5 else {}
+                emit(stream, "undo", True, expects=len(rows), **by)
                 oracle, _ = ls.undo_last_point(oracle)
                 rows.pop()
-            elif rng.random() < 0.75:
+            elif kind < 0.78:
                 # The other phone's point landed after this one looked.
                 stale = len(rows) - 1 if len(rows) > 1 else len(rows) + 1
                 emit(stream, "undo", False, expects=stale)
+            elif kind < 0.9:
+                # The right sequence, but this phone saw the other phone's
+                # point there: it was undone and replaced since (KAN-154).
+                other = "B" if rows[-1][5] == "A" else "A"
+                emit(stream, "undo", False, expects=len(rows), expects_by=other)
             else:
                 emit(stream, "undo", False, shared_only=True)
         elif roll < 0.17:
@@ -817,12 +828,22 @@ def two_stream_script(seed, best_of):
 
 
 def _wire(op):
-    """The op as a client sends it."""
+    """The op as a client sends it. ``expects_by`` must have been bound to a
+    player id first (:func:`_bind_recorders`)."""
     body = {"seq": op["seq"], "type": op["type"]}
-    for key in ("side", "initial_server", "expects"):
+    for key in ("side", "initial_server", "expects", "expects_by"):
         if key in op:
             body[key] = op[key]
     return body
+
+
+def _bind_recorders(ops, players):
+    """The script names a stream ("A"/"B") in ``expects_by``; the wire
+    carries that stream's player id."""
+    return [
+        {**op, "expects_by": players[op["expects_by"]].pk} if "expects_by" in op else op
+        for op in ops
+    ]
 
 
 def _send_single(client, match, op):
@@ -974,6 +995,7 @@ class TestTwoStreams:
         delivery = DELIVERIES[seed % len(DELIVERIES)]
 
         match, players, clients = _shared_match(auth_client, best_of)
+        ops = _bind_recorders(ops, players)
         rng = random.Random(seed)
         with mock.patch.object(
             point_rollups, "rebuild_match_summaries",
@@ -1003,14 +1025,22 @@ class TestTwoStreams:
         best_of = 3 if seed % 3 else 5
         ops, _, _ = two_stream_script(seed, best_of)
 
-        shared, _, clients = _shared_match(auth_client, best_of)
+        shared, players, clients = _shared_match(auth_client, best_of)
         deliver_two_streams_batched(
-            clients, shared, ops, "one_batch_per_run", random.Random(seed)
+            clients, shared, _bind_recorders(ops, players), "one_batch_per_run",
+            random.Random(seed),
         )
 
+        # A solo host records every point itself, so a stale ``expects_by``
+        # stays stale with its recorder named as the host, and a correct one
+        # becomes the host.
         solo = live_match(best_of=best_of)
+        host = solo.scorekeeper.pk
         single = [
-            {**_wire(op), "seq": i + 1}
+            {**_wire({**op, "expects_by": host} if op.get("applied") and "expects_by" in op
+                     else {**op, "expects_by": host + 10_000} if "expects_by" in op
+                     else op),
+             "seq": i + 1}
             for i, op in enumerate(o for o in ops if not o["shared_only"])
         ]
         _sync_until_applied(auth_client(solo.scorekeeper.user), solo, single)
@@ -1026,6 +1056,10 @@ class TestTwoStreams:
                 if op["type"] == "undo":
                     if op["applied"]:
                         seen.add("undo applied")
+                        if "expects_by" in op:
+                            seen.add("undo applied with expects_by")
+                    elif "expects_by" in op:
+                        seen.add("stale expects_by")
                     elif "expects" in op:
                         seen.add("stale expects")
                     else:
@@ -1043,7 +1077,8 @@ class TestTwoStreams:
             if any(r[0] > 1 for r in rows):
                 seen.add("second game")
         assert seen == {
-            "undo applied", "stale expects", "undo without expects", "second start",
+            "undo applied", "undo applied with expects_by", "stale expects",
+            "stale expects_by", "undo without expects", "second start",
             "side switch from both", "wrong side", "complete", "guest started",
             "second game",
         }
@@ -1056,13 +1091,26 @@ class TestTheTwoStreamHarnessCatchesBrokenWriters:
 
     SEED = 5
 
-    def _deliver_unchecked(self, auth_client):
-        """Deliver seed ``SEED`` as one-op batches without waiting for a
-        rejection: a broken server may apply what should be refused."""
-        best_of = 3 if self.SEED % 3 else 5
-        ops, oracle, rows = two_stream_script(self.SEED, best_of)
+    # A seed carrying stale ``expects_by`` undos (KAN-154).
+    BY_SEED = 3
+
+    def _deliver_unchecked(self, auth_client, seed=None, *, name_recorders=True):
+        """Deliver a seed (``SEED`` by default) as one-op batches without
+        waiting for a rejection: a broken server may apply what should be
+        refused. ``name_recorders=False`` sends no ``expects_by``, for a
+        canary that breaks attribution (which ``expects_by`` reads)."""
+        seed = self.SEED if seed is None else seed
+        best_of = 3 if seed % 3 else 5
+        ops, oracle, rows = two_stream_script(seed, best_of)
         match, players, clients = _shared_match(auth_client, best_of)
-        for stream, batch in two_stream_batches(ops, "one_op_batches", random.Random(self.SEED)):
+        if name_recorders:
+            ops = _bind_recorders(ops, players)
+        else:
+            # Only sound for a seed whose expects_by undos all apply: without
+            # the recorder a stale one would apply.
+            assert not any("expects_by" in op and not op["applied"] for op in ops)
+            ops = [{k: v for k, v in op.items() if k != "expects_by"} for op in ops]
+        for stream, batch in two_stream_batches(ops, "one_op_batches", random.Random(seed)):
             _post(clients[stream], reverse("pingpong:live_sync", args=[match.pk]), {"ops": batch})
         return dict(match=match, ops=ops, oracle=oracle, rows=rows, players=players)
 
@@ -1074,7 +1122,7 @@ class TestTheTwoStreamHarnessCatchesBrokenWriters:
             return original(match, **kwargs)
 
         monkeypatch.setattr(views, "_record_point_event", broken)
-        delivered = self._deliver_unchecked(auth_client)
+        delivered = self._deliver_unchecked(auth_client, name_recorders=False)
         with pytest.raises(AssertionError, match="attribution diverged"):
             assert_two_stream_record(mode="canary", **delivered)
 
@@ -1087,6 +1135,24 @@ class TestTheTwoStreamHarnessCatchesBrokenWriters:
             op["type"] == "undo" and "expects" in op and not op["applied"]
             for op in delivered["ops"]
         ), "the canary seed must carry a stale expects"
+        with pytest.raises(AssertionError, match="diverged from the oracle"):
+            assert_two_stream_record(mode="canary", **delivered)
+
+    def test_an_undo_ignoring_expects_by_is_detected(self, auth_client, monkeypatch):
+        """KAN-154: a check that compares the sequence only lets an undo
+        through that names the other phone's point at the right sequence."""
+        from pingpong import live_ops
+
+        original = live_ops.check_undo_expects
+        monkeypatch.setattr(
+            live_ops, "check_undo_expects",
+            lambda match, op, trailing: original(match, {**op, "expects_by": None}, trailing),
+        )
+        delivered = self._deliver_unchecked(auth_client, self.BY_SEED)
+        assert any(
+            op["type"] == "undo" and "expects_by" in op and not op["applied"]
+            for op in delivered["ops"]
+        ), "the canary seed must carry a stale expects_by"
         with pytest.raises(AssertionError, match="diverged from the oracle"):
             assert_two_stream_record(mode="canary", **delivered)
 

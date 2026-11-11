@@ -17,7 +17,8 @@ runs through pytest)::
 
 A script is ``{"name", "best_of", "shared", "steps"}``; a step is
 ``{"as": "host" | "guest", "call": "sync", "ops": [...]}`` or
-``{"as", "call": "state", "since": int | "rev" | None, "wait": bool}``
+``{"as", "call": "state", "since": int | "rev" | None, "wait": bool}`` or
+``{"as": "host", "call": "remove", "target": "guest"}`` (KAN-154)
 (``"rev"``: the match's current rev, read before the call). No step holds a
 long-poll: a held wait is timing, and is covered by ``test_live_longpoll.py``
 on the server and by the fake's own tests.
@@ -25,7 +26,8 @@ on the server and by the fake's own tests.
 Normalisation (also in the JS test, keep them in step): timestamps are
 dropped (``last_point_at``, an event's ``t``, ``last_seen_at``), player ids
 become the scorer's role (an event's and ``last_point``'s ``by``, the
-``scorers`` rows), ``redirect_url`` becomes ``"confirm"``/``"detail"``, and
+``scorers`` rows, ``me``), ``server_now`` and ``polling`` (timing) are
+dropped, ``redirect_url`` becomes ``"confirm"``/``"detail"``, and
 ``csrf_token`` is dropped.
 """
 from __future__ import annotations
@@ -85,6 +87,40 @@ SCRIPTS = [
         ],
     },
     {
+        # KAN-154: takeover, release, expects_by and removing a phone.
+        "name": "shared_takeover",
+        "best_of": 1,
+        "shared": True,
+        "steps": [
+            {"as": "guest", "call": "sync", "ops": [{"seq": 1, "type": "start", "initial_server": "team1"}]},
+            {"as": "host", "call": "sync", "ops": [
+                {"seq": 1, "type": "point", "side": "team1"},
+                {"seq": 2, "type": "point", "side": "team2"},
+            ]},
+            # Take over: consumes its seq; a second one is a no-op (no rev).
+            {"as": "host", "call": "sync", "ops": [{"seq": 3, "type": "take_over"}]},
+            {"as": "host", "call": "sync", "ops": [{"seq": 4, "type": "take_over"}]},
+            {"as": "host", "call": "sync", "ops": [{"seq": 5, "type": "point", "side": "team2"}]},
+            # The other phone was never revoked: its points still land.
+            {"as": "guest", "call": "sync", "ops": [{"seq": 2, "type": "point", "side": "team2"}]},
+            # expects_by: right sequence, wrong recorder -> stale; then right.
+            {"as": "guest", "call": "sync", "ops": [{"seq": 3, "type": "undo", "expects": 3, "expects_by": "host"}]},
+            {"as": "guest", "call": "sync", "ops": [{"seq": 4, "type": "undo", "expects": 3, "expects_by": "guest"}]},
+            # expects alone still decides (older clients).
+            {"as": "host", "call": "sync", "ops": [{"seq": 6, "type": "undo", "expects": 2}]},
+            {"as": "guest", "call": "sync", "ops": [{"seq": 5, "type": "take_over"}, {"seq": 6, "type": "release"}]},
+            {"as": "host", "call": "sync", "ops": [{"seq": 7, "type": "release"}, {"seq": 8, "type": "point", "side": "team2"}]},
+            {"as": "host", "call": "sync", "ops": [{"seq": 9, "type": "take_over"}]},
+            {"as": "host", "call": "remove", "target": "guest"},
+            {"as": "guest", "call": "sync", "ops": [{"seq": 7, "type": "point", "side": "team2"}]},
+            {"as": "guest", "call": "state", "since": None},
+            {"as": "guest", "call": "state", "since": 0},
+            # The host is alone now: releasing would leave nobody on side 2.
+            {"as": "host", "call": "sync", "ops": [{"seq": 10, "type": "release"}]},
+            {"as": "host", "call": "state", "since": 0},
+        ],
+    },
+    {
         "name": "solo_host",
         "best_of": 3,
         "shared": False,
@@ -98,6 +134,9 @@ SCRIPTS = [
             {"as": "host", "call": "sync", "ops": [{"seq": 5, "type": "undo"}]},
             {"as": "host", "call": "sync", "ops": [{"seq": 6, "type": "undo", "expects": 9}]},
             {"as": "host", "call": "sync", "ops": [{"seq": 7, "type": "undo", "expects": 2}]},
+            # A solo host already scores both: take_over is a no-op, and
+            # release is refused (nobody else would score side 2).
+            {"as": "host", "call": "sync", "ops": [{"seq": 8, "type": "take_over"}, {"seq": 9, "type": "release"}]},
             {"as": "host", "call": "state", "since": "rev"},
             {"as": "host", "call": "state", "since": 0},
         ],
@@ -135,9 +174,15 @@ def normalise(status, body, roles):
         return {"status": status}
     out = {"status": status}
     for key in ("error", "applied_seq", "rev", "is_live", "is_match_complete",
-                "current_server", "should_prompt_side_switch", "rejected", "me"):
+                "current_server", "should_prompt_side_switch", "rejected"):
         if key in body:
             out[key] = body[key]
+    if "me" in body:
+        me = body["me"]
+        out["me"] = None if me is None else {
+            **{k: v for k, v in me.items() if k != "player_id"},
+            "player": roles.get(me.get("player_id"), "?"),
+        }
     if "state" in body:
         out["state"] = _state(body["state"], roles)
     if "redirect_url" in body:
@@ -150,7 +195,7 @@ def normalise(status, body, roles):
     if "scorers" in body:
         out["scorers"] = [
             {"role": s["role"], "side": s["side"], "applied_seq": s["applied_seq"],
-             "revoked": s["revoked"]}
+             "revoked": s["revoked"], "can_score_both": s["can_score_both"]}
             for s in body["scorers"]
         ]
     return out

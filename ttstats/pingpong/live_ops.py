@@ -42,6 +42,7 @@ from datetime import date, datetime, time, timedelta
 from datetime import timezone as dt_timezone
 from typing import Any, Callable
 
+from django.conf import settings
 from django.db import transaction
 from django.db.models import Max, Prefetch, prefetch_related_objects
 from django.urls import reverse
@@ -54,13 +55,15 @@ from .models import Game, LiveScorer, Match, PointEvent, Side
 
 logger = logging.getLogger(__name__)
 
-OP_TYPES = ("start", "point", "undo", "side_switch")
+OP_TYPES = ("start", "point", "undo", "side_switch", "take_over", "release")
 
 NOT_LIVE = "Match is not live"
 NOT_STARTED = "Match has not started — pick an initial server"
 ALREADY_STARTED = "Match already started"
 NOT_YOUR_SIDE = "not your side"
 STALE_UNDO = "stale undo"
+NOT_A_SCORER = "not a scorer"
+ONLY_SCORER = "only scorer"
 
 
 @dataclass(frozen=True)
@@ -277,7 +280,24 @@ def save_scorer(scorer: LiveScorer | None) -> None:
 
 
 def presence(match: Match) -> list[dict[str, Any]]:
-    """Every scorer of the match, for the payload's ``scorers``."""
+    """Every scorer of the match, for the payload's ``scorers``.
+
+    ``polling`` (KAN-154) is True while the scorer's phone holds a long-poll
+    (its ``live_poll_key`` marker is set): ``last_seen_at`` is stamped when a
+    poll arrives and a poll is held for up to ``LIVE_LONGPOLL_WAIT`` seconds,
+    so a phone sitting in a held poll is present even though its stamp is
+    that old. One cache round trip for every scorer, no query.
+    """
+    scorers = list(match.live_scorers.all())
+    keys = {
+        s.pk: cache_utils.live_poll_key(match.pk, s.player.user_id)
+        for s in scorers
+        if s.player.user_id is not None and s.revoked_at is None
+    }
+    try:
+        held = cache.get_many(list(keys.values())) if keys else {}
+    except Exception:
+        held = {}
     return [
         {
             "player_id": s.player_id,
@@ -287,9 +307,20 @@ def presence(match: Match) -> list[dict[str, Any]]:
             "last_seen_at": s.last_seen_at.isoformat() if s.last_seen_at else None,
             "applied_seq": s.applied_seq,
             "revoked": s.revoked_at is not None,
+            "can_score_both": s.can_score_both,
+            "polling": keys.get(s.pk) in held,
         }
-        for s in match.live_scorers.all()
+        for s in scorers
     ]
+
+
+def presence_thresholds() -> dict[str, int]:
+    """The presence strip's thresholds in seconds (KAN-154), for the
+    scoreboard's bootstrap: the client never types them."""
+    return {
+        "in_sync_s": settings.LIVE_PRESENCE_IN_SYNC,
+        "lost_s": settings.LIVE_PRESENCE_LOST,
+    }
 
 
 # --- seq bookkeeping ----------------------------------------------------------
@@ -513,6 +544,13 @@ def check_undo_expects(
         return STALE_UNDO if match.is_shared else None
     if trailing is None or trailing.sequence != expects:
         return STALE_UNDO
+    # KAN-154: sequences are reused after an undo, so "#8" alone cannot tell
+    # the point the client saw from the other phone's new #8. With
+    # ``expects_by`` (the player the client believes recorded it) the pair
+    # must match; without it, the sequence alone decides (older clients).
+    expects_by = op.get("expects_by")
+    if expects_by is not None and trailing.recorded_by_id != expects_by:
+        return STALE_UNDO
     return None
 
 
@@ -586,8 +624,80 @@ def _side_switch(
     return OpResult(applied=True)
 
 
+# --- takeover (KAN-154) -------------------------------------------------------
+#
+# ``take_over`` / ``release`` set / clear ``can_score_both`` on the
+# requester's own row. Authorization, not a scoring rule: live_scoring and
+# its JS mirror never see them. Sequenced in the requester's stream, so they
+# are ordered with that phone's points (a take_over queued offline lands
+# before the other-side points tapped after it) and deduped like any op.
+# The other scorer's row is never touched: if their phone comes back, its
+# queued points are still applied in arrival order.
+
+
+def _set_score_both(
+    match: Match, op: dict[str, Any], scorer: LiveScorer | None, value: bool
+) -> OpResult:
+    if not match.is_live:
+        return _not_live()
+    if scorer is None:
+        # A row-less (legacy) match has one scorer, who scores everything.
+        return _reject(match, op, scorer, NOT_A_SCORER)
+    if not value and not any(s.pk != scorer.pk for s in active_scorers(match)):
+        # Releasing would leave nobody able to score the other side.
+        return _reject(match, op, scorer, ONLY_SCORER)
+    if scorer.can_score_both == value:
+        # Already so (a solo host's take_over, a second release): the seq is
+        # used, nothing anyone renders changed, so no rev.
+        fields = _consume(match, op, scorer)
+        if fields:
+            Match.all_objects.filter(pk=match.pk).update(**fields)
+        return OpResult(applied=True)
+    LiveScorer.objects.filter(pk=scorer.pk).update(can_score_both=value)
+    scorer.can_score_both = value
+    # A rev bump: the other phone's presence strip shows who scores both.
+    _write_state(match, op, scorer, match.live_state)
+    return OpResult(applied=True)
+
+
+def _take_over(match: Match, op: dict[str, Any], scorer: LiveScorer | None) -> OpResult:
+    return _set_score_both(match, op, scorer, True)
+
+
+def _release(match: Match, op: dict[str, Any], scorer: LiveScorer | None) -> OpResult:
+    return _set_score_both(match, op, scorer, False)
+
+
+def remove_scorer(match: Match, host: LiveScorer, target: LiveScorer) -> OpResult:
+    """The host removes another phone (KAN-154): ``revoked_at`` on its row,
+    ``can_score_both`` on the host's, and a rev bump so a held poll wakes
+    (the removed phone then learns it is out; the host, that it scores both).
+
+    Not an op: it is not sequenced and has no client seq, because it is the
+    host's online decision, not a tap to replay. The caller holds the lock.
+    Removing an already-removed phone answers as if it had just happened.
+    """
+    if not match.is_live:
+        return _not_live()
+    changed = False
+    if target.revoked_at is None:
+        now = timezone.now()
+        LiveScorer.objects.filter(pk=target.pk).update(revoked_at=now)
+        target.revoked_at = now
+        changed = True
+    if not host.can_score_both:
+        LiveScorer.objects.filter(pk=host.pk).update(can_score_both=True)
+        host.can_score_both = True
+        changed = True
+    if changed:
+        _write_state(match, {"seq": None}, None, match.live_state)
+    return OpResult(applied=True)
+
+
 _HANDLERS: dict[str, Callable[..., OpResult]] = {
     "start": _start,
     "undo": _undo,
     "side_switch": _side_switch,
+    "take_over": _take_over,
+    "release": _release,
 }

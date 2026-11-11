@@ -988,7 +988,7 @@ class TestDashboardResumeBanner:
         resp = client.get(reverse("pingpong:dashboard"))
         assert resp.status_code == 200
         assert b"live-resume-banner" in resp.content
-        assert b"Resume" in resp.content
+        assert "You’re scoring this match".encode() in resp.content
         # opponent name appears
         opp_name = match.side2_players.first().name.encode()
         assert opp_name in resp.content

@@ -185,12 +185,15 @@ describe('shared: the long-poll loop', () => {
     const host = phone('host');
     await clock.advance(10);
     assert.deepEqual(host.transport.pollCalls.map((c) => c.wait), [false, true]);
-    await clock.advance(20000); // the server's hold ends: 204, re-issued at once
-    assert.deepEqual(host.transport.pollCalls.map((c) => c.wait), [false, true, true]);
+    // The server's hold ends: 204. KAN-154: one plain read (no `since`) for
+    // the other phone's presence, then held again at once.
+    await clock.advance(20000);
+    assert.deepEqual(host.transport.pollCalls.map((c) => c.wait), [false, true, false, true]);
+    assert.equal(host.transport.pollCalls[2].since, null);
     server.sync([{ seq: 1, type: 'point', side: 'team2' }], { as: 'guest' });
     await clock.advance(1);
-    assert.equal(host.transport.pollCalls.length, 4);
-    assert.equal(host.transport.pollCalls[3].since, 1);
+    assert.equal(host.transport.pollCalls.length, 5);
+    assert.equal(host.transport.pollCalls[4].since, 1);
     assert.equal(server.held.size, 1);
   });
 

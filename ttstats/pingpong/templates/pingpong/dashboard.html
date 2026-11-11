@@ -51,8 +51,9 @@ before you read what.
       </div>
     </div>
 
-    <a href="{{ lm.resume_url }}" class="btn-paddle flex min-h-[48px] w-full justify-between border-t border-court-line">
-      <span>Resume scoring</span>
+    {# KAN-154: any scorer of the match, host or guest, gets the way back in. #}
+    <a href="{{ lm.resume_url }}" data-testid="live-resume-link" class="btn-paddle flex min-h-[48px] w-full justify-between border-t border-court-line">
+      <span>You’re scoring this match · Resume</span>
       {% icon "arrow-right" size="md" %}
     </a>
   </section>

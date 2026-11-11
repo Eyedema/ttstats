@@ -16,7 +16,7 @@ const contract = JSON.parse(readFileSync(
   new URL('../../ttstats/pingpong/tests/fixtures/live_contract.json', import.meta.url), 'utf8'));
 
 const KEYS = ['error', 'applied_seq', 'rev', 'is_live', 'is_match_complete',
-  'current_server', 'should_prompt_side_switch', 'rejected', 'me'];
+  'current_server', 'should_prompt_side_switch', 'rejected'];
 
 function normaliseState(state, roles) {
   const out = {};
@@ -38,6 +38,15 @@ function normalise(status, body, roles) {
   if (body === null || body === undefined) return { status };
   const out = { status };
   for (const key of KEYS) if (key in body) out[key] = body[key];
+  if ('me' in body) {
+    const me = body.me;
+    if (me === null) out.me = null;
+    else {
+      out.me = {};
+      for (const [k, v] of Object.entries(me)) if (k !== 'player_id') out.me[k] = v;
+      out.me.player = roles[me.player_id] || '?';
+    }
+  }
   if ('state' in body) out.state = normaliseState(body.state, roles);
   if ('redirect_url' in body) {
     const url = body.redirect_url;
@@ -50,6 +59,7 @@ function normalise(status, body, roles) {
   if ('scorers' in body) {
     out.scorers = body.scorers.map((s) => ({
       role: s.role, side: s.side, applied_seq: s.applied_seq, revoked: s.revoked,
+      can_score_both: s.can_score_both,
     }));
   }
   // JSON round trip: undefined members vanish, as they would on the wire.
@@ -63,7 +73,11 @@ async function run(script) {
   for (const step of script.steps) {
     let resp;
     if (step.call === 'sync') {
-      resp = server.sync(step.ops, { as: step.as });
+      const ops = step.ops.map((op) => ('expects_by' in op
+        ? { ...op, expects_by: server.scorer(op.expects_by).player_id } : op));
+      resp = server.sync(ops, { as: step.as });
+    } else if (step.call === 'remove') {
+      resp = server.remove(step.target, { as: step.as });
     } else if (step.since === null || step.since === undefined) {
       resp = server.stateAnswer({ as: step.as });
     } else {
@@ -86,7 +100,8 @@ describe('FakeServer matches the real endpoints (live_contract.json)', () => {
     });
   }
 
-  test('the fixture exercises both scripts', () => {
-    assert.deepEqual(contract.scripts.map((s) => s.script.name), ['shared_two_streams', 'solo_host']);
+  test('the fixture exercises every script', () => {
+    assert.deepEqual(contract.scripts.map((s) => s.script.name),
+      ['shared_two_streams', 'shared_takeover', 'solo_host']);
   });
 });

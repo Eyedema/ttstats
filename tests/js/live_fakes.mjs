@@ -82,8 +82,13 @@ export const CONFIRM_URL = '/pingpong/match/1/confirm/';
  *     seq; "match complete" and a gap do not;
  *   - `rev`: +1 per applied op from any stream, never on a rejection;
  *   - a scorer without can_score_both scores only its own side;
- *   - undo `expects` (required when more than one scorer), `last_point` from
+ *   - undo `expects` (required when more than one scorer) and `expects_by`
+ *     (KAN-154: the trailing point's recorder must match), `last_point` from
  *     the point log, attribution (`by`) on every point;
+ *   - takeover (KAN-154): `take_over` / `release` set the requester's
+ *     can_score_both (a no-op when already so: seq consumed, no rev);
+ *     `release` by the only active scorer is "only scorer"; `remove(target)`
+ *     revokes a phone, which then gets 403 {"error": "removed"} everywhere;
  *   - the long-poll (`poll`): 200 at once when `since` is not the rev, 204
  *     when it is and there is no `wait` (or the match is over), else held
  *     until the next applied op, or `longpollWaitMs` on the attached fake
@@ -151,14 +156,16 @@ export class FakeServer {
       scorers: this.scorers.map((s) => ({
         player_id: s.player_id, name: s.name, side: s.side, role: s.role,
         last_seen_at: null, applied_seq: s.applied, revoked: s.revoked,
+        can_score_both: s.can_score_both, polling: false,
       })),
-      me: { side: me.side, role: me.role, can_score_both: me.can_score_both },
+      me: { player_id: me.player_id, side: me.side, role: me.role, can_score_both: me.can_score_both },
       last_point: last ? { ...last } : null,
       ...extra,
     };
   }
 
-  // One op through the rules; throws the server's message on a rule rejection.
+  // One op through the rules; throws the server's message on a rule
+  // rejection. Returns false for an applied op that changed nothing (no rev).
   applyOne(op, scorer = this.scorers[0]) {
     if (this.forceReject.has(op.seq)) throw new Error(this.forceReject.get(op.seq));
     if (this.tamper) op = this.tamper(op);
@@ -184,6 +191,8 @@ export class FakeServer {
           if (this.isShared) throw new Error('stale undo');
         } else if (!trailing || trailing.sequence !== op.expects) {
           throw new Error('stale undo');
+        } else if (op.expects_by !== undefined && op.expects_by !== null && trailing.by !== op.expects_by) {
+          throw new Error('stale undo');
         }
         const hadEvents = (this.state.events || []).length > 0;
         this.state = rules.undoLastPoint(this.state)[0];
@@ -193,6 +202,16 @@ export class FakeServer {
       case 'side_switch':
         this.state = rules.confirmSideSwitch(this.state);
         return;
+      case 'take_over':
+      case 'release': {
+        const value = op.type === 'take_over';
+        if (!value && !this.scorers.some((s) => s !== scorer && !s.revoked)) {
+          throw new Error('only scorer');
+        }
+        if (scorer.can_score_both === value) return false;
+        scorer.can_score_both = value;
+        return true;
+      }
       default:
         throw new Error('bad op');
     }
@@ -201,6 +220,7 @@ export class FakeServer {
   sync(ops, { as } = {}) {
     const scorer = this.scorer(as);
     this.requests.push(ops.map((op) => op.seq));
+    if (scorer.revoked) return { status: 403, body: { error: 'removed' } };
     const revBefore = this.rev;
     let progressed = false;
     let rejected = null;
@@ -217,9 +237,9 @@ export class FakeServer {
       }
       progressed = true;
       try {
-        this.applyOne(op, scorer);
+        const changed = this.applyOne(op, scorer);
         scorer.applied = op.seq;
-        this.rev += 1;
+        if (changed !== false) this.rev += 1;
       } catch (err) {
         scorer.applied = op.seq; // a rule rejection consumes its seq
         rejected = { seq: op.seq, error: err.message };
@@ -232,12 +252,32 @@ export class FakeServer {
 
   // GET /live/state/ with no `since`.
   stateAnswer({ as } = {}) {
+    if (this.scorer(as).revoked) return { status: 403, body: { error: 'removed' } };
+    return { status: 200, body: this.payload({}, as) };
+  }
+
+  // POST .../live/scorers/<player>/remove/ by the host (KAN-154).
+  remove(target, { as } = {}) {
+    const host = this.scorer(as);
+    if (host.revoked) return { status: 403, body: { error: 'removed' } };
+    if (host.role !== 'host') return { status: 403, body: { error: 'host only' } };
+    const victim = this.scorer(target);
+    let changed = false;
+    if (!victim.revoked) { victim.revoked = true; changed = true; }
+    if (!host.can_score_both) { host.can_score_both = true; changed = true; }
+    if (changed) {
+      this.rev += 1;
+      this.wake();
+    }
     return { status: 200, body: this.payload({}, as) };
   }
 
   // GET /live/state/?since=<rev>[&wait=1] -> {status, body, loginRedirect, busy}.
   poll({ as, since = null, wait = false } = {}) {
     this.polls.push({ as, since, wait });
+    if (this.scorer(as).revoked) {
+      return Promise.resolve({ status: 403, body: { error: 'removed' }, loginRedirect: false, busy: false });
+    }
     const answer = () => ({ status: 200, body: this.payload({}, as), loginRedirect: false, busy: false });
     const empty = (busy = false) => ({ status: 204, body: null, loginRedirect: false, busy });
     const parsed = since !== null && /^-?\d+$/.test(String(since)) ? Number(since) : null;
@@ -292,6 +332,13 @@ export function scriptedTransport(server, { as } = {}) {
     },
     state() {
       return Promise.resolve(server.stateAnswer({ as }));
+    },
+    // KAN-154: the URL ends in .../scorers/<player_id>/remove/.
+    remove(url) {
+      if (!transport.online) return Promise.reject(new TypeError('Load failed'));
+      const playerId = Number(/\/(\d+)\/remove\/$/.exec(url)[1]);
+      const target = server.scorers.find((s) => s.player_id === playerId);
+      return Promise.resolve({ ...server.remove(target.key, { as }), loginRedirect: false });
     },
     poll(opts) {
       transport.pollCalls.push({ since: opts.since, wait: opts.wait });

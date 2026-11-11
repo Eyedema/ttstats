@@ -119,12 +119,15 @@ class TestDuplicateDelivery:
         before = _snapshot(match)
         canonical = client.get(reverse("pingpong:live_state", args=[match.pk])).json()
         canonical.pop("csrf_token")  # per-request, not match state
+        canonical.pop("server_now")  # the server's clock (KAN-154 presence)
 
         resp = _point(client, match, seq=5)
 
         assert resp.status_code == 200
         assert _snapshot(match) == before
-        assert resp.json() == canonical
+        answer = resp.json()
+        answer.pop("server_now")
+        assert answer == canonical
 
     def test_older_duplicate_changes_nothing(self, auth_client):
         match, p1 = _make_live_match()

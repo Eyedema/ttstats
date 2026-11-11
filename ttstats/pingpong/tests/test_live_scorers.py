@@ -302,10 +302,13 @@ class TestScorerAuthorization:
     def test_revoked_scorer_cannot_view(self, auth_client):
         match, _, b = _shared(auth_client)
         LiveScorer.objects.filter(pk=_guest(match).pk).update(revoked_at=timezone.now())
-        assert _state(b, match).status_code == 403
-        assert b.get(
-            reverse("pingpong:live_scoreboard", args=[match.pk])
-        ).status_code == 403
+        state = _state(b, match)
+        assert state.status_code == 403
+        assert state.json() == {"error": "removed"}
+        # KAN-154: the page itself sends a removed scorer to the match.
+        page = b.get(reverse("pingpong:live_scoreboard", args=[match.pk]))
+        assert page.status_code == 302
+        assert page.url == reverse("pingpong:dashboard")
 
     def test_stranger_is_403(self, auth_client):
         match = live_match(started=True)
@@ -635,7 +638,10 @@ class TestPayload:
         host, guest = _host(match), _guest(match)
         assert data["applied_seq"] == 0
         assert data["rev"] == 1
-        assert data["me"] == {"side": 2, "role": "guest", "can_score_both": False}
+        assert data["me"] == {
+            "player_id": _guest(match).player_id,
+            "side": 2, "role": "guest", "can_score_both": False,
+        }
         by_player = {s["player_id"]: s for s in data["scorers"]}
         assert by_player[host.player_id]["applied_seq"] == 1
         assert by_player[host.player_id]["role"] == "host"
