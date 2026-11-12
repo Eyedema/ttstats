@@ -146,6 +146,7 @@ class PlayerListView(LoginRequiredMixin, ListView):
     paginate_by = 10
 
 
+@offline.offline_snapshot
 class MatchListView(LoginRequiredMixin, ListView):
     """View to list all matches"""
 
@@ -234,6 +235,7 @@ class MatchListView(LoginRequiredMixin, ListView):
         return context
 
 
+@offline.offline_snapshot
 class MatchDetailView(LoginRequiredMixin, DetailView):
     """View to show details of a single match"""
 
@@ -466,6 +468,7 @@ class MatchDetailView(LoginRequiredMixin, DetailView):
         )
 
 
+@offline.offline_snapshot
 class PlayerDetailView(LoginRequiredMixin, DetailView):
     """View to show details of a single player"""
 
@@ -646,6 +649,7 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
         }
 
 
+@offline.offline_snapshot
 class DashboardView(LoginRequiredMixin, TemplateView):
     """Today: the three things that might need you, in that order.
 
@@ -1277,6 +1281,7 @@ class HowRatingsWorkView(LoginRequiredMixin, TemplateView):
     template_name = "pingpong/how_ratings_work.html"
 
 
+@offline.offline_snapshot
 class LeaderboardView(LoginRequiredMixin, TemplateView):
     """The seasons table: one club, one season or all-time, one format."""
 
@@ -1403,6 +1408,7 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
         }
 
 
+@offline.offline_snapshot
 class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
     """Detailed statistics comparison between two players"""
 
@@ -2049,6 +2055,7 @@ class ScheduledMatchCreateView(LoginRequiredMixin, CreateView):
         )
 
 
+@offline.offline_snapshot
 class CalendarView(LoginRequiredMixin, TemplateView):
     """Display calendar view of scheduled and past matches"""
 
@@ -2443,6 +2450,7 @@ class PasskeyManagementView(LoginRequiredMixin, View):
         messages.success(request, f"Passkey '{device_name}' deleted")
         return redirect('pingpong:passkey_management')
 
+@offline.offline_snapshot
 class ChampionshipListView(LoginRequiredMixin, ListView):
     """View to list all championships"""
 
@@ -2493,6 +2501,7 @@ class ChampionshipListView(LoginRequiredMixin, ListView):
         return context
 
 
+@offline.offline_snapshot
 class ChampionshipDetailView(LoginRequiredMixin, DetailView):
     """View to show championship details"""
 
@@ -3783,8 +3792,29 @@ class ServiceWorkerView(TemplateView):
         urls = offline.precache_urls()
         # json.dumps, not a template loop: the list lands in a JS literal.
         ctx["sw_precache_json"] = json.dumps(urls)
-        ctx["sw_build"] = offline.build_key(urls)
+        ctx["sw_build"] = offline.build_key(urls, offline.offline_page_html())
         return ctx
+
+
+class OfflinePageView(View):
+    """The offline fallback page the service worker precaches (KAN-137).
+
+    At the site root, not under /pingpong/: the worker's snapshot route claims
+    every navigation under /pingpong/, and this page must be fetched (once, at
+    install, with no cookies) straight from the server. It is the same bytes
+    for everyone -- rendered without the request, so no context processor,
+    CSRF token, identity or session ever reaches it -- and the worker then
+    shows it in place of any /pingpong/ page that got no answer and has no
+    saved copy. The list of saved pages is built on the phone, by asking the
+    worker (static/pingpong/js/offline_page.js).
+    """
+
+    def get(self, request):
+        response = HttpResponse(offline.offline_page_html(), content_type="text/html; charset=utf-8")
+        # Revalidated whenever the worker (re)installs; never kept by a proxy
+        # under a stale build.
+        response["Cache-Control"] = "no-cache"
+        return response
 
 
 class ManifestView(TemplateView):

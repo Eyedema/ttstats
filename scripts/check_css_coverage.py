@@ -60,6 +60,9 @@ IGNORE_EXACT = {
     "button",  # Django admin's own class, in the admin/ template overrides
     "hidden",  # real Tailwind class, but also toggled by JS; keep noise down
     "point-momentum-chart",  # JS hook: the momentum canvases match_detail.html draws into
+    # offline.html's wording swap: styled by that page's inline <style> only.
+    "offline-network",
+    "offline-server",
 }
 
 

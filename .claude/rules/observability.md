@@ -55,6 +55,10 @@ Init runs in `settings/prod.py` at **import time**, to catch boot failures.
   `SentryHttpErrorMiddleware` (directly below WhiteNoise, fingerprinted by
   status + route). 403 is the one worth setting.
 - `DisallowedHost` is in `IGNORED_ERRORS`; `SuspiciousOperation` deliberately isn't.
+- **Traces go through `make_traces_sampler`**: `SENTRY_TRACES_SAMPLE_RATE`,
+  except the worker's warm-up fetches (`X-TTStats-Warm: 1`, KAN-136), sampled
+  at a tenth of it (`SENTRY_WARM_TRACES_SAMPLE_RATE` overrides): they are not
+  visits. Their errors are reported as usual.
 - **No browser SDK.** Adding one needs `connect-src` in `prod.py` and `PROD_CSP`.
 
 ## Server-Timing on every rendered response

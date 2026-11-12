@@ -16,6 +16,9 @@
 // has unsaved input, or when the touch starts inside something scrolled away
 // from its top.
 //
+// Offline (connection.js's shared state, else navigator.onLine): "No
+// connection" and no reload -- except on a saved copy (KAN-146): reload.
+//
 // Fails closed: the indicator only exists once this script has run.
 (function () {
   'use strict';
@@ -124,11 +127,20 @@
     show(dy >= THRESHOLD ? 'Release to refresh' : 'Pull to refresh');
   }, { passive: false });
 
+  // The shared connection state (connection.js, KAN-135) when it is there;
+  // otherwise the browser's own flag, as before.
+  function offline() {
+    if (document.documentElement.getAttribute('data-freshness') === 'snapshot') return false;
+    var c = window.TTStatsConnection;
+    if (c && typeof c.state === 'function') return c.state() === 'offline';
+    return navigator.onLine === false;
+  }
+
   function end(e) {
     if (state !== PULLING) { if (state !== DONE) state = IDLE; return; }
     if (e.type !== 'touchend' || dy < THRESHOLD) return hide();
     state = DONE;
-    if (navigator.onLine === false) {
+    if (offline()) {
       show('No connection', 'wifi-off');
       setTimeout(hide, 2000);
       return;

@@ -14,6 +14,7 @@ from django.shortcuts import get_object_or_404
 from django.views.generic import TemplateView
 
 from .models import RatingFormat, Season, SeasonStanding
+from .offline import offline_snapshot
 
 FORMATS = [RatingFormat.SINGLES, RatingFormat.DOUBLES]
 
@@ -22,6 +23,7 @@ def _archived():
     return Season.objects.filter(archived_at__isnull=False)
 
 
+@offline_snapshot
 class SeasonArchiveListView(LoginRequiredMixin, TemplateView):
     """Every archived season in the active club, newest first, with its champions."""
 
@@ -52,6 +54,7 @@ class SeasonArchiveListView(LoginRequiredMixin, TemplateView):
         return context
 
 
+@offline_snapshot
 class SeasonArchiveDetailView(LoginRequiredMixin, TemplateView):
     """One archived season's frozen table, one format at a time (`?format=`)."""
 

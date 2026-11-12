@@ -1,6 +1,7 @@
 const { test, expect } = require('@playwright/test');
 const { applyProdCSP, drawer, waitForDrawerSettled } = require('./helpers');
 const { emulateStandalone, pull, touch, watchForReload, indicator } = require('./pull-to-refresh-helpers');
+const { serveAsSnapshot, RECENT } = require('./offline-snapshot-banner-cases');
 
 /**
  * The pull-to-refresh cases (KAN-126), shared by every engine's spec:
@@ -144,6 +145,28 @@ function definePullToRefreshCases() {
       await reload.didNotHappen();
       // And it gets out of the way again.
       await expect(indicator(page)).not.toHaveClass(/is-visible/, { timeout: 4000 });
+    });
+  });
+
+  test.describe('pull to refresh, on a saved copy (KAN-146)', () => {
+    test.beforeEach(async ({ page }) => {
+      await applyProdCSP(page);
+      await emulateStandalone(page);
+    });
+
+    test('offline, a pull still reloads: the worker tries the network again', async ({ page }) => {
+      // The copy the worker would serve (workers are blocked here: see above).
+      await serveAsSnapshot(page, RECENT);
+      await page.goto('/pingpong/');
+      await expect(page.locator('html')).toHaveAttribute('data-freshness', 'snapshot');
+      await page.evaluate(() => {
+        Object.defineProperty(navigator, 'onLine', { configurable: true, get: () => false });
+      });
+      const reload = await watchForReload(page);
+
+      await pull(page, { dy: 200 });
+
+      await reload.happened();
     });
   });
 

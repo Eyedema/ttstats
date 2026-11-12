@@ -165,6 +165,25 @@
     display: none !important;
   }
 
+  /* The "saved copy" banner (KAN-145). Rendered on every page, shown ONLY
+     when the service worker served a saved copy and rewrote the root's
+     data-freshness to "snapshot". CSS alone: no JS state can leave it shown
+     on a live page or hidden on a stale one. Also inlined in base.html's
+     <head>, so a missing stylesheet changes neither. */
+  .snapshot-banner,
+  .snapshot-old {
+    display: none;
+  }
+  html[data-freshness='snapshot'] .snapshot-banner {
+    display: block;
+  }
+  html[data-snapshot-age='old'] .snapshot-old {
+    display: inline;
+  }
+  html[data-snapshot-age='old'] .snapshot-recent {
+    display: none;
+  }
+
   /* --- Touch feedback ----------------------------------------------------- */
 
   /* The installed PWA has no browser chrome: no spinner, no throbber, no URL
@@ -541,6 +560,132 @@ html.ptr-on { overscroll-behavior-y: contain; }
 
 @keyframes ptr-spin {
   to { transform: rotate(360deg); }
+}
+
+/* --- Connection toasts and the slow-connection line (KAN-135) ------------
+
+   Both are created by connection.js, never rendered by the server, so with
+   no JS there is nothing to fail open. Outside @layer for the same reason as
+   .ptr: the class names live only in JS, which Tailwind does not scan.
+
+   Neutral surface + a word + a glyph. Not amber (amber is live, right now)
+   and not red (red is an action). The region sits above the tab bar and its
+   safe area, never over it, and is inert to taps except on the toast. */
+.toast-region {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: calc(56px + env(safe-area-inset-bottom, 0px) + 0.75rem);
+  z-index: 45;
+  display: flex;
+  justify-content: center;
+  padding: 0 max(1rem, env(safe-area-inset-right, 0px)) 0 max(1rem, env(safe-area-inset-left, 0px));
+  pointer-events: none;
+}
+
+@media (min-width: 1024px) {
+  /* No tab bar; centre over the content, not under the sidebar. */
+  .toast-region { left: 16rem; bottom: calc(1.5rem + env(safe-area-inset-bottom, 0px)); }
+}
+
+.toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  width: 100%;
+  max-width: 28rem;
+  padding: 0.5rem 0.5rem 0.5rem 0.75rem;
+  border: 2px solid rgb(var(--court-edge));
+  border-left-width: 4px;
+  background: rgb(var(--court-overlay));
+  color: rgb(var(--bone));
+  font-size: 13.5px;
+  font-weight: 700;
+  line-height: 1.3;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.25);
+}
+
+.toast-icon { width: 1rem; height: 1rem; flex: none; }
+.toast > .toast-icon { color: rgb(var(--bone-muted)); }
+.toast-text { flex: 1 1 auto; min-width: 0; }
+
+.toast-action,
+.toast-close,
+.snapshot-refresh {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  color: rgb(var(--bone));
+  background: transparent;
+  font-weight: 800;
+}
+
+.toast-action,
+.snapshot-refresh {
+  padding: 0 0.75rem;
+  border: 2px solid rgb(var(--court-edge));
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 12px;
+}
+
+.toast-close { min-width: 44px; color: rgb(var(--bone-muted)); }
+
+/* A thin line under the header, only while degraded (connection.js toggles
+   the `hidden` attribute; this restates it so .connection-hint's display
+   cannot override it). */
+.connection-hint {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: calc(60px + env(safe-area-inset-top, 0px));
+  z-index: 25;
+  display: block;
+  padding: 0.125rem 1rem;
+  border-bottom: 1px solid rgb(var(--court-line));
+  background: rgb(var(--court-raised));
+  color: rgb(var(--bone-muted));
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-align: center;
+  pointer-events: none;
+}
+
+.connection-hint[hidden] { display: none; }
+
+@media (min-width: 1024px) {
+  .connection-hint { left: 16rem; top: 0; }
+}
+
+/* --- Saved copy: read-only mode (KAN-146) ---------------------------------
+   Amber means live RIGHT NOW, and a saved copy is not now: every amber cue
+   on it (the header's live dot, Today's "Live now" block, a live match's
+   badges) would be a lie. Every amber class in the app resolves through
+   --ball (text-ball, bg-ball, label-live, live-dot, and the `warning` alias
+   in tailwind.config.js), so re-pointing the token at the muted one mutes
+   them all, including any added later. The pulse is the other live signal.
+   Outside @layer so no layered rule can outrank it; e2e asserts no amber is
+   computed anywhere on a saved Today with a live match
+   (offline-read-only.pwa.spec.js). */
+html[data-freshness='snapshot'] {
+  --ball: var(--bone-muted);
+  --ball-foreground: var(--court);
+}
+
+html[data-freshness='snapshot'] .live-dot {
+  animation: none;
+}
+
+/* "You're back online · Refresh" (snapshot_mode.js creates the button, so it
+   cannot exist without JS). The class name lives only in JS, which Tailwind
+   does not scan: hence outside @layer. Neutral, like the toast's action. */
+.snapshot-refresh {
+  margin-left: auto;
 }
 
 @layer utilities {

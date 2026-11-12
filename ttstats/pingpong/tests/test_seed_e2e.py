@@ -153,3 +153,48 @@ class TestSharedLiveMatch:
         assert len(shared) == 1
         rows = {(s.player.name, s.side, s.can_score_both) for s in shared[0].live_scorers.all()}
         assert rows == {("E2E Player", 1, False), ("E2E Partner", 2, False)}
+
+
+@pytest.mark.django_db
+class TestOfflineReaders:
+    """KAN-133: the snapshot specs' users, isolated from every other spec."""
+
+    def test_only_the_readers_have_the_snapshot_flag(self):
+        from pingpong import flags
+
+        _seed()
+        _seed()
+        on = set(
+            FeatureFlagOverride.objects.filter(name="offline_snapshots", enabled=True)
+            .values_list("user__username", flat=True)
+        )
+        assert on == {"e2e-reader", "e2e-reader-b"}
+        off = Player.objects.get(name="E2E Reader Off").user
+        assert flags.is_enabled("offline_snapshots", off) is False
+        e2e = Player.objects.get(name="E2E Player").user
+        assert flags.is_enabled("offline_snapshots", e2e) is False
+
+    def test_reader_a_is_in_two_clubs_and_owns_one_confirmed_match(self):
+        _seed()
+        _seed()
+        reader = Player.objects.get(name="E2E Reader")
+        clubs = sorted(reader.user.club_memberships.values_list("club__name", flat=True))
+        assert len(clubs) == 2 and clubs[0] == "E2E Reading Club"
+        match = Match.all_objects.get(participants__player=reader)
+        assert match.is_confirmed
+        assert match.club.slug == "e2e-reading-club"
+
+    def test_reader_b_is_scoring_one_live_match_in_the_reading_club(self):
+        # KAN-146: a saved Today with amber on it, for the muting spec.
+        _seed()
+        _seed()
+        reader_b = Player.objects.get(name="E2E Reader B")
+        live = Match.all_objects.filter(is_live=True, participants__player=reader_b).distinct()
+        assert live.count() == 1
+        match = live.get()
+        assert match.scorekeeper == reader_b
+        assert match.club.slug == "e2e-reading-club"
+        assert {p.name for p in match.all_players} == {"E2E Reader B", "E2E Reader Rival"}
+        # Reader A is untouched: nothing live.
+        reader = Player.objects.get(name="E2E Reader")
+        assert not Match.all_objects.filter(is_live=True, participants__player=reader).exists()

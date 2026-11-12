@@ -193,13 +193,49 @@ def club_context(request):
 
 
 def offline_context(request):
-    """The viewer's offline-cache partition key, for `<meta name="ttstats-identity">`.
+    """What the page tells the service worker about its offline caches.
 
-    `static/pingpong/js/offline.js` hands it to the service worker on every
-    page load, and the worker deletes any cached scoreboard filed under a
-    different identity (KAN-82). Empty when logged out, which deletes them all.
+    * `ttstats_identity`, for `<meta name="ttstats-identity">`: the viewer's
+      partition key. `static/pingpong/js/offline.js` hands it to the worker on
+      every page load, and the worker deletes anything filed under a different
+      identity (KAN-82). Empty when logged out, which deletes them all.
+    * `ttstats_snapshots`, for `<meta name="ttstats-snapshots">`: "on" when
+      the `offline_snapshots` flag is on for this viewer, else "off" (always
+      off when logged out), so the worker purges saved pages (KAN-132).
+    * `ttstats_rendered_at`: when this HTML was rendered, ISO 8601 UTC, for
+      `data-rendered-at` on `<html>`.
+    * `ttstats_offline_paths`, only when snapshots are on: anchored regex
+      sources for the paths a link on a saved copy may still follow offline (`json_script`, read by
+      `static/pingpong/js/snapshot_mode.js`, KAN-146).
+    * `snapshot_warm_urls` (KAN-136): a callable, so the one query behind it
+      runs only when `base.html` renders the `snapshot-warm` json_script
+      (flag on). Empty on a warm-up fetch itself.
+    * On a warm-up fetch (`X-TTStats-Warm: 1`), `messages` is emptied: a
+      background fetch must not consume a flash message the user hasn't
+      seen yet (iterating the storage marks it read).
+
     See `pingpong/offline.py`.
     """
-    from pingpong.offline import request_identity
+    from django.utils import timezone
 
-    return {'ttstats_identity': request_identity(request)}
+    from pingpong.offline import (
+        is_warm,
+        offline_navigation_paths,
+        request_identity,
+        snapshots_enabled,
+        warm_urls,
+    )
+
+    user = getattr(request, 'user', None)
+    enabled = snapshots_enabled(user)
+    warm = is_warm(request)
+    context = {
+        'ttstats_identity': request_identity(request),
+        'ttstats_snapshots': 'on' if enabled else 'off',
+        'ttstats_rendered_at': timezone.now().strftime('%Y-%m-%dT%H:%M:%SZ'),
+        'ttstats_offline_paths': list(offline_navigation_paths()) if enabled else None,
+        'snapshot_warm_urls': (lambda: warm_urls(user)) if enabled and not warm else list,
+    }
+    if warm:
+        context['messages'] = []
+    return context

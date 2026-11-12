@@ -50,6 +50,8 @@
   }
 
   if (!window.fetch || !window.URL) return;
+  // Not on a saved copy (KAN-146): a held click would wait on a dead network.
+  if (document.documentElement.getAttribute('data-freshness') === 'snapshot') return;
   var conn = navigator.connection;
   if (conn && conn.saveData) return;
 
@@ -91,7 +93,16 @@
     return url.href;
   }
 
+  // Not on a struggling link (KAN-135): a prefetch would only spend the
+  // scarce bandwidth the tapped page itself needs. Without connection.js,
+  // carry on as before.
+  function linkIsPoor() {
+    var c = window.TTStatsConnection;
+    return !!(c && typeof c.state === 'function' && c.state() !== 'online');
+  }
+
   function prefetch(href) {
+    if (linkIsPoor()) return;
     var p = pending[href];
     if (p && Date.now() - p.t < TTL_MS) return;
     var entry = { t: Date.now(), settled: false, done: null };

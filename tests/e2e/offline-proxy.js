@@ -15,26 +15,32 @@ const http = require('http');
  *   online   forward to the server
  *   offline  refuse: every open connection and new request is destroyed
  *   hang     accept and never answer (lie-fi)
+ *   502      answer every request 502 Bad Gateway (the server is down
+ *            behind a working reverse proxy; KAN-133)
+ *
+ * `release()` goes back online and FORWARDS the requests `hang` was holding,
+ * so their answers arrive late (a network that recovers); setMode('online')
+ * drops them instead.
+ *
+ * Options: `{ csp }` adds that Content-Security-Policy to every text/html
+ * answer -- the production policy, for a spec where a live service worker
+ * keeps applyProdCSP()'s page.route() from ever seeing the request.
+ *
+ * `requests` logs every request that reached the proxy, whatever the mode
+ * (`{method, path, mode}`): "no request went out" is asserted against it.
  *
  * Point a page at `proxy.origin` instead of the baseURL. Cookies are per host,
  * not per port, so the saved session applies; the worker registers afresh
  * for the proxy's origin, so its caches start empty in every test.
  */
-async function startOfflineProxy(targetURL) {
+async function startOfflineProxy(targetURL, { csp } = {}) {
   const target = new URL(targetURL);
   let mode = 'online';
   const sockets = new Set();
-  const hung = new Set();
+  const hung = new Map();
+  const requests = [];
 
-  const server = http.createServer((req, res) => {
-    if (mode === 'offline') {
-      req.socket.destroy();
-      return;
-    }
-    if (mode === 'hang') {
-      hung.add(res);
-      return;
-    }
+  function forward(req, res) {
     // Host is passed through unchanged: Django checks ALLOWED_HOSTS without
     // the port, and CSRF compares Origin with this same host:port.
     const upstream = http.request(
@@ -46,12 +52,40 @@ async function startOfflineProxy(targetURL) {
         headers: req.headers,
       },
       (answer) => {
-        res.writeHead(answer.statusCode, answer.headers);
+        const headers = { ...answer.headers };
+        if (csp && String(headers['content-type'] || '').startsWith('text/html')) {
+          headers['content-security-policy'] = csp;
+        }
+        res.writeHead(answer.statusCode, headers);
         answer.pipe(res);
       }
     );
     upstream.on('error', () => res.destroy());
     req.pipe(upstream);
+  }
+
+  // The service worker's background warm-up fetches (KAN-136) that reached
+  // the proxy, by path: its own requests are invisible to page events.
+  const warmRequests = [];
+
+  const server = http.createServer((req, res) => {
+    requests.push({ method: req.method, path: req.url, mode });
+    if (req.headers['x-ttstats-warm'] === '1') warmRequests.push(req.url);
+    if (mode === 'offline') {
+      req.socket.destroy();
+      return;
+    }
+    if (mode === 'hang') {
+      hung.set(res, req);
+      return;
+    }
+    if (mode === '502') {
+      req.resume();
+      res.writeHead(502, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end('<!DOCTYPE html><title>502 Bad Gateway</title><h1>502 Bad Gateway</h1>');
+      return;
+    }
+    forward(req, res);
   });
 
   server.on('connection', (socket) => {
@@ -63,18 +97,27 @@ async function startOfflineProxy(targetURL) {
 
   return {
     origin: `http://localhost:${server.address().port}`,
+    requests,
+    warmRequests,
     setMode(next) {
       mode = next;
       if (next === 'offline') {
         for (const socket of sockets) socket.destroy();
       }
       if (next === 'online') {
-        for (const res of hung) res.destroy();
+        for (const res of hung.keys()) res.destroy();
         hung.clear();
       }
     },
+    /** Back online, answering the held requests now (late). */
+    release() {
+      mode = 'online';
+      const held = [...hung.entries()];
+      hung.clear();
+      for (const [res, req] of held) forward(req, res);
+    },
     async close() {
-      for (const res of hung) res.destroy();
+      for (const res of hung.keys()) res.destroy();
       for (const socket of sockets) socket.destroy();
       await new Promise((resolve) => server.close(resolve));
     },

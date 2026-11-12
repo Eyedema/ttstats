@@ -1768,6 +1768,9 @@ class TestDashboardLiveBanner:
         self._live_match_for(client)
 
         content = client.get(reverse("pingpong:dashboard")).content.decode()
+        # <html data-rendered-at> is machine-readable ISO on purpose (KAN-132);
+        # this test is about the banner's human-readable text.
+        content = re.sub(r'data-rendered-at="[^"]*"', "", content)
 
         # The giveaway is the ISO separator between date and time.
         assert not re.search(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", content)

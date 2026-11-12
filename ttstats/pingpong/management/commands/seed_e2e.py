@@ -41,10 +41,18 @@ E2E_PARTNER = "e2e-partner"
 # spec can open it without waiting out LOBBY_TTL. Hosted by E2E Opponent so
 # E2E Player's own lobbies (one open per host) never touch it.
 E2E_EXPIRED_LOBBY_TOKEN = "e2e0expired0lobby000000000000000"
+# Offline reading (KAN-133): the snapshot specs log in and out and switch
+# club, so they never use the shared `e2e` session. Readers A and B have the
+# offline_snapshots flag on (A in both e2e clubs, for the club switch); the
+# third has it explicitly off, for the kill switch. Same password.
+E2E_READER = "e2e-reader"
+E2E_READER_B = "e2e-reader-b"
+E2E_READER_OFF = "e2e-reader-off"
 # Every player the seed rates. A re-seed starts them from scratch.
 E2E_PLAYER_NAMES = (
     "E2E Player", "E2E Opponent", "E2E Momentum", "E2E Seasons Player",
     "E2E Glicko Player", "E2E Chaos", "E2E Partner",
+    "E2E Reader", "E2E Reader B", "E2E Reader Off",
 )
 
 
@@ -147,6 +155,7 @@ class Command(BaseCommand):
         dead_invite.revoke()
 
         archived_season = self._seed_archived_season(club, user, player, opponent)
+        reader_match = self._seed_readers(second)
 
         # The suite reads these off stdout rather than hard-coding a pk.
         self.stdout.write(f"E2E_USERNAME={E2E_USERNAME}")
@@ -163,6 +172,7 @@ class Command(BaseCommand):
         self.stdout.write(f"E2E_GLICKO_USERNAME={E2E_GLICKO_USERNAME}")
         self.stdout.write(f"E2E_GLICKO_PENDING_MATCH_PK={glicko_match.pk}")
         self.stdout.write(f"E2E_ARCHIVED_SEASON_PK={archived_season.pk}")
+        self.stdout.write(f"E2E_READER_MATCH_PK={reader_match.pk}")
 
     def _reset_seeded_players(self):
         """Back to a fresh database for the seeded players: no matches, no ratings.
@@ -343,6 +353,70 @@ class Command(BaseCommand):
             for fmt, who, name, rank, rating, matches, wins, losses in rows
         )
         return season
+
+    def _seed_readers(self, second):
+        """The offline-reading users (KAN-133) and one confirmed match.
+
+        The snapshot flag is on per user, the way it rolls out in production,
+        and only for these: `e2e` keeps it off, so no other spec's pages are
+        ever stored or served from a snapshot. They live in a club of their
+        own, so their match moves no rating or table another spec reads.
+        Reader A is also in `second` (the club switch changes the identity);
+        "E2E Reading Club" sorts first, so it is A's default active club.
+        """
+        club, _ = Club.objects.get_or_create(
+            slug="e2e-reading-club", defaults={"name": "E2E Reading Club"}
+        )
+
+        def reader(username, name, flag):
+            user, _ = User.objects.get_or_create(
+                username=username, defaults={"email": f"{username}@example.test"}
+            )
+            user.set_password(E2E_PASSWORD)
+            user.save()
+            user.profile.email_verified = True
+            user.profile.save()
+            me, _ = Player.objects.get_or_create(name=name)
+            me.user = user
+            me.club = club
+            me.save()
+            ClubMembership.objects.get_or_create(
+                club=club, user=user, defaults={"role": ClubRole.MEMBER}
+            )
+            FeatureFlagOverride.objects.update_or_create(
+                name="offline_snapshots", user=user,
+                defaults={"enabled": flag, "note": "e2e"},
+            )
+            return user, me
+
+        reader_user, me = reader(E2E_READER, "E2E Reader", True)
+        ClubMembership.objects.get_or_create(
+            club=second, user=reader_user, defaults={"role": ClubRole.MEMBER}
+        )
+        _, reader_b = reader(E2E_READER_B, "E2E Reader B", True)
+        _, opponent = reader(E2E_READER_OFF, "E2E Reader Off", False)
+
+        # Reader B is scoring a match right now, so B's Today carries the
+        # amber "Live now" block and the header's live dot: on a saved copy
+        # both must be muted (KAN-146, offline-read-only.pwa.spec.js). Against
+        # a player with no account, not Reader Off: the identity spec asserts
+        # B's Today never names Reader Off (A's opponent). A is untouched.
+        rival, _ = Player.objects.get_or_create(name="E2E Reader Rival")
+        rival.club = club
+        rival.save()
+        live = Match.all_objects.create(
+            club=club, best_of=3, is_live=True, scorekeeper=reader_b,
+            live_state=ls.initial_state(3),
+        )
+        services.set_match_sides(live, [reader_b], [rival])
+
+        match = Match.all_objects.create(club=club, best_of=3)
+        services.set_match_sides(match, [me], [opponent])
+        for n in (1, 2):
+            Game.objects.create(match=match, game_number=n, team1_score=11, team2_score=4)
+        for p in (me, opponent):
+            MatchConfirmation.objects.get_or_create(match=match, player=p)
+        return match
 
     def _seed_completed_live_match(self, player):
         """A FINISHED live-scored match, so the momentum specs have a chart.
