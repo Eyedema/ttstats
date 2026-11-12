@@ -42,7 +42,11 @@ module.exports = defineConfig({
   workers: 1,
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
-  retries: 0,
+  // One retry on CI only: GitHub's WebKit runner stalls on a random test now
+  // and then (a click whose "stable" check never resolves on a loaded page),
+  // which never reproduces locally. A test that needs the retry is still
+  // reported as flaky in the list output; locally a failure stays a failure.
+  retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? 'list' : [['list'], ['html', { open: 'never' }]],
 
   use: {
