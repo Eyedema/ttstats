@@ -445,6 +445,13 @@ false nothing below runs and the page sends no long-poll (e2e asserts it).
   (`test_live_contract.py` fails when stale); e2e `shared-scoreboard*.spec.js`
   (the seeded `E2E Partner` match).
 - **Two-phone e2e** (KAN-155): `shared-scoring-two-phones.js`, run by
+  `shared-scoring.spec.js` (WebKit) and `.desktop.spec.js`: two contexts
+  (host = the suite's session, guest = `e2e-partner`, `partner.json`), each
+  test opens its own lobby and finishes its match. The guest's
+  match_confirm is stubbed (a GET confirms), offline is `offline-proxy.js`.
+  `settings/e2e.py` shortens the hold and presence thresholds (env-tunable)
+  and turns rate limits off; the limits are pytest's.
+- **Two-phone e2e** (KAN-155): `shared-scoring-two-phones.js`, run by
   `shared-scoring.spec.js` and `.desktop.spec.js`: two contexts (host
   `user.json`, guest `partner.json`); a new context needs an explicit empty
   `storageState` to be anonymous (the runner injects the project's). Offline

@@ -138,6 +138,8 @@ is the throttled timing report (Chromium only, not part of the suite).
 - **Login is rate limited to 5 POSTs / IP / 15 min.** Logging in per test makes
   the suite fail from the sixth test with a timeout that looks like a UI bug.
   A `setup` project logs in once and saves `storageState`; specs never log in.
+  (`settings/e2e.py` now sets `RATELIMIT_ENABLE = False` for the two-phone
+  specs, but keep logging in once: the limits stay on in prod.)
 - **`toBeVisible()` resolves at the *start* of a transition.** Measuring
   geometry there reports the panel at `-256` mid-slide and looks like an app
   bug. Use `waitForDrawerSettled()` (`helpers.js`), which polls the box.
