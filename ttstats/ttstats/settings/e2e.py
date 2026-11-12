@@ -57,3 +57,15 @@ LIVE_PRESENCE_LOST = int(os.environ.get('E2E_PRESENCE_LOST', '20'))
 # 127.0.0.1, and `--repeat-each=10` multiplies that. The limits themselves
 # are pytest's (test_club_invites.py, test_shared_scoring.py, test_views.py).
 RATELIMIT_ENABLE = False
+
+# --- SQLite under threaded gunicorn (KAN-168) --------------------------------
+# The e2e server runs 8 threads against one SQLite file. select_for_update is
+# a no-op on SQLite, so two writers meet as a DEFERRED transaction upgrading
+# its read lock to a write lock, which fails at once with "database is locked"
+# (busy_timeout does not apply to that upgrade). IMMEDIATE takes the write
+# lock at BEGIN, where the timeout does apply, so writers queue as they do on
+# Postgres under the row lock. Prod is Postgres; this is e2e-only.
+if DATABASES['default']['ENGINE'] == 'django.db.backends.sqlite3':  # noqa: F405
+    DATABASES['default'].setdefault('OPTIONS', {}).update(  # noqa: F405
+        {'transaction_mode': 'IMMEDIATE', 'timeout': 20}
+    )
