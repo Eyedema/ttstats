@@ -134,4 +134,4 @@ function defineBannerCases(test, { geometry = true } = {}) {
   });
 }
 
-module.exports = { defineBannerCases, markSnapshot };
+module.exports = { defineBannerCases, markSnapshot, serveAsSnapshot, RECENT };

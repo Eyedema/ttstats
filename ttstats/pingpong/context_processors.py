@@ -204,15 +204,20 @@ def offline_context(request):
       off when logged out), so the worker purges saved pages (KAN-132).
     * `ttstats_rendered_at`: when this HTML was rendered, ISO 8601 UTC, for
       `data-rendered-at` on `<html>`.
+    * `ttstats_offline_paths`, only when snapshots are on: anchored regex
+      sources for the paths a link on a saved copy may still follow offline (`json_script`, read by
+      `static/pingpong/js/snapshot_mode.js`, KAN-146).
 
     See `pingpong/offline.py`.
     """
     from django.utils import timezone
 
-    from pingpong.offline import request_identity, snapshots_enabled
+    from pingpong.offline import offline_navigation_paths, request_identity, snapshots_enabled
 
+    enabled = snapshots_enabled(getattr(request, 'user', None))
     return {
         'ttstats_identity': request_identity(request),
-        'ttstats_snapshots': 'on' if snapshots_enabled(getattr(request, 'user', None)) else 'off',
+        'ttstats_snapshots': 'on' if enabled else 'off',
         'ttstats_rendered_at': timezone.now().strftime('%Y-%m-%dT%H:%M:%SZ'),
+        'ttstats_offline_paths': list(offline_navigation_paths()) if enabled else None,
     }

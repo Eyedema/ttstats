@@ -35,7 +35,8 @@ The fingerprint is the one KAN-132 specifies -- HMAC of user and active club
 from __future__ import annotations
 
 import hashlib
-from functools import wraps
+import re
+from functools import lru_cache, wraps
 
 from django.contrib.staticfiles.storage import staticfiles_storage
 from django.utils.cache import patch_cache_control
@@ -74,6 +75,13 @@ SNAPSHOT_ALLOWLIST = frozenset({
     "pingpong:season_archive_detail",
 })
 
+# Where a link on a saved copy may still go with no connection (KAN-146): the
+# snapshot allowlist, plus the live scoreboard, which the worker keeps its own
+# copy of (KAN-82) so a scorer can get back to a match from a saved Today.
+# Every other link, form and htmx request on a saved copy says "Needs a
+# connection" instead of failing obscurely (static/pingpong/js/snapshot_mode.js).
+OFFLINE_NAVIGABLE = SNAPSHOT_ALLOWLIST | {"pingpong:live_scoreboard"}
+
 # What the scoreboard needs to boot with no signal, cached when the worker
 # installs. Anything else under /static/ is cached the first time a controlled
 # page loads it, so a file missing here still works offline after one online
@@ -90,6 +98,7 @@ SW_PRECACHE = (
     "pingpong/js/pull_to_refresh.js",
     "pingpong/js/prefetch.js",
     "pingpong/js/offline.js",
+    "pingpong/js/snapshot_mode.js",
     "pingpong/js/live_rules.js",
     "pingpong/js/live_outbox.js",
     "pingpong/js/live_session.js",
@@ -185,3 +194,57 @@ def is_snapshot_view(callback) -> bool:
         return True
     view_class = getattr(callback, "view_class", None)
     return bool(view_class and getattr(view_class.dispatch, SNAPSHOT_MARKER, False))
+
+
+_PARAMETER = re.compile(r"<(?:[^>:]+:)?([^>]+)>")
+
+
+def _route_regex(pattern) -> str:
+    """One `path()` segment as a JS-compatible regex source.
+
+    Literal text is escaped; each `<converter:name>` becomes that converter's
+    own regex (`int` -> `[0-9]+`), so `matches/<int:pk>/` can never match
+    `matches/add/`.
+    """
+    route = str(pattern)
+    out, pos = [], 0
+    for found in _PARAMETER.finditer(route):
+        out.append(re.escape(route[pos:found.start()]))
+        out.append(f"(?:{pattern.converters[found.group(1)].regex})")
+        pos = found.end()
+    out.append(re.escape(route[pos:]))
+    return "".join(out)
+
+
+def _named_routes(patterns, prefix=(), namespace=""):
+    """(namespaced name, [RoutePattern, ...]) for every named URL in the URLconf."""
+    from django.urls import URLPattern, URLResolver
+
+    for entry in patterns:
+        if isinstance(entry, URLResolver):
+            inner = f"{namespace}{entry.namespace}:" if entry.namespace else namespace
+            yield from _named_routes(entry.url_patterns, prefix + (entry.pattern,), inner)
+        elif isinstance(entry, URLPattern) and entry.name:
+            yield f"{namespace}{entry.name}", prefix + (entry.pattern,)
+
+
+@lru_cache(maxsize=1)
+def offline_navigation_paths() -> tuple[str, ...]:
+    """`OFFLINE_NAVIGABLE` as anchored regex sources over a URL's pathname,
+    for the page's JS (`json_script`, KAN-146): `^/pingpong/matches/(?:[0-9]+)/$`.
+
+    Derived from the URLconf, so a moved route moves its pattern. Only
+    `path()` routes are supported (a `re_path()` regex is Python syntax, not
+    JS); a name missing from the URLconf, or behind a `re_path()`, raises.
+    """
+    from django.urls import get_resolver
+    from django.urls.resolvers import RoutePattern
+
+    routes = dict(_named_routes(get_resolver().url_patterns))
+    sources = []
+    for name in sorted(OFFLINE_NAVIGABLE):
+        parts = routes.get(name)
+        if not parts or not all(isinstance(p, RoutePattern) for p in parts):
+            raise LookupError(f"{name} is not a path() route; snapshot_mode.js cannot match it")
+        sources.append("^/" + "".join(_route_regex(p) for p in parts) + "$")
+    return tuple(sources)

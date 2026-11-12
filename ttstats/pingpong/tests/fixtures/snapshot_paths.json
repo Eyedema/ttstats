@@ -1,0 +1,14 @@
+[
+  "^/pingpong/calendar/$",
+  "^/pingpong/championships/(?:[0-9]+)/$",
+  "^/pingpong/championships/$",
+  "^/pingpong/$",
+  "^/pingpong/head\\-to\\-head/$",
+  "^/pingpong/leaderboard/$",
+  "^/pingpong/matches/(?:[0-9]+)/live/$",
+  "^/pingpong/matches/(?:[0-9]+)/$",
+  "^/pingpong/matches/$",
+  "^/pingpong/players/(?:[0-9]+)/$",
+  "^/pingpong/seasons/$",
+  "^/pingpong/seasons/(?:[0-9]+)/$"
+]

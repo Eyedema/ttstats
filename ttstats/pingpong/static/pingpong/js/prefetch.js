@@ -50,6 +50,8 @@
   }
 
   if (!window.fetch || !window.URL) return;
+  // Not on a saved copy (KAN-146): a held click would wait on a dead network.
+  if (document.documentElement.getAttribute('data-freshness') === 'snapshot') return;
   var conn = navigator.connection;
   if (conn && conn.saveData) return;
 

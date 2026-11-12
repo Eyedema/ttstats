@@ -393,8 +393,22 @@ class Command(BaseCommand):
         ClubMembership.objects.get_or_create(
             club=second, user=reader_user, defaults={"role": ClubRole.MEMBER}
         )
-        reader(E2E_READER_B, "E2E Reader B", True)
+        _, reader_b = reader(E2E_READER_B, "E2E Reader B", True)
         _, opponent = reader(E2E_READER_OFF, "E2E Reader Off", False)
+
+        # Reader B is scoring a match right now, so B's Today carries the
+        # amber "Live now" block and the header's live dot: on a saved copy
+        # both must be muted (KAN-146, offline-read-only.pwa.spec.js). Against
+        # a player with no account, not Reader Off: the identity spec asserts
+        # B's Today never names Reader Off (A's opponent). A is untouched.
+        rival, _ = Player.objects.get_or_create(name="E2E Reader Rival")
+        rival.club = club
+        rival.save()
+        live = Match.all_objects.create(
+            club=club, best_of=3, is_live=True, scorekeeper=reader_b,
+            live_state=ls.initial_state(3),
+        )
+        services.set_match_sides(live, [reader_b], [rival])
 
         match = Match.all_objects.create(club=club, best_of=3)
         services.set_match_sides(match, [me], [opponent])

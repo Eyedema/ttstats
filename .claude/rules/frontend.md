@@ -25,7 +25,9 @@ How to verify any of this in a real browser: the `frontend-verification` skill.
   triples. **Dark is the base, light is the override.** Only surfaces flip;
   paddle red, ball amber, confirmed green and the eight player hues don't.
 - Red = the action you can take. **Amber = live right now, nowhere else** (not
-  warnings, not "pending"). Green = confirmed by both sides.
+  warnings, not "pending"). Green = confirmed by both sides. Every amber
+  utility goes through `--ball` (`ball`, `warning`): a saved copy mutes them
+  all by re-pointing it (KAN-146), so never name an amber colour directly.
 - Semantic aliases (`background`, `card`, `muted`, `primary`, ...) are remapped,
   not replaced. Don't reintroduce literal palette classes (`bg-white`,
   `blue-100`): they can't flip with the theme.
@@ -150,6 +152,7 @@ Four tabs -- **Today, Play, Table, Cups** -- plus a tiered drawer.
   duplicates to remove. So are the "saved copy" banner's rules (KAN-145): hidden
   unless `html[data-freshness="snapshot"]`, which only `sw.js` writes; no JS
   shows or hides it (`offline-snapshot-banner*.spec.js`, light/dark/no-JS).
+  Its relative age and "Refresh" button are JS-made, so absent without JS.
 - Every new overlay/drawer/modal needs a spec asserting it stays closed when
   Alpine and/or the stylesheet fail to load (`tests/e2e/mobile-drawer.spec.js`).
 
@@ -237,7 +240,8 @@ tap that never registered.
 - One non-passive `touchmove` (only `preventDefault()` stops the rubber band);
   it returns at once unless a vertical pull is underway.
 - Offline (`TTStatsConnection.state() === 'offline'`, else
-  `navigator.onLine === false`): "No connection", no reload.
+  `navigator.onLine === false`): "No connection", no reload. On a saved copy
+  (`html[data-freshness="snapshot"]`) it always reloads: the worker retries.
   Reduced motion: `.is-static`, text only.
 - The indicator is created by the script (fails closed); its CSS is outside
   `@layer` because Tailwind doesn't scan JS and would purge it. Its icons
@@ -260,7 +264,8 @@ tap that never registered.
   `confirm/`, `join/`, logout, admin, `/accounts/`, `/webauthn/`,
   `edit|delete|start|register|unregister|convert|switch/`, non-`/pingpong/`,
   cross-origin, `target`, `download`, the current page, Save-Data, and any
-  connection state but `online` (KAN-135).
+  connection state but `online` (KAN-135). Off entirely on a saved copy
+  (KAN-146): a held click would wait behind the dead network.
 - **Chromium joins an in-flight prefetch; WebKit and Gecko don't**, so on
   those (no `navigator.userAgentData`) a click mid-prefetch is held until it
   is cached. If the held navigation wasn't a cache hit (no HTTP cache, e.g.
