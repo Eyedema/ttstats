@@ -539,7 +539,7 @@ Deploy, then repeat both after a few minutes of normal traffic and again
 during the real-device match. Expect at most 24 app connections (3 x 8),
 plus the psql session itself;
 held long-polls close theirs before waiting. Rollback of the worker model
-alone: `GUNICORN_THREADS=1` in `.env.prod`, `dcp up -d web`.
+alone: `GUNICORN_THREADS=1` in `.env.prod`, then restart web with the `WEB_IMAGE` restart in `docs/glicko2-cutover.md` ("Restarting web"; never a bare `dcp up -d web`).
 
 ### Step 1: on for the owner only
 
@@ -593,11 +593,12 @@ TTSTATS_FLAGS_ON=...,shared_scoring
 ```
 
 ```bash
-dcp up -d web
+IMAGE=$(docker inspect --format '{{.Config.Image}}' "$(dcp ps -q web)")   # never a bare `dcp up -d web`: it falls back to :latest
+WEB_IMAGE="$IMAGE" SENTRY_RELEASE="${IMAGE##*:}" dcp up -d web
 dweb shell -c "from pingpong import flags; print(flags.is_enabled('shared_scoring'))"   # True
 ```
 
 Then delete the owner's override (it no longer does anything) and watch
 Sentry for a week (success criterion 5: no new errors from the threaded
 workers). **Rollback:** remove `shared_scoring` from `TTSTATS_FLAGS_ON`,
-`dcp up -d web`. Matches already shared keep working; only new lobbies stop.
+restart web the same way. Matches already shared keep working; only new lobbies stop.
