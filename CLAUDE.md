@@ -166,6 +166,6 @@ When adding a feature, also add an integration test for its happy path. These mu
 
 Subsystem details live in `.claude/rules/*.md`. Each declares `paths:` and loads
 only when Claude touches matching files: `tenancy`, `clubs`, `caching`,
-`match-pipeline`, `live-scoring`, `championships`, `frontend`, `push`,
+`match-pipeline`, `live-scoring`, `championships`, `frontend`, `push`, `offline`,
 `passkeys`, `observability`, `flags`, `build-and-deploy`, `seasons`, `jobs`. Decision records are
 in `docs/decisions/`; the tenancy runbook is `docs/tenancy-rollout.md`.
