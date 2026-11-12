@@ -207,17 +207,35 @@ def offline_context(request):
     * `ttstats_offline_paths`, only when snapshots are on: anchored regex
       sources for the paths a link on a saved copy may still follow offline (`json_script`, read by
       `static/pingpong/js/snapshot_mode.js`, KAN-146).
+    * `snapshot_warm_urls` (KAN-136): a callable, so the one query behind it
+      runs only when `base.html` renders the `snapshot-warm` json_script
+      (flag on). Empty on a warm-up fetch itself.
+    * On a warm-up fetch (`X-TTStats-Warm: 1`), `messages` is emptied: a
+      background fetch must not consume a flash message the user hasn't
+      seen yet (iterating the storage marks it read).
 
     See `pingpong/offline.py`.
     """
     from django.utils import timezone
 
-    from pingpong.offline import offline_navigation_paths, request_identity, snapshots_enabled
+    from pingpong.offline import (
+        is_warm,
+        offline_navigation_paths,
+        request_identity,
+        snapshots_enabled,
+        warm_urls,
+    )
 
-    enabled = snapshots_enabled(getattr(request, 'user', None))
-    return {
+    user = getattr(request, 'user', None)
+    enabled = snapshots_enabled(user)
+    warm = is_warm(request)
+    context = {
         'ttstats_identity': request_identity(request),
         'ttstats_snapshots': 'on' if enabled else 'off',
         'ttstats_rendered_at': timezone.now().strftime('%Y-%m-%dT%H:%M:%SZ'),
         'ttstats_offline_paths': list(offline_navigation_paths()) if enabled else None,
+        'snapshot_warm_urls': (lambda: warm_urls(user)) if enabled and not warm else list,
     }
+    if warm:
+        context['messages'] = []
+    return context

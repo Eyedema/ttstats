@@ -279,7 +279,7 @@ tap that never registered.
 ## Connection state and htmx failures (KAN-135)
 
 `static/pingpong/js/connection.js`, plain JS, deferred after htmx and before
-`pull_to_refresh.js` / `prefetch.js` (which read it). UMD: the pure machine is
+`pull_to_refresh.js` / `prefetch.js` / `snapshot_warm.js` (which read it). UMD: the pure machine is
 unit-tested in `tests/js/connection.test.mjs`.
 
 - **State `online | degraded | offline` from what requests did**, not from

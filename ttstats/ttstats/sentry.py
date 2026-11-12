@@ -85,6 +85,31 @@ def _env_float(name, default):
         return default
 
 
+# A background warm-up fetch from the service worker (KAN-136) carries
+# `X-TTStats-Warm: 1`. It is not a visit: up to six of them per user per 30
+# minutes would otherwise outnumber the pages people actually opened in the
+# performance data, so their transactions are sampled at a tenth of the rate
+# (SENTRY_WARM_TRACES_SAMPLE_RATE overrides). Errors are reported as usual: a
+# 500 while warming is still a broken page.
+WARM_ENVIRON_KEY = "HTTP_X_TTSTATS_WARM"
+WARM_SAMPLE_FACTOR = 0.1
+
+
+def make_traces_sampler(base_rate, warm_rate):
+    """A `traces_sampler`: `warm_rate` for warm-up requests, else `base_rate`."""
+
+    def traces_sampler(sampling_context):
+        try:
+            environ = sampling_context.get("wsgi_environ") or {}
+            if environ.get(WARM_ENVIRON_KEY) == "1":
+                return warm_rate
+        except Exception:  # pragma: no cover - defensive; telemetry never raises
+            pass
+        return base_rate
+
+    return traces_sampler
+
+
 def capture_4xx_statuses():
     """The statuses `SENTRY_CAPTURE_4XX` asks for, as a set of ints.
 
@@ -193,6 +218,7 @@ def init_sentry(environment="production", release=None):
         logger.warning("SENTRY_DSN is set but sentry-sdk is not installed")
         return False
 
+    traces_rate = _env_float("SENTRY_TRACES_SAMPLE_RATE", 0.0)
     sentry_sdk.init(
         dsn=dsn,
         environment=os.environ.get("SENTRY_ENVIRONMENT", environment),
@@ -216,7 +242,11 @@ def init_sentry(environment="production", release=None):
         send_default_pii=False,
         # Request bodies are match scores and, on two routes, a password.
         max_request_body_size="never",
-        traces_sample_rate=_env_float("SENTRY_TRACES_SAMPLE_RATE", 0.0),
+        traces_sample_rate=traces_rate,
+        traces_sampler=make_traces_sampler(
+            traces_rate,
+            _env_float("SENTRY_WARM_TRACES_SAMPLE_RATE", traces_rate * WARM_SAMPLE_FACTOR),
+        ),
         ignore_errors=list(IGNORED_ERRORS),
         before_send=before_send,
     )

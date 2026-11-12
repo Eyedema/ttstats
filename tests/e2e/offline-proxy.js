@@ -64,8 +64,13 @@ async function startOfflineProxy(targetURL, { csp } = {}) {
     req.pipe(upstream);
   }
 
+  // The service worker's background warm-up fetches (KAN-136) that reached
+  // the proxy, by path: its own requests are invisible to page events.
+  const warmRequests = [];
+
   const server = http.createServer((req, res) => {
     requests.push({ method: req.method, path: req.url, mode });
+    if (req.headers['x-ttstats-warm'] === '1') warmRequests.push(req.url);
     if (mode === 'offline') {
       req.socket.destroy();
       return;
@@ -93,6 +98,7 @@ async function startOfflineProxy(targetURL, { csp } = {}) {
   return {
     origin: `http://localhost:${server.address().port}`,
     requests,
+    warmRequests,
     setMode(next) {
       mode = next;
       if (next === 'offline') {

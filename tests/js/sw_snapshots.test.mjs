@@ -7,74 +7,10 @@
 // browser behaviour is tests/e2e/offline-snapshots.pwa.spec.js.
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import { ORIGIN, fetchEvent, loadWorker, messageEvent } from './sw_harness.mjs';
-
-const ME = '0123456789abcdef';
-const OTHER = 'fedcba9876543210';
-const SNAP = (identity) => `ttstats-snap-ttstats-v4-test-${identity}`;
-const DAY = 24 * 60 * 60 * 1000;
-
-const PAGE = (text) =>
-  '<!DOCTYPE html><html lang="en" data-freshness="network" data-rendered-at="x">' +
-  `<head><title>Today &amp; more · TTStats</title></head><body>` +
-  '<div class="snapshot-banner"><span class="snapshot-recent">No connection — saved copy from </span>' +
-  `<time data-snapshot-time></time></div><main>${text}</main></body></html>`;
-
-function answer(body, { status = 200, snapshot = true, identity = ME, headers = {} } = {}) {
-  const all = { 'Content-Type': 'text/html; charset=utf-8', ...headers };
-  if (snapshot) all['X-TTStats-Snapshot'] = '1';
-  if (identity) all['X-TTStats-Identity'] = identity;
-  return new Response(body, { status, headers: all });
-}
-
-/** A network the test answers by hand: `net.next` resolves/rejects the
- *  current request; until then it hangs. */
-function controllableNetwork() {
-  const net = { calls: 0 };
-  net.fetch = () => {
-    net.calls += 1;
-    return new Promise((resolve, reject) => {
-      net.resolve = resolve;
-      net.reject = reject;
-    });
-  };
-  return net;
-}
-
-async function announce(worker, data) {
-  const event = messageEvent(data);
-  worker.listeners.message(event);
-  await event.settled();
-}
-
-async function navigate(worker, path, options) {
-  const event = fetchEvent(path, options);
-  worker.listeners.fetch(event);
-  return event;
-}
-
-/** Visit `path` online once so a copy of `text` is stored. */
-async function visitOnline(worker, net, path, text, options = {}) {
-  const event = await navigate(worker, path);
-  net.resolve(answer(PAGE(text), options));
-  const response = await event.response;
-  await event.settled();
-  return response;
-}
-
-async function stored(worker, identity, path) {
-  const cache = worker.storage.caches.get(SNAP(identity));
-  if (!cache) return null;
-  const hit = await cache.match(ORIGIN + path);
-  return hit ? hit.text() : null;
-}
-
-async function setup(options = {}) {
-  const net = controllableNetwork();
-  const worker = loadWorker({ fetch: net.fetch, timers: 'manual', ...options });
-  await announce(worker, { type: 'identity', identity: ME, snapshots: 'on' });
-  return { net, worker };
-}
+import { ORIGIN, fetchEvent, loadWorker } from './sw_harness.mjs';
+import {
+  DAY, ME, OTHER, PAGE, SNAP, announce, answer, controllableNetwork, navigate, setup, stored, visitOnline,
+} from './sw_snapshot_fixtures.mjs';
 
 /* ---- the route matcher -------------------------------------------------- */
 
@@ -520,8 +456,8 @@ describe('snapshot partitions', () => {
 
   test('scoreboard partitions keep their own rule (snapshots flag irrelevant)', async () => {
     const { worker } = await setup();
-    await worker.storage.open(`ttstats-live-ttstats-v4-test-${ME}`);
+    await worker.storage.open(`ttstats-live-ttstats-v5-test-${ME}`);
     await announce(worker, { type: 'identity', identity: ME, snapshots: 'off' });
-    assert.equal(worker.storage.caches.has(`ttstats-live-ttstats-v4-test-${ME}`), true);
+    assert.equal(worker.storage.caches.has(`ttstats-live-ttstats-v5-test-${ME}`), true);
   });
 });

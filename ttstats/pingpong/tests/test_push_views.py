@@ -135,8 +135,8 @@ class TestServiceWorkerRoutes:
     def test_version_bumped_and_build_keyed_on_the_precache(self, client):
         body = self.body(client)
         urls = offline.precache_urls()
-        assert "const VERSION = 'ttstats-v4';" in body
-        assert f"const BUILD = VERSION + '-{offline.build_key(urls)}';" in body
+        assert "const VERSION = 'ttstats-v5';" in body
+        assert f"const BUILD = VERSION + '-{offline.build_key(urls, offline.offline_page_html())}';" in body
         assert f'const PRECACHE = {json.dumps(urls)};' in body
 
     def test_activate_deletes_caches_from_other_builds(self, client):

@@ -16,7 +16,8 @@ export const SOURCE = readFileSync(
   .replace('{% load static %}', '')
   .replace('{{ sw_build }}', 'test')
   .replace('{{ sw_precache_json|safe }}', '[]')
-  .replace(/\{% static "([^"]+)" %\}/, '/static/$1');
+  .replace(/\{% static "([^"]+)" %\}/, '/static/$1')
+  .replace('{% url "offline_page" %}', '/offline/');
 
 const keyOf = (request) =>
   typeof request === 'string' ? new URL(request, ORIGIN).href : request.url;

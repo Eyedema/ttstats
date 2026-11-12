@@ -20,7 +20,7 @@ from django.contrib import admin
 from django.urls import path, include
 from django.views.generic import RedirectView
 
-from pingpong.views import CustomLoginView, ManifestView, ServiceWorkerView
+from pingpong.views import CustomLoginView, ManifestView, OfflinePageView, ServiceWorkerView
 
 # Admin URL can be customized via environment variable for security
 # Set ADMIN_URL to a random string in production (e.g., 'secret-admin-abc123/')
@@ -37,6 +37,9 @@ urlpatterns = [
     # never control the whole site. Serving from / gives it scope /.
     path('sw.js', ServiceWorkerView.as_view(), name='service_worker'),
     path('manifest.webmanifest', ManifestView.as_view(), name='manifest'),
+    # Precached by the worker and shown in place of an unsaved /pingpong/ page
+    # with no network (KAN-137). Outside /pingpong/ so the worker never claims it.
+    path('offline/', OfflinePageView.as_view(), name='offline_page'),
     # WebAuthn URLs (must be at root level for namespace to work)
     path('webauthn/', include(('django_otp_webauthn.urls', 'otp_webauthn'))),
 ]

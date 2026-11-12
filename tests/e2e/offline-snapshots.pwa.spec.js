@@ -1,6 +1,7 @@
 const base = require('@playwright/test');
 const { PROD_CSP } = require('./helpers');
 const { startOfflineProxy } = require('./offline-proxy');
+const { noWarming } = require('./offline-warm-helpers');
 
 /**
  * KAN-131 offline reading: a page seen once reopens with no signal from a
@@ -45,6 +46,8 @@ test.use({ storageState: { cookies: [], origins: [] } });
 test.describe.configure({ timeout: 60000 });
 
 test.beforeEach(async ({ page }) => {
+  // These count what is saved: no background warm-up (KAN-136).
+  await noWarming(page);
   // CSP violations, for the "served copy keeps its policy" checks. Chart.js's
   // one `eval` refusal is expected under PROD_CSP (frontend-verification).
   await page.addInitScript(() => {
@@ -160,6 +163,13 @@ async function expectSnapshot(page, since) {
   expect(await page.evaluate(() => window.__cspViolations)).toEqual([]);
 }
 
+/** The offline page (KAN-137): what a page with no copy gets, no network. */
+async function expectOfflinePage(page) {
+  await expect(page.locator('[data-offline-page]')).toBeVisible();
+  expect(await freshness(page)).toBeUndefined();
+  await expect(banner(page)).toHaveCount(0);
+}
+
 async function staticStillServed(page) {
   // The worker is alive and answering over the same dead network: a hashed
   // stylesheet comes out of its static cache.
@@ -230,9 +240,13 @@ test.describe('offline snapshots', () => {
     expect(await storedPaths(page)).not.toContain('/pingpong/matches/add/');
 
     net.setMode('offline');
-    await expect(page.goto(net.origin + '/pingpong/matches/add/')).rejects.toThrow();
-    // Never visited: no copy, the browser's error.
-    await expect(page.goto(net.origin + '/pingpong/calendar/')).rejects.toThrow();
+    // No copy of the form: the offline page (KAN-137), never the form.
+    await page.goto(net.origin + '/pingpong/matches/add/');
+    await expectOfflinePage(page);
+    await expect(page.locator('form')).toHaveCount(0);
+    // Never visited: no copy, the offline page.
+    await page.goto(net.origin + '/pingpong/calendar/');
+    await expectOfflinePage(page);
     // Same dead network, and the opted-in page opens.
     await page.goto(net.origin + '/pingpong/');
     await expectSnapshot(page, 0);
@@ -287,9 +301,10 @@ test.describe('offline snapshots', () => {
     net.setMode('502');
     await page.reload();
     await expectSnapshot(page, since);
-    // Never visited, so no copy: the 502 itself, not a cached anything.
-    const response = await page.goto(net.origin + '/pingpong/calendar/');
-    expect(response.status()).toBe(502);
+    // Never visited, so no copy: the offline page, worded for the server.
+    await page.goto(net.origin + '/pingpong/calendar/');
+    await expectOfflinePage(page);
+    await expect(page.locator('h1')).toContainText("TTStats isn't answering", { useInnerText: true });
   });
 
   test('an expired session goes to the login page, never a copy', async ({ page, context, net }) => {
@@ -313,7 +328,7 @@ test.describe('whose copies (the data-leak boundary)', () => {
     const match = await readerMatchPath(page, net);
     for (const path of ['/pingpong/', '/pingpong/leaderboard/', match]) await visit(page, net, path);
     const [aPartition] = await snapshotCaches(page);
-    expect(aPartition).toMatch(/^ttstats-snap-ttstats-v4-[0-9a-f]{10}-[0-9a-f]{16}$/);
+    expect(aPartition).toMatch(/^ttstats-snap-ttstats-v5-[0-9a-f]{10}-[0-9a-f]{16}$/);
 
     await logout(page);
     await login(page, net, READER_B);
@@ -323,9 +338,15 @@ test.describe('whose copies (the data-leak boundary)', () => {
     expect(names).toHaveLength(1);
 
     net.setMode('offline');
-    // A's match and table: no copy for B.
-    await expect(page.goto(net.origin + match)).rejects.toThrow();
-    await expect(page.goto(net.origin + '/pingpong/leaderboard/')).rejects.toThrow();
+    // A's match and table: no copy for B, so the offline page (KAN-137).
+    for (const path of [match, '/pingpong/leaderboard/']) {
+      await page.goto(net.origin + path);
+      await expectOfflinePage(page);
+      // Its list is B's one saved page, none of A's.
+      const listed = page.locator('[data-offline-saved] a[data-item-link]');
+      await expect(listed).toHaveCount(1);
+      expect(await listed.getAttribute('href')).toBe('/pingpong/');
+    }
     // B's own Today is served, and it is B's.
     await page.goto(net.origin + '/pingpong/');
     await expectSnapshot(page, 0);
@@ -355,7 +376,8 @@ test.describe('whose copies (the data-leak boundary)', () => {
     expect(after).not.toContain(before);
 
     net.setMode('offline');
-    await expect(page.goto(net.origin + match)).rejects.toThrow();
+    await page.goto(net.origin + match);
+    await expectOfflinePage(page);
     await page.goto(net.origin + '/pingpong/');
     await expectSnapshot(page, 0);
   });
