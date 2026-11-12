@@ -71,10 +71,16 @@ rm -f "$E2E_DB"
 # long-poll would only see another worker's op through its 2 s DB fallback
 # (and SQLite would take writes from several processes). Static is served by
 # WhiteNoise in the app, as in prod; gunicorn has no static handler.
+# --keep-alive 0: gunicorn closes an idle keep-alive socket after 2 s, and
+# applyProdCSP's route.fetch (Node's HTTP client) may reuse that socket a
+# moment later and get ECONNRESET, which applyProdCSP turns into an aborted
+# request: on CI's slower runner a deferred script went missing and the page
+# never ran. Prod has no keep-alive either (--worker-connections = threads).
 exec "$PY" -m gunicorn ttstats.wsgi:application \
   --bind "localhost:$PORT" \
   --worker-class gthread \
   --workers 1 \
   --threads "${E2E_GUNICORN_THREADS:-8}" \
   --timeout 60 \
+  --keep-alive 0 \
   --error-logfile -
