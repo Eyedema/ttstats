@@ -17,9 +17,7 @@
 // from its top.
 //
 // Offline (connection.js's shared state, else navigator.onLine): "No
-// connection" and no reload. Except on a saved copy (html[data-freshness=
-// "snapshot"], KAN-146): there a reload is how the user asks the worker to
-// try the network again, and it falls back to the copy, so it always reloads.
+// connection" and no reload -- except on a saved copy (KAN-146): reload.
 //
 // Fails closed: the indicator only exists once this script has run.
 (function () {

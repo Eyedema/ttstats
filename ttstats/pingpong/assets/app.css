@@ -611,7 +611,8 @@ html.ptr-on { overscroll-behavior-y: contain; }
 .toast-text { flex: 1 1 auto; min-width: 0; }
 
 .toast-action,
-.toast-close {
+.toast-close,
+.snapshot-refresh {
   flex: none;
   display: inline-flex;
   align-items: center;
@@ -622,7 +623,8 @@ html.ptr-on { overscroll-behavior-y: contain; }
   font-weight: 800;
 }
 
-.toast-action {
+.toast-action,
+.snapshot-refresh {
   padding: 0 0.75rem;
   border: 2px solid rgb(var(--court-edge));
   text-transform: uppercase;
@@ -683,19 +685,7 @@ html[data-freshness='snapshot'] .live-dot {
    cannot exist without JS). The class name lives only in JS, which Tailwind
    does not scan: hence outside @layer. Neutral, like the toast's action. */
 .snapshot-refresh {
-  flex: none;
   margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  min-height: 44px;
-  padding: 0 0.75rem;
-  border: 2px solid rgb(var(--court-edge));
-  background: transparent;
-  color: rgb(var(--bone));
-  font-weight: 800;
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
 }
 
 @layer utilities {

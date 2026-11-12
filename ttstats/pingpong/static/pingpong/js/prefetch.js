@@ -50,10 +50,7 @@
   }
 
   if (!window.fetch || !window.URL) return;
-  // A saved copy (KAN-146): the network just failed or crawled. A prefetch
-  // would spend what little there is, and on WebKit a click landing
-  // mid-prefetch is held for it -- the worker's own fallback must not wait
-  // behind that.
+  // Not on a saved copy (KAN-146): a held click would wait on a dead network.
   if (document.documentElement.getAttribute('data-freshness') === 'snapshot') return;
   var conn = navigator.connection;
   if (conn && conn.saveData) return;
