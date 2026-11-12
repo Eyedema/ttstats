@@ -259,13 +259,22 @@ def _match_scorer_ids(lobby):
 
 @method_decorator(never_cache, name="dispatch")
 @method_decorator(
-    # Same limit as the club-invite accept: the token is guessable only by
-    # brute force, and this endpoint is the oracle for "is it real".
-    ratelimit(key="ip", rate="20/h", method=["GET", "POST"], block=True),
+    # Like the club-invite accept: the token is guessable only by brute
+    # force, and the GET is the oracle for "is it real". Per user when signed
+    # in (a club night shares one address), per IP otherwise. GET only: an
+    # anonymous POST is bounced to the GET without a lookup, and a signed-in
+    # POST is a verified member's, already limited by their GETs.
+    ratelimit(key="user_or_ip", rate="20/h", method="GET", block=True),
     name="dispatch",
 )
 class LiveJoinView(View):
     """Open a lobby's join link: who are you, then join."""
+
+    def dispatch(self, request, *args, **kwargs):
+        if request.method == "POST" and not request.user.is_authenticated:
+            # Uncounted, so it must not answer: no lookup, no parked token.
+            return redirect(request.path)
+        return super().dispatch(request, *args, **kwargs)
 
     def get(self, request, token):
         lobby = find_lobby(token)

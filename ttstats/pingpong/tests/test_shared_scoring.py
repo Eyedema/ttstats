@@ -668,7 +668,7 @@ class TestJoinView:
         assert Match.all_objects.count() == 1
         assert LiveScorer.objects.count() == 2
 
-    def test_rate_limited_like_the_invite_accept(self, flags_on):
+    def test_anonymous_gets_are_rate_limited_by_ip(self, flags_on):
         client = Client()
         statuses = [
             client.get(reverse("pingpong:live_join", args=["0" * 32])).status_code
@@ -676,6 +676,29 @@ class TestJoinView:
         ]
         assert statuses[0] == 404
         assert 403 in statuses
+
+    def test_signed_in_gets_are_rate_limited_per_user_not_per_ip(self, flags_on, club):
+        """Club night: everyone is behind the same address."""
+        url = reverse("pingpong:live_join", args=["0" * 32])
+        first, second = _client(_member(club)), _client(_member(club))
+        assert 403 in [first.get(url).status_code for _ in range(22)]
+        assert second.get(url).status_code == 404
+
+    def test_posts_do_not_count(self, flags_on, club):
+        """Like the invite accept: a legitimate join is a GET then a POST."""
+        lobby = self._lobby(club)
+        client = _client(_member(ClubFactory()))  # not a member: never joins
+        assert all(client.post(_join_url(lobby)).status_code == 200 for _ in range(22))
+        assert client.get(_join_url(lobby)).status_code == 200
+
+    def test_an_anonymous_post_is_not_an_oracle(self, flags_on, club):
+        """POSTs are not counted, so an anonymous POST must not say whether a
+        token is real: it is sent to the (counted) GET without a lookup."""
+        lobby = self._lobby(club)
+        for token in ("0" * 32, lobby.token):
+            url = reverse("pingpong:live_join", args=[token])
+            resp = Client().post(url)
+            assert resp.status_code == 302 and resp.url == url
 
     def test_no_store(self, flags_on, club):
         lobby = self._lobby(club)
@@ -737,7 +760,7 @@ class TestRegistrationHook:
         assert reverse("pingpong:live_join_resume") in html.replace("%2F", "/")
         # And the join link itself still refuses to join an anonymous visitor.
         assert client.get(_join_url(lobby)).context["state"] == "anonymous"
-        assert client.post(_join_url(lobby)).context["state"] == "anonymous"
+        assert client.post(_join_url(lobby)).url == _join_url(lobby)
         assert not Match.all_objects.exists()
 
     def test_verifying_in_the_same_browser_lands_on_the_confirm_page(self, flags_on, club, mailoutbox):

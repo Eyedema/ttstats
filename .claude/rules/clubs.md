@@ -58,7 +58,8 @@ It lives in `_nav_menu.html`, rendered by both the drawer and the desktop sideba
 
 `LiveLobby` + `/pingpong/live/join/<token>/` (KAN-152, `live_lobby_views.py`)
 follows every rule above: `uuid4().hex`, `all_objects` lookup by token then
-`compare_digest`, `20/h` by IP (GET and POST), parked in the session
+`compare_digest`, `20/h` on GET per user (per IP when anonymous; an
+anonymous POST is bounced to the GET unlooked-up), parked in the session
 (`pending_live_join`), registration hooked (`consume_pending_live_join`, after
 `consume_pending_invite`), a real page per dead reason, `live/join` in
 `TOKEN_PATH_PREFIXES`.

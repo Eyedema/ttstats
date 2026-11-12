@@ -7,6 +7,8 @@ paths:
   - "compose*.yml"
   - ".github/workflows/**"
   - "ttstats/ttstats/settings/**"
+  - "ttstats/ttstats/client_ip.py"
+  - "ttstats/pingpong/tests/test_client_ip.py"
   - "requirements.txt"
   - ".env*"
 ---
@@ -62,6 +64,12 @@ paths:
   persistent ones against Postgres's default `max_connections` of 100 (the
   `db` service is ours alone), so `CONN_MAX_AGE` stays 60. Raising
   workers x threads means revisiting it in the same change.
+- **Rate limits key on `ttstats.client_ip.client_ip`** (`RATELIMIT_IP_META_KEY`
+  in prod.py): the right-most `X-Forwarded-For` hop, which Pangolin's Traefik
+  appends, else `REMOTE_ADDR`. gunicorn's `REMOTE_ADDR` is always the proxy
+  (`--forwarded-allow-ips` covers only the scheme), so `key="ip"` was one
+  bucket for the whole site. Assumes one proxy of ours; a CDN in front means
+  skipping its hop too. Dev/test have no proxy and keep `REMOTE_ADDR`.
 - **Never ASGI while tenancy is a `threading.local`**: sync code from two
   requests can share an executor thread there. Path out:
   `docs/decisions/kan-148-shared-scoring.md`.

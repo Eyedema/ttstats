@@ -46,10 +46,16 @@ The scoped manager lets staff see every lobby in their club; the lobby page
 additionally filters on `host=<viewer>`, because the page shows the bearer
 token.
 
-## The join rate limit covers GET and POST
+## The join rate limit: GET only, per user when signed in
 
-The invite accept limits GET only; a POST to the join URL is the same oracle,
-so both count against `20/h` by IP. A legitimate join is about four requests.
+`20/h`, `key="user_or_ip"`, GET only, like the invite accept. The first
+version counted GET and POST by IP; in prod every request's REMOTE_ADDR was
+the proxy (see `build-and-deploy.md`), and even with the real address a club
+night shares one, so 20 joins an hour would have been the whole room's.
+Signed in, the bucket is the user's; anonymous, the client's IP. A POST is
+not counted, so it must not be an oracle: an anonymous POST is redirected
+to the GET without a lookup, and a signed-in POST is a verified member's,
+already limited by their GETs.
 
 ## "Waiting for an opponent" on Today (KAN-157)
 

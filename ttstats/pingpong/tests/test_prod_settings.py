@@ -28,6 +28,8 @@ print(json.dumps({
     'conn_health_checks': db.get('CONN_HEALTH_CHECKS'),
     # Unset in prod.py means Django's default, the plain `db` engine.
     'session_engine': getattr(prod, 'SESSION_ENGINE', 'django.contrib.sessions.backends.db'),
+    'ratelimit_ip_meta_key': getattr(prod, 'RATELIMIT_IP_META_KEY', None),
+    'live_longpoll_max_held': getattr(prod, 'LIVE_LONGPOLL_MAX_HELD', None),
 }))
 """
 
@@ -76,3 +78,13 @@ class TestSessionEngine:
         s = _prod_settings()
 
         assert s['session_engine'] == 'django.contrib.sessions.backends.db'
+
+
+class TestClientIp:
+    def test_ratelimits_key_on_the_proxys_last_hop(self):
+        """Behind Traefik REMOTE_ADDR is the proxy, so `key='ip'` would be one
+        bucket for the whole site (5 failed logins locks everyone out)."""
+        s = _prod_settings()
+
+        assert s['ratelimit_ip_meta_key'] == 'ttstats.client_ip.client_ip'
+

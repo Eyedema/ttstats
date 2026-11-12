@@ -56,6 +56,9 @@ if REDIS_URL:
     SESSION_ENGINE = 'django.contrib.sessions.backends.cached_db'
 # Security settings for production
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+# Rate limits key on the client, not on Traefik: gunicorn's REMOTE_ADDR is
+# the proxy for every request. Last hop of X-Forwarded-For (ttstats/client_ip.py).
+RATELIMIT_IP_META_KEY = 'ttstats.client_ip.client_ip'
 SECURE_SSL_REDIRECT = True
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
