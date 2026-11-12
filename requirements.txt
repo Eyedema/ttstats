@@ -23,7 +23,7 @@ pytest-cov
 pytest-xdist
 psycopg2-binary
 dj-database-url==2.3.0
-gunicorn
+gunicorn==25.0.1
 # Web push (VAPID). Pinned below 2.4 on purpose: 2.4.0 requires
 # cryptography>=47, while django-otp-webauthn's `webauthn` -> `pyopenssl`
 # chain caps it at <47. Bumping either one alone breaks `pip check`.

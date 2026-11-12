@@ -109,6 +109,14 @@ never wakes to uncommitted data and a 40-op batch is one write.
   the client must back off about a second on `busy`, not re-issue at once.
   The alternative, a newer request taking the slot over and the older one
   exiting at its next tick, is the upgrade if that delay shows up.
+- **A per-process cap on held polls** (review, after KAN-168):
+  `LIVE_LONGPOLL_MAX_HELD` (threads - 3) through a non-blocking
+  `BoundedSemaphore`, answering the same busy 204 when full. The per-user
+  marker bounds one user; this bounds the process, so N matches' phones can
+  never hold every thread while their ops queue. With
+  `--worker-connections` equal to the thread count, a saturated worker also
+  stops accepting, so a new connection goes to a worker with a free thread
+  instead of queueing inside a busy one.
 - **Abort timeout** is sent as `scoreboard-config.longpoll_abort_ms` =
   `(LIVE_LONGPOLL_WAIT + live_longpoll.ABORT_SLACK) * 1000` = 25 000: the
   client's own timer already includes the 5 s slack, so it types no number.

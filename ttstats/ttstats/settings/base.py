@@ -258,6 +258,15 @@ for _flag_name in os.environ.get('TTSTATS_FLAGS_ON', '').split(','):
 # live_longpoll.ABORT_SLACK, a number it is sent and never types.
 LIVE_LONGPOLL_WAIT = 20
 
+# How many /live/state/?wait=1 requests one process may hold at once; past it
+# the poll answers 204 `X-Longpoll: busy` at once and the client backs off
+# ~1 s. GUNICORN_THREADS - 3 (5 of 8): held phones can never take every
+# thread, so ops and pages always have three. Never below 1.
+LIVE_LONGPOLL_MAX_HELD = max(1, int(os.environ.get(
+    'LIVE_LONGPOLL_MAX_HELD',
+    int(os.environ.get('GUNICORN_THREADS', '8')) - 3,
+)))
+
 # Presence of the other phone in a shared match (KAN-154), in seconds since
 # its last_seen_at: "in sync" under IN_SYNC, "last seen ... ago" past it, and
 # "not seen for ..." plus the "Score for both" action past LOST. Sent to the

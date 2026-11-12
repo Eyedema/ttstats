@@ -431,6 +431,71 @@ class TestHeld:
 
 
 @pytest.mark.django_db
+class TestHeldPollCap:
+    """At most ``LIVE_LONGPOLL_MAX_HELD`` held polls per process, so held
+    phones can never take every gunicorn thread and starve the ops."""
+
+    @pytest.fixture
+    def one_slot(self, short_wait):
+        short_wait.LIVE_LONGPOLL_MAX_HELD = 1
+        from pingpong import views
+
+        return views._held_polls()
+
+    def test_full_is_busy_at_once(self, one_slot):
+        match = live_match(started=True)
+        host = LiveScorer.objects.get(match=match, role=LiveScorer.Role.HOST).player
+        assert one_slot.acquire(blocking=False)  # another phone's held poll
+        try:
+            started = time.monotonic()
+            response = _host_client(match).get(_url(match, since=0, wait=1))
+            assert time.monotonic() - started < 0.5
+            assert response.status_code == 204
+            assert response["X-Longpoll"] == "busy"
+            # Its per-user marker is not left behind to refuse the retry.
+            assert cache.get(cache_utils.live_poll_key(match.pk, host.user.pk)) is None
+        finally:
+            one_slot.release()
+
+    def test_the_slot_is_released_after_a_held_poll(self, one_slot):
+        match = live_match(started=True)
+        client = _host_client(match)
+        for _ in range(2):
+            response = client.get(_url(match, since=0, wait=1))
+            assert response.status_code == 204 and "X-Longpoll" not in response
+        assert one_slot.acquire(blocking=False)
+        one_slot.release()
+
+    def test_the_slot_is_released_when_the_wait_raises(self, one_slot, monkeypatch):
+        def boom(*args, **kwargs):
+            raise RuntimeError("cache down")
+
+        monkeypatch.setattr(live_longpoll, "wait_for_change", boom)
+        match = live_match(started=True)
+        with pytest.raises(RuntimeError):
+            _host_client(match).get(_url(match, since=0, wait=1))
+        assert one_slot.acquire(blocking=False)
+        one_slot.release()
+
+    def test_instant_answers_take_no_slot(self, one_slot):
+        match = live_match(started=True)
+        assert one_slot.acquire(blocking=False)
+        try:
+            client = _host_client(match)
+            assert client.get(_url(match)).status_code == 200
+            assert client.get(_url(match, since=0)).status_code == 204
+        finally:
+            one_slot.release()
+
+    def test_default_leaves_threads_for_the_ops(self, settings):
+        """Default: GUNICORN_THREADS (8) - 3, so three threads per process
+        stay free for ops and pages whatever the phones do."""
+        from django.conf import settings as live
+
+        assert 1 <= live.LIVE_LONGPOLL_MAX_HELD < 8
+
+
+@pytest.mark.django_db
 class TestRefusedWithoutWaiting:
     def test_stranger_is_403_at_once(self, short_wait):
         short_wait.LIVE_LONGPOLL_WAIT = 5
@@ -543,6 +608,22 @@ class TestGunicornConfig:
         assert "--worker-class gthread" in text
         assert '--workers "${GUNICORN_WORKERS:-3}"' in text
         assert '--threads "${GUNICORN_THREADS:-8}"' in text
+
+    def test_a_saturated_worker_stops_accepting(self):
+        """gthread accepts up to --worker-connections (default 1000) and
+        queues them behind busy threads; equal to the thread count, a full
+        worker leaves new connections to the others."""
+        text, _ = self._flags("docker/django/entrypoint.sh")
+        assert (
+            '--worker-connections "${GUNICORN_WORKER_CONNECTIONS:-${GUNICORN_THREADS:-8}}"'
+            in text
+        )
+
+    def test_gunicorn_is_pinned(self):
+        """The gthread accept/keep-alive behaviour above was read from this
+        version's source; an unpinned build could change it."""
+        lines = (REPO_ROOT / "requirements.txt").read_text().splitlines()
+        assert any(re.fullmatch(r"gunicorn==\d+\.\d+\.\d+", line.strip()) for line in lines)
 
     def test_e2e_runs_the_same_worker_class(self):
         text, _ = self._flags("scripts/e2e_server.sh")

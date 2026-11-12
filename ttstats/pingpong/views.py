@@ -1,5 +1,6 @@
 import json
 import logging
+import threading
 from dataclasses import dataclass
 from urllib.parse import urlencode
 from datetime import datetime
@@ -3432,6 +3433,25 @@ def _release_db_connection() -> None:
         connection.close()
 
 
+_held_polls_lock = threading.Lock()
+_held_polls_state: dict = {"size": None, "semaphore": None}
+
+
+def _held_polls() -> threading.BoundedSemaphore:
+    """This process's cap on held long-polls (``LIVE_LONGPOLL_MAX_HELD``).
+
+    Per process because a held poll holds one of *this* worker's gthread
+    threads. Rebuilt only if the setting changes (tests); a poll holding the
+    old one releases the old one.
+    """
+    size = settings.LIVE_LONGPOLL_MAX_HELD
+    with _held_polls_lock:
+        if _held_polls_state["size"] != size:
+            _held_polls_state["size"] = size
+            _held_polls_state["semaphore"] = threading.BoundedSemaphore(size)
+        return _held_polls_state["semaphore"]
+
+
 def _live_rev_from_db(pk) -> int | None:
     """The DB fallback of a held wait on a per-process cache. Scoped like
     the authorization that preceded it."""
@@ -3506,13 +3526,21 @@ class LiveStateView(LoginRequiredMixin, View):
     @staticmethod
     def _hold(request, match: Match, since: int) -> bool | None:
         """Wait for ``rev`` to move: True when it did, None on timeout,
-        False when this user already has a wait open on this match."""
+        False (busy) when this user already has a wait open on this match or
+        the process already holds ``LIVE_LONGPOLL_MAX_HELD``."""
         wait = settings.LIVE_LONGPOLL_WAIT
         marker = cache_utils.live_poll_key(match.pk, request.user.pk)
         # One held request per (match, user): a buggy client or a reloaded
         # page must not take a thread each. The TTL outlives the wait, so a
         # worker killed mid-wait frees the slot on its own.
         if not cache.add(marker, 1, wait + live_longpoll.ABORT_SLACK):
+            return False
+        # And at most LIVE_LONGPOLL_MAX_HELD per process, never blocking: a
+        # full house is "busy" at once, so held phones cannot take every
+        # thread and starve the ops they are waiting for.
+        slots = _held_polls()
+        if not slots.acquire(blocking=False):
+            cache.delete(marker)
             return False
         try:
             key = cache_utils.live_rev_key(match.pk)
@@ -3533,6 +3561,7 @@ class LiveStateView(LoginRequiredMixin, View):
             )
             return True if changed is not None else None
         finally:
+            slots.release()
             cache.delete(marker)
 
 

@@ -64,6 +64,12 @@ paths:
   persistent ones against Postgres's default `max_connections` of 100 (the
   `db` service is ours alone), so `CONN_MAX_AGE` stays 60. Raising
   workers x threads means revisiting it in the same change.
+- **`--worker-connections` defaults to the thread count**
+  (`GUNICORN_WORKER_CONNECTIONS`): gthread's default 1000 queues connections
+  behind busy threads; equal, a saturated worker stops accepting and another
+  takes the connection. Cost: no keep-alive (the boot warning "No keepalived
+  connections" is expected). **gunicorn is pinned** (`==25.0.1`): that
+  accept/keep-alive behaviour was read from its source; re-read on upgrade.
 - **Rate limits key on `ttstats.client_ip.client_ip`** (`RATELIMIT_IP_META_KEY`
   in prod.py): the right-most `X-Forwarded-For` hop, which Pangolin's Traefik
   appends, else `REMOTE_ADDR`. gunicorn's `REMOTE_ADDR` is always the proxy

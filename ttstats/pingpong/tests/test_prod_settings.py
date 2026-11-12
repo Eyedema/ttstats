@@ -38,7 +38,8 @@ def _prod_settings(**env):
     full = {
         key: value
         for key, value in os.environ.items()
-        if key not in ('REDIS_URL', 'DB_CONN_MAX_AGE', 'DJANGO_SETTINGS_MODULE')
+        if key not in ('REDIS_URL', 'DB_CONN_MAX_AGE', 'DJANGO_SETTINGS_MODULE',
+                       'GUNICORN_THREADS', 'LIVE_LONGPOLL_MAX_HELD')
     }
     full.update(REQUIRED_ENV)
     full.update(env)
@@ -87,4 +88,18 @@ class TestClientIp:
         s = _prod_settings()
 
         assert s['ratelimit_ip_meta_key'] == 'ttstats.client_ip.client_ip'
+
+
+class TestHeldLongPolls:
+    def test_three_threads_per_process_stay_free_by_default(self):
+        assert _prod_settings()['live_longpoll_max_held'] == 5
+
+    def test_follows_the_thread_count(self):
+        assert _prod_settings(GUNICORN_THREADS='12')['live_longpoll_max_held'] == 9
+
+    def test_env_overridable(self):
+        assert _prod_settings(LIVE_LONGPOLL_MAX_HELD='2')['live_longpoll_max_held'] == 2
+
+    def test_never_below_one(self):
+        assert _prod_settings(GUNICORN_THREADS='2')['live_longpoll_max_held'] == 1
 

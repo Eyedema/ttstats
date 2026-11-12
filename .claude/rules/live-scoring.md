@@ -237,6 +237,11 @@ club check run **before** any wait; `last_seen_at` is still stamped.
 - **One held poll per (match, user)**: `live_poll_key` marker via
   `cache.add`; a second concurrent one is 204 at once with
   `X-Longpoll: busy` (the client should back off ~1 s on it, not spin).
+- **At most `LIVE_LONGPOLL_MAX_HELD` held polls per process**
+  (`GUNICORN_THREADS` - 3 = 5, env-overridable, min 1): a non-blocking
+  `threading.BoundedSemaphore` (`views._held_polls`); full is the same
+  instant busy 204, released in `finally`. Held phones never take every
+  thread, so the ops they wait for still run.
 - **The key is written on commit, never before** (`live_ops.publish_rev`,
   registered once per transaction from `_write_state`, so a batch is one
   write with the final rev). A dead cache never fails a committed op.
