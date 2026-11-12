@@ -1,0 +1,74 @@
+#!/usr/bin/env python3
+"""A fake `docker` for driving deploy/deploy.sh in tests (KAN-110).
+
+State lives in the JSON file named by FAKE_DOCKER_STATE:
+
+    running       image the `web` container runs ("" = none)
+    healthy       {image: bool}; missing = True. `up --wait` fails for False.
+    fail          list of step names that exit 1: pull, run, up, login
+    run_output    stdout of `compose run` (pre-swap tasks)
+
+Every call is appended to `calls` as {"argv": [...], "web_image": ...,
+"release": ...} so tests can assert order and pinning.
+"""
+import json
+import os
+import sys
+
+path = os.environ["FAKE_DOCKER_STATE"]
+with open(path) as fh:
+    state = json.load(fh)
+
+argv = sys.argv[1:]
+state.setdefault("calls", []).append({
+    "argv": argv,
+    "web_image": os.environ.get("WEB_IMAGE"),
+    "release": os.environ.get("SENTRY_RELEASE"),
+})
+
+
+def save():
+    with open(path, "w") as fh:
+        json.dump(state, fh)
+
+
+def fail_if(step):
+    if step in state.get("fail", []):
+        save()
+        sys.stderr.write(f"fake docker: {step} failed\n")
+        sys.exit(1)
+
+
+if argv and argv[0] == "compose":
+    rest = argv[1:]
+    while rest and rest[0] == "-f":
+        rest = rest[2:]
+    cmd = rest[0] if rest else ""
+    if cmd == "ps":
+        if state.get("running"):
+            print("c0ffee")
+    elif cmd == "pull":
+        fail_if("pull")
+    elif cmd == "run":
+        fail_if("run")
+        if state.get("run_output"):
+            print(state["run_output"])
+    elif cmd == "up":
+        fail_if("up")
+        image = os.environ.get("WEB_IMAGE", "ghcr.io/eyedema/ttstats-web:latest")
+        state["running"] = image
+        state.setdefault("ups", []).append(image)
+        if "--wait" in rest and not state.get("healthy", {}).get(image, True):
+            save()
+            sys.stderr.write("fake docker: container web is unhealthy\n")
+            sys.exit(1)
+    elif cmd == "exec":
+        state.setdefault("execs", []).append(rest)
+    elif cmd == "stop":
+        state["running"] = ""
+elif argv[:1] == ["inspect"]:
+    print(state.get("running", ""))
+elif argv[:1] == ["login"]:
+    sys.stdin.read()
+    fail_if("login")
+save()
