@@ -16,7 +16,6 @@ import secrets
 from urllib.parse import urlencode
 
 from django.contrib import messages
-from django.contrib.auth import login
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.http import Http404, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render, resolve_url
@@ -395,20 +394,39 @@ class LiveJoinResumeView(View):
         return redirect("pingpong:live_join", token=token)
 
 
+def pending_live_join_url(request):
+    """The resume URL if the session holds a parked token whose lobby is
+    still open, else None (a dead token is dropped on the way).
+
+    Where verification and login send a joiner when they carry no ``next`` of
+    their own: the token-free ``live/join/`` route, never the join URL, so the
+    token stays out of every URL but its own.
+    """
+    token = request.session.get(PENDING_LIVE_JOIN_SESSION_KEY)
+    if not token:
+        return None
+    lobby = find_lobby(token)
+    if lobby is None or not lobby.is_open:
+        request.session.pop(PENDING_LIVE_JOIN_SESSION_KEY, None)
+        return None
+    return reverse("pingpong:live_join_resume")
+
+
 def consume_pending_live_join(request, user):
-    """The registration hook: send a new account on to the lobby it came from.
+    """The registration hook for a signup that came from a join link.
 
     Called from ``PlayerRegistrationView.form_valid`` after
     ``consume_pending_invite`` (so a club invite in the same session has
     already made them a member). Returns a response, or None to let
-    registration carry on as usual.
+    registration carry on as usual (the "verify your email" page).
 
-    A brand-new account is not logged in until it verifies its email, but an
-    unverified player may play (their matches auto-confirm), and the ticket
-    says not to block on verification. So when the lobby is still open and the
-    account is in its club, it is logged in here and sent to the confirm
-    page. That exception is this narrow on purpose: a valid, open, single-use
-    lobby token *and* membership of its club.
+    **Never logs the new account in.** An unverified session could create
+    matches against verified clubmates that auto-confirm, and register a
+    passkey, bypassing verification for good. When the lobby is still open
+    and the account is in its club, the token stays parked: verifying (in
+    this browser) or the next login resumes the join via
+    ``pending_live_join_url``. A dead lobby or the host's own drops it; a
+    non-member gets the dead end at once.
     """
     token = request.session.get(PENDING_LIVE_JOIN_SESSION_KEY)
     if not token:
@@ -421,9 +439,4 @@ def consume_pending_live_join(request, user):
     if lobby.club_id is not None and not lobby.club.user_is_member(user):
         request.session.pop(PENDING_LIVE_JOIN_SESSION_KEY, None)
         return _join_page(request, lobby, "not_member", email_sent_to=user.email)
-    login(request, user, backend="django.contrib.auth.backends.ModelBackend")
-    messages.info(
-        request,
-        f"We've sent a verification link to {user.email}. Verify it before you next log in.",
-    )
-    return redirect("pingpong:live_join", token=lobby.token)
+    return None

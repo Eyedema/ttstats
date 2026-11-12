@@ -698,23 +698,97 @@ class TestJoinView:
 # ---------------------------------------------------------------------------
 
 
+def _verify_url(mailoutbox):
+    """The path of the verification link in the last email sent."""
+    return re.search(r"https?://[^/]+(/\S+/verify-email/\S+/)", mailoutbox[-1].body).group(1)
+
+
+def _signup_with_invite(club, lobby):
+    """An anonymous client that took a club invite, opened the join link and
+    signed up. Returns (client, signup response)."""
+    invite = ClubInvite.issue(club=club, created_by=lobby.host.user)
+    client = Client()
+    client.get(reverse("pingpong:club_invite_accept", args=[invite.token]))
+    client.get(_join_url(lobby))
+    return client, client.post(reverse("pingpong:signup"), SIGNUP)
+
+
 @pytest.mark.django_db
 class TestRegistrationHook:
-    def test_signup_with_an_invite_lands_on_the_confirm_page_logged_in(self, flags_on, club, mailoutbox):
+    """Signup never logs an unverified account in, a join link included: a
+    session would let it create auto-confirming matches against verified
+    clubmates and register a passkey, bypassing verification for good."""
+
+    def test_signup_with_an_open_lobby_is_not_logged_in(self, flags_on, club, mailoutbox):
         lobby = LiveLobbyFactory(host=_member(club), club=club)
-        invite = ClubInvite.issue(club=club, created_by=lobby.host.user)
-        client = Client()
-        client.get(reverse("pingpong:club_invite_accept", args=[invite.token]))
-        client.get(_join_url(lobby))
-        resp = client.post(reverse("pingpong:signup"), SIGNUP)
-        assert resp.url == _join_url(lobby)
+        client, resp = _signup_with_invite(club, lobby)
+        assert resp.status_code == 200
+        assert resp.templates[0].name == "registration/verify_email_sent.html"
+        assert "_auth_user_id" not in client.session
         user = User.objects.get(username="joiner")
-        assert club.user_is_member(user)
-        assert len(mailoutbox) == 1  # verification still sent
-        assert not user.profile.email_verified  # and not required to join
+        assert club.user_is_member(user)  # the invite still made them a member
+        assert len(mailoutbox) == 1
+        # The token stays parked for after verification, and the page says so.
+        assert client.session[PENDING_LIVE_JOIN_SESSION_KEY] == lobby.token
+        html = resp.content.decode()
+        assert "take you back to the match" in html
+        assert lobby.token not in html
+        # Its "Log in" comes back through the resume route.
+        assert reverse("pingpong:live_join_resume") in html.replace("%2F", "/")
+        # And the join link itself still refuses to join an anonymous visitor.
+        assert client.get(_join_url(lobby)).context["state"] == "anonymous"
+        assert client.post(_join_url(lobby)).context["state"] == "anonymous"
+        assert not Match.all_objects.exists()
+
+    def test_verifying_in_the_same_browser_lands_on_the_confirm_page(self, flags_on, club, mailoutbox):
+        lobby = LiveLobbyFactory(host=_member(club), club=club)
+        client, _ = _signup_with_invite(club, lobby)
+        resp = client.get(_verify_url(mailoutbox))
+        assert resp.url == reverse("pingpong:live_join_resume")
+        resp = client.get(resp.url)
+        assert resp.url == _join_url(lobby)
         page = client.get(resp.url)
         assert page.context["state"] == "confirm"
         assert "Join as Marco Joiner?" in page.content.decode()
+
+    def test_verifying_elsewhere_then_logging_in_here_lands_on_the_confirm_page(
+        self, flags_on, club, mailoutbox
+    ):
+        lobby = LiveLobbyFactory(host=_member(club), club=club)
+        client, _ = _signup_with_invite(club, lobby)
+        Client().get(_verify_url(mailoutbox))  # the mail app's browser
+        # A login without a `next` (the plain login page) still resumes.
+        resp = client.post(
+            reverse("login"),
+            {"username": "joiner", "password": SIGNUP["password1"]},
+        )
+        assert resp.url == reverse("pingpong:live_join_resume")
+        assert client.get(client.get(resp.url).url).context["state"] == "confirm"
+
+    def test_an_unverified_login_is_still_refused(self, flags_on, club, mailoutbox):
+        lobby = LiveLobbyFactory(host=_member(club), club=club)
+        client, _ = _signup_with_invite(club, lobby)
+        resp = client.post(
+            reverse("login") + "?next=" + reverse("pingpong:live_join_resume"),
+            {"username": "joiner", "password": SIGNUP["password1"]},
+        )
+        assert resp.url == reverse("pingpong:login")
+        assert "_auth_user_id" not in client.session
+
+    def test_a_lobby_that_died_meanwhile_falls_back_to_today(self, flags_on, club, mailoutbox):
+        lobby = LiveLobbyFactory(host=_member(club), club=club)
+        client, _ = _signup_with_invite(club, lobby)
+        cancel_lobby(lobby)
+        resp = client.get(_verify_url(mailoutbox))
+        assert resp.url == reverse("pingpong:dashboard")
+        assert PENDING_LIVE_JOIN_SESSION_KEY not in client.session
+
+    def test_a_plain_login_without_a_parked_join_goes_to_today(self, flags_on, club):
+        joiner = _member(club)
+        resp = Client().post(
+            reverse("login"), {"username": joiner.user.username, "password": "testpass123"}
+        )
+        assert resp.url == reverse("pingpong:dashboard")
 
     def test_signup_without_membership_hits_the_dead_end(self, flags_on, club):
         lobby = LiveLobbyFactory(host=_member(club), club=club)
@@ -735,10 +809,13 @@ class TestRegistrationHook:
         resp = client.post(reverse("pingpong:signup"), SIGNUP)
         assert resp.templates[0].name == "registration/verify_email_sent.html"
         assert "_auth_user_id" not in client.session
+        assert PENDING_LIVE_JOIN_SESSION_KEY not in client.session
+        assert "take you back to the match" not in resp.content.decode()
 
     def test_signup_without_a_parked_join_is_unchanged(self, flags_on):
         resp = Client().post(reverse("pingpong:signup"), SIGNUP)
         assert resp.templates[0].name == "registration/verify_email_sent.html"
+        assert "take you back to the match" not in resp.content.decode()
 
 
 # ---------------------------------------------------------------------------
@@ -749,7 +826,7 @@ class TestRegistrationHook:
 @pytest.mark.django_db
 class TestSharedScoringIntegration:
     """Lobby -> anonymous open -> register with a club invite in the session
-    -> join -> both phones score their own side through live_sync -> the
+    -> verify (logs in) -> resume -> join -> both phones score their own side through live_sync -> the
     match completes -> both go to match_confirm -> confirmations as today."""
 
     def test_the_full_round_trip(self, flags_on, club, mailoutbox):
@@ -771,9 +848,15 @@ class TestSharedScoringIntegration:
         guest_client.get(reverse("pingpong:club_invite_accept", args=[invite.token]))
         assert guest_client.get(_join_url(lobby)).context["state"] == "anonymous"
         resp = guest_client.post(reverse("pingpong:signup"), SIGNUP)
-        assert resp.url == _join_url(lobby)
+        assert resp.templates[0].name == "registration/verify_email_sent.html"
+        assert "_auth_user_id" not in guest_client.session  # never unverified
 
-        # 3. "Join as Marco Joiner?" -> Join match.
+        # 3. They verify on this phone, which logs them in and resumes the
+        #    parked join: "Join as Marco Joiner?" -> Join match.
+        resp = guest_client.get(_verify_url(mailoutbox))
+        assert resp.url == reverse("pingpong:live_join_resume")
+        resp = guest_client.get(resp.url)
+        assert resp.url == _join_url(lobby)
         assert guest_client.get(resp.url).context["state"] == "confirm"
         resp = guest_client.post(_join_url(lobby))
         match = Match.all_objects.get()
@@ -804,8 +887,7 @@ class TestSharedScoringIntegration:
             reverse("pingpong:live_state", args=[match.pk])
         ).json()["redirect_url"]
 
-        # 7. Confirmations behave as today (the new account is unverified,
-        #    so the match auto-confirmed when the winner was set).
+        # 7. Confirmations behave as today: both verified, each confirms.
         match = Match.all_objects.get(pk=match.pk)
         assert match.winner_side == Side.ONE
         assert (match.team1_score, match.team2_score) == (1, 0)

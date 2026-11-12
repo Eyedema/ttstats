@@ -59,14 +59,18 @@
     </div>
 </div>
 
-<div class="text-center">
-    <a href="/accounts/login/?next=/pingpong/" class="text-sm text-muted-foreground hover:text-foreground">
-        Already verified? Log in
-    </a>
+{% if live_join_pending %}
+<div class="rounded-lg border bg-card p-4 text-sm text-foreground" data-testid="live-join-pending">
+    Your match is waiting. Once you verify your email and log in on this phone, we'll take you back to the match (if it's still open).
 </div>
+{% endif %}
 
 <div class="text-center">
-    <a href="/accounts/login/?next=/pingpong/" class="text-sm text-muted-foreground hover:text-foreground">
+    {% if live_join_pending %}
+    <a href="{% url 'login' %}?next={% url 'pingpong:live_join_resume' %}" class="text-sm text-muted-foreground hover:text-foreground">
+    {% else %}
+    <a href="{% url 'login' %}?next={% url 'pingpong:dashboard' %}" class="text-sm text-muted-foreground hover:text-foreground">
+    {% endif %}
         Already verified? Log in
     </a>
 </div>

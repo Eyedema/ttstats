@@ -68,10 +68,13 @@ follows every rule above: `uuid4().hex`, `all_objects` lookup by token then
   lobby page (pinned to the host even for staff) and only while open.
 - **Membership of the lobby's club is checked before joining**, and only then
   `set_active_club`; the match gets `club=lobby.club` explicitly.
-- **The one unverified login**: signup with a parked, open lobby in a club the
-  new account is in (an invite in the same session counts) logs it in and
-  sends it to the confirm page. Unverified players may play; verification is
-  still required for the next login. Nothing else logs in an unverified user.
+- **Signup never logs in, a join link included**: with a parked, open lobby
+  in a club the new account is in, the token stays parked and the "verify
+  your email" page says the match is waiting. Verifying in this browser
+  (`EmailVerifyView`) or a login without its own `next` (`CustomLoginView`)
+  resumes via `pending_live_join_url` -> `live/join/`. An unverified session
+  could create auto-confirming matches against verified clubmates and
+  register a passkey, bypassing verification for good.
 - The claim is a conditional `.update()` (`start_shared_match`), like `claim()`.
 - **The Today card's join is not a credential path** (KAN-157):
   `live/lobby/<pk>/join/` finds the lobby through `scope_to_active_club` and

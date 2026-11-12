@@ -1788,8 +1788,12 @@ class PlayerRegistrationView(CreateView):
         )
 
         # Arrived from a shared-scoring join link (KAN-152)? Same hook shape
-        # as the invite: back to the lobby they scanned, not a second signup.
+        # as the invite: a non-member gets the dead end at once.
         from .live_lobby_views import consume_pending_live_join
+
+        # The token stays parked (never an unverified login): verifying or
+        # the next login resumes the join.
+        from .live_lobby_views import PENDING_LIVE_JOIN_SESSION_KEY
 
         live_join = consume_pending_live_join(self.request, user=user)
         if live_join is not None:
@@ -1802,6 +1806,7 @@ class PlayerRegistrationView(CreateView):
                 "email": user.email,
                 "username": user.username,
                 "invited_club": invited_club,
+                "live_join_pending": PENDING_LIVE_JOIN_SESSION_KEY in self.request.session,
             },
         )
 
@@ -1865,7 +1870,11 @@ class EmailVerifyView(View):
                     request,
                     f"Welcome, {profile.user.username}! Your email has been verified.",
                 )
-                return redirect("pingpong:dashboard")
+                # Signed up from a shared-scoring join link in this browser?
+                # Back to the match (KAN-152), if the lobby is still open.
+                from .live_lobby_views import pending_live_join_url
+
+                return redirect(pending_live_join_url(request) or "pingpong:dashboard")
             else:
                 messages.error(request, "Invalid or expired verification token.")
                 return redirect("pingpong:login")
@@ -2375,8 +2384,15 @@ class CustomLoginView(LoginView):
     def get_success_url(self):
         # A safe `next` wins (LoginView.get_redirect_url checks the host): the
         # scoreboard's "Sign in again" link must land back on the scoreboard,
-        # where the kept outbox then flushes (KAN-81). Otherwise Today.
-        return self.get_redirect_url() or reverse_lazy("pingpong:dashboard")
+        # where the kept outbox then flushes (KAN-81). Then a join link parked
+        # in this session whose lobby is still open (KAN-152). Otherwise Today.
+        from .live_lobby_views import pending_live_join_url
+
+        return (
+            self.get_redirect_url()
+            or pending_live_join_url(self.request)
+            or reverse_lazy("pingpong:dashboard")
+        )
 
     def form_valid(self, form):
         user = form.get_user()
@@ -4149,7 +4165,10 @@ def accept_club_invite(request, invite, user=None):
     if player is None:
         Player.objects.create(user=user, name=user.username, club=invite.club)
     elif player.club_id is None:
-        Player.objects.filter(pk=player.pk).update(club=invite.club)
+        # _base_manager: at signup the request is anonymous and the scoped
+        # manager matches no row, which left the new Player club-less (and
+        # hidden from its own owner). A write to a known pk (KAN-24 audit).
+        Player._base_manager.filter(pk=player.pk).update(club=invite.club)
 
     from ttstats.middleware import set_active_club
 

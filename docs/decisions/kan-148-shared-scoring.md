@@ -35,10 +35,10 @@ best-of, location, bearer token, expiry, status). **No `Match` exists until
 someone joins**, so no manager, list, stat, rating or template ever sees a
 one-sided match. The rejected alternative, creating the match first with an
 empty side 2, would have leaked everywhere: every one of those assumes two
-sides (`set_match_sides`, `MatchCreateView`). Details, including **the one
-place an unverified account is logged in** (a signup that holds an open
-lobby token in a club it belongs to, so the joiner is not blocked on email
-verification), are in `kan-151-152-live-lobby.md`.
+sides (`set_match_sides`, `MatchCreateView`). Details are in
+`kan-151-152-live-lobby.md`, including why **a new account verifies its email
+before it joins** (an unverified session could create auto-confirming
+matches and register a passkey; the parked token resumes after verification).
 
 The QR is rendered on the server as inline SVG (`segno`, `qr_tags.qr_svg`):
 it works with JS off and has nothing to allow in CSP. A client-side QR
@@ -491,7 +491,7 @@ form (5/15 min) are per IP, every spec request is 127.0.0.1, and
    and each verified player confirms as before (unverified players still
    auto-confirm). Changing it is the owner's call and a separate story.
 2. **A guest joining without an account?** Not now. The joiner logs in or
-   signs up (and may play unverified, see `kan-151-152-live-lobby.md`). A
+   signs up and verifies first (see `kan-151-152-live-lobby.md`). A
    token-scoped scoring right without a login is a possible later story.
 3. **Lobby expiry:** 30 minutes (`LOBBY_TTL`), read lazily; no job flips it.
 4. **Can the host start alone and let the opponent join mid-match?** No. The

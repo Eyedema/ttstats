@@ -3,17 +3,28 @@
 Part of KAN-148. Rules: `.claude/rules/clubs.md` (the join link) and
 `.claude/rules/live-scoring.md` (the lobby). This records the choices.
 
-## An unverified new account is logged in to join
+## A new account verifies before it joins (never an unverified login)
 
-`PlayerRegistrationView` does not log a new account in, and `CustomLoginView`
-refuses an unverified one. The ticket says not to block a joiner on email
-verification (unverified players already play; their matches auto-confirm).
-Without a session the joiner cannot reach the scoreboard, so the hook
-(`consume_pending_live_join`) logs the account in **only** when the session
-holds a valid, open lobby token and the account is a member of the lobby's
-club (via a club invite consumed in the same signup). The verification email
-is still sent, and the next login still requires it. Any other signup is
-unchanged.
+The first version logged a new, unverified account in when its signup held
+an open lobby token in its club, so the joiner was not blocked on email.
+Review removed it: a 24 h session on an unverified account can create
+matches against verified clubmates that auto-confirm (any unverified side
+auto-confirms) and register a passkey, which bypasses verification for good.
+
+Now `consume_pending_live_join` never calls `login()`. A member's signup
+keeps the token parked and shows the normal "verify your email" page with
+"Your match is waiting" and a "Log in" whose `next` is the resume route.
+Verifying in the same browser (`EmailVerifyView` logs a verified account in)
+or a later login without its own `next` (`CustomLoginView`) goes through
+`pending_live_join_url`: the resume route if the parked lobby is still open,
+else the token is dropped and they land on Today. A non-member still gets
+the dead end at once.
+
+The same change fixed `accept_club_invite` at signup: it set the new
+Player's club through the scoped `Player.objects`, which matches no row for
+an anonymous request, so an invited player stayed club-less and could not
+see its own profile (`match_confirm`: "You must have a player profile").
+The old auto-confirm had hidden it from the integration test.
 
 ## Login returns through `live/join/`, not `?next=<join URL>`
 
