@@ -313,5 +313,5 @@ test("a new build deletes the previous build's caches", async ({ page, net }) =>
   const names = await page.evaluate(() => caches.keys());
   expect(names).not.toContain('ttstats-live-ttstats-v2-0000000000-0123456789abcdef');
   expect(names).toContain('not-ours');
-  expect(names.some((name) => /^ttstats-static-ttstats-v3-[0-9a-f]{10}$/.test(name))).toBe(true);
+  expect(names.some((name) => /^ttstats-static-ttstats-v4-[0-9a-f]{10}$/.test(name))).toBe(true);
 });

@@ -165,6 +165,25 @@
     display: none !important;
   }
 
+  /* The "saved copy" banner (KAN-145). Rendered on every page, shown ONLY
+     when the service worker served a saved copy and rewrote the root's
+     data-freshness to "snapshot". CSS alone: no JS state can leave it shown
+     on a live page or hidden on a stale one. Also inlined in base.html's
+     <head>, so a missing stylesheet changes neither. */
+  .snapshot-banner,
+  .snapshot-old {
+    display: none;
+  }
+  html[data-freshness='snapshot'] .snapshot-banner {
+    display: block;
+  }
+  html[data-snapshot-age='old'] .snapshot-old {
+    display: inline;
+  }
+  html[data-snapshot-age='old'] .snapshot-recent {
+    display: none;
+  }
+
   /* --- Touch feedback ----------------------------------------------------- */
 
   /* The installed PWA has no browser chrome: no spinner, no throbber, no URL

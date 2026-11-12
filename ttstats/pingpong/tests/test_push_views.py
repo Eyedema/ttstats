@@ -73,7 +73,7 @@ class TestServiceWorkerView:
 
 @pytest.mark.django_db
 class TestServiceWorkerRoutes:
-    """KAN-82: the table holds exactly two narrow routes.
+    """KAN-82 + KAN-133: the table holds exactly three narrow routes.
 
     String assertions on the rendered worker; behaviour is proved in a real
     WebKit by tests/e2e/scoreboard-offline.pwa.spec.js.
@@ -83,8 +83,28 @@ class TestServiceWorkerRoutes:
     def body(client):
         return client.get('/sw.js').content.decode()
 
-    def test_route_table_is_static_then_scoreboard_and_nothing_else(self, client):
-        assert 'const ROUTES = [staticAssets, scoreboardShell];' in self.body(client)
+    def test_route_table_is_static_then_scoreboard_then_snapshots(self, client):
+        # The scoreboard must win its own URL over the snapshot route.
+        assert (
+            'const ROUTES = [staticAssets, scoreboardShell, snapshotNavigation];'
+            in self.body(client)
+        )
+
+    def test_snapshot_route_claims_only_pingpong_navigations(self, client):
+        # Behaviour (POST, htmx, /static/, JSON, /live/ never claimed) is
+        # unit-tested in tests/js/sw_snapshots.test.mjs.
+        body = self.body(client)
+        assert "if (request.mode !== 'navigate') return false;" in body
+        assert "if (!url.pathname.startsWith('/pingpong/')) return false;" in body
+        assert "headers.get('HX-Request')" in body
+
+    def test_snapshot_caches_are_current_and_bounded(self, client):
+        body = self.body(client)
+        assert "const SNAP_PREFIX = 'ttstats-snap-' + BUILD + '-';" in body
+        assert 'name.startsWith(SNAP_PREFIX)' in body
+        assert 'const SNAP_MAX = 60;' in body
+        assert 'const SNAP_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;' in body
+        assert 'const NAV_TIMEOUT_MS = 4000;' in body
 
     def test_scoreboard_route_claims_only_live_scoreboard_navigations(self, client):
         body = self.body(client)
@@ -115,7 +135,7 @@ class TestServiceWorkerRoutes:
     def test_version_bumped_and_build_keyed_on_the_precache(self, client):
         body = self.body(client)
         urls = offline.precache_urls()
-        assert "const VERSION = 'ttstats-v3';" in body
+        assert "const VERSION = 'ttstats-v4';" in body
         assert f"const BUILD = VERSION + '-{offline.build_key(urls)}';" in body
         assert f'const PRECACHE = {json.dumps(urls)};' in body
 
@@ -142,6 +162,9 @@ class TestServiceWorkerRoutes:
         for message in ('identity', 'purge', 'live-match-complete'):
             assert f"{{type: '{message}'" in body, f'{message} undocumented in the header'
             assert f"data.type === '{message}'" in body
+        # And the one it sends back to a page served a saved copy.
+        assert "{type: 'snapshot-fresh', url}" in body
+        assert "postMessage({ type: 'snapshot-fresh', url: url.href })" in body
 
 
 @pytest.mark.django_db

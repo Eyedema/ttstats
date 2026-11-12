@@ -46,6 +46,13 @@
          static, JS-free render, and open is one added class. */
       .overlay{display:none}
       .overlay.is-open{display:block}
+      /* The saved-copy banner (KAN-145): hidden unless sw.js marked this
+         page a saved copy. Both halves inline: hidden on a live page, and
+         shown on a stale one, even with no stylesheet at all. */
+      .snapshot-banner,.snapshot-old{display:none}
+      html[data-freshness="snapshot"] .snapshot-banner{display:block}
+      html[data-snapshot-age="old"] .snapshot-old{display:inline}
+      html[data-snapshot-age="old"] .snapshot-recent{display:none}
     </style>
 
     <!-- Archivo is self-hosted (OFL) and the whole design is set in it, so the
@@ -244,6 +251,23 @@
     {# padding and the bar can never disagree about how tall the bar is.   #}
     {# ------------------------------------------------------------------ #}
     <main class="lg:ml-64 pt-[calc(60px+env(safe-area-inset-top,0px))] pb-tabbar lg:pt-0 lg:pb-0">
+        {% comment %}
+        "Saved copy" banner (KAN-145). display:none on every live page (rules
+        inlined in <head>), so it is absent from the accessibility tree too.
+        sw.js shows it on a saved copy by rewriting <html data-freshness> and
+        filling the <time> placeholder below, byte for byte
+        (pingpong/offline.py SNAPSHOT_TIME_PLACEHOLDER). Sticky under the
+        fixed header, in the flow: it pushes content down rather than
+        covering it, and never touches the tab bar. Neutral surface: not
+        amber (live only), not red (actions only).
+        {% endcomment %}
+        <div class="snapshot-banner sticky top-[calc(60px+env(safe-area-inset-top,0px))] z-20 border-b-2 border-court-edge bg-court-overlay lg:top-0"
+             data-snapshot-banner role="status">
+            <p class="flex items-center gap-2 py-2 pl-[max(1rem,env(safe-area-inset-left,0px))] pr-[max(1rem,env(safe-area-inset-right,0px))] text-[13px] font-semibold leading-snug text-bone lg:px-6">
+                {% icon "wifi-off" size="sm" css="flex-none text-bone-dim" %}
+                <span><span class="snapshot-recent">No connection — saved copy from </span><span class="snapshot-old">Saved copy from </span><time data-snapshot-time></time><span class="snapshot-old"> — may be out of date</span></span>
+            </p>
+        </div>
         {% block full_bleed %}
         <div class="p-4 lg:p-6">
             {% include 'pingpong/_messages.html' %}

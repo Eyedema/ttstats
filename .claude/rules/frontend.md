@@ -147,7 +147,9 @@ Four tabs -- **Today, Play, Table, Cups** -- plus a tiered drawer.
 
 - `[x-cloak]{display:none !important}` and `#mobile-menu-scrim.hidden{display:none}`
   are **inlined in `base.html`'s `<head>`** as well as in `app.css`. They are not
-  duplicates to remove.
+  duplicates to remove. So are the "saved copy" banner's rules (KAN-145): hidden
+  unless `html[data-freshness="snapshot"]`, which only `sw.js` writes; no JS
+  shows or hides it (`offline-snapshot-banner*.spec.js`, light/dark/no-JS).
 - Every new overlay/drawer/modal needs a spec asserting it stays closed when
   Alpine and/or the stylesheet fail to load (`tests/e2e/mobile-drawer.spec.js`).
 
