@@ -660,6 +660,44 @@ html.ptr-on { overscroll-behavior-y: contain; }
   .connection-hint { left: 16rem; top: 0; }
 }
 
+/* --- Saved copy: read-only mode (KAN-146) ---------------------------------
+   Amber means live RIGHT NOW, and a saved copy is not now: every amber cue
+   on it (the header's live dot, Today's "Live now" block, a live match's
+   badges) would be a lie. Every amber class in the app resolves through
+   --ball (text-ball, bg-ball, label-live, live-dot, and the `warning` alias
+   in tailwind.config.js), so re-pointing the token at the muted one mutes
+   them all, including any added later. The pulse is the other live signal.
+   Outside @layer so no layered rule can outrank it; e2e asserts no amber is
+   computed anywhere on a saved Today with a live match
+   (offline-read-only.pwa.spec.js). */
+html[data-freshness='snapshot'] {
+  --ball: var(--bone-muted);
+  --ball-foreground: var(--court);
+}
+
+html[data-freshness='snapshot'] .live-dot {
+  animation: none;
+}
+
+/* "You're back online · Refresh" (snapshot_mode.js creates the button, so it
+   cannot exist without JS). The class name lives only in JS, which Tailwind
+   does not scan: hence outside @layer. Neutral, like the toast's action. */
+.snapshot-refresh {
+  flex: none;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 0.75rem;
+  border: 2px solid rgb(var(--court-edge));
+  background: transparent;
+  color: rgb(var(--bone));
+  font-weight: 800;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
 @layer utilities {
   /* htmx swaps this class on during a request. */
   .htmx-indicator {

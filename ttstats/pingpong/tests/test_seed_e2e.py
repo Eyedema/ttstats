@@ -183,3 +183,18 @@ class TestOfflineReaders:
         match = Match.all_objects.get(participants__player=reader)
         assert match.is_confirmed
         assert match.club.slug == "e2e-reading-club"
+
+    def test_reader_b_is_scoring_one_live_match_in_the_reading_club(self):
+        # KAN-146: a saved Today with amber on it, for the muting spec.
+        _seed()
+        _seed()
+        reader_b = Player.objects.get(name="E2E Reader B")
+        live = Match.all_objects.filter(is_live=True, participants__player=reader_b).distinct()
+        assert live.count() == 1
+        match = live.get()
+        assert match.scorekeeper == reader_b
+        assert match.club.slug == "e2e-reading-club"
+        assert {p.name for p in match.all_players} == {"E2E Reader B", "E2E Reader Rival"}
+        # Reader A is untouched: nothing live.
+        reader = Player.objects.get(name="E2E Reader")
+        assert not Match.all_objects.filter(is_live=True, participants__player=reader).exists()

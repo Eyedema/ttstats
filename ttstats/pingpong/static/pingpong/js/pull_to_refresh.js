@@ -17,7 +17,9 @@
 // from its top.
 //
 // Offline (connection.js's shared state, else navigator.onLine): "No
-// connection" and no reload.
+// connection" and no reload. Except on a saved copy (html[data-freshness=
+// "snapshot"], KAN-146): there a reload is how the user asks the worker to
+// try the network again, and it falls back to the copy, so it always reloads.
 //
 // Fails closed: the indicator only exists once this script has run.
 (function () {
@@ -130,6 +132,7 @@
   // The shared connection state (connection.js, KAN-135) when it is there;
   // otherwise the browser's own flag, as before.
   function offline() {
+    if (document.documentElement.getAttribute('data-freshness') === 'snapshot') return false;
     var c = window.TTStatsConnection;
     if (c && typeof c.state === 'function') return c.state() === 'offline';
     return navigator.onLine === false;

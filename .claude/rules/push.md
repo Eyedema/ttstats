@@ -9,6 +9,7 @@ paths:
   - "ttstats/pingpong/templates/pingpong/notification_settings.html"
   - "ttstats/pingpong/static/pingpong/js/push.js"
   - "ttstats/pingpong/static/pingpong/js/offline.js"
+  - "ttstats/pingpong/static/pingpong/js/snapshot_mode.js"
   - "ttstats/pingpong/offline.py"
   - "ttstats/pingpong/management/commands/generate_vapid_keys.py"
   - "tests/e2e/pwa*.js"
@@ -16,6 +17,7 @@ paths:
   - "tests/e2e/*.pwa.spec.js"
   - "tests/e2e/offline-proxy.js"
   - "tests/e2e/offline-snapshot*.js"
+  - "tests/e2e/offline-read-only*.js"
 ---
 
 # PWA and web push
@@ -76,6 +78,21 @@ raises). `notifications.py` is the vocabulary (what each event says, to whom).
   (other identity, logged out, `snapshots:'off'` = kill switch, `purge`)
   deletes every other snapshot partition. Pure helpers are unit-tested in
   `tests/js/sw_snapshots.test.mjs` (vm harness `sw_harness.mjs`).
+- **A saved copy is read-only** (KAN-146, `snapshot_mode.js`, loaded only
+  with the flag on, after `offline.js`; inert unless
+  `html[data-freshness="snapshot"]`). Capture-phase `submit`/`click` stop
+  forms, htmx triggers and links outside `offline.OFFLINE_NAVIGABLE` (the
+  allowlist + the scoreboard), rendered as anchored regex sources by
+  `json_script` `snapshot-paths` (`offline_navigation_paths()`, pinned to
+  `tests/fixtures/snapshot_paths.json`, which `tests/js/snapshot_mode.test.mjs`
+  uses): toast "Needs a connection", nothing sent. Every htmx request is
+  cancelled in `htmx:confirm`/`beforeRequest` (capture; toast only for a user
+  trigger). Log out offline: toast, but `offline.js` still purges (it is never
+  stopped). "You're back online · Refresh" on `snapshot-fresh` or a 2xx from a
+  `HEAD` of the manifest (`online`, tab shown, every 30 s); never auto-reloads;
+  the button is JS-made. Amber is muted in CSS (app.css, `--ball` re-pointed).
+  e2e: `offline-read-only.pwa.spec.js` (the proxy's `requests` log) and
+  `.nojs`.
 - **A stored scoreboard is one person's** (CSRF token, player ids). Stored only
   from a 200 carrying `X-TTStats-Identity` (`offline.request_identity`: HMAC of
   user + active club, KAN-132's fingerprint), filed in

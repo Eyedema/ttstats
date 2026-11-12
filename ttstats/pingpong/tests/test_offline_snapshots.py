@@ -7,12 +7,14 @@ KAN-133's e2e); these pin what Python owns: the decorator's branches, the
 allowlist (and that nothing outside it opts in), the identity it files pages
 under, and the marker string the worker rewrites.
 """
+import json
+import pathlib
 import re
 
 import pytest
 from django.http import HttpResponse, JsonResponse
 from django.test import Client, RequestFactory
-from django.urls import URLPattern, URLResolver, get_resolver, reverse
+from django.urls import NoReverseMatch, URLPattern, URLResolver, get_resolver, reverse
 from django.utils import timezone
 from django.views.generic import View
 
@@ -531,3 +533,133 @@ class TestSnapshotBanner:
         assert f"const TIME_PLACEHOLDER = '{offline.SNAPSHOT_TIME_PLACEHOLDER}';" in body
         assert f"const SNAPSHOT_HEADER = '{offline.SNAPSHOT_HEADER}';" in body
         assert f"const IDENTITY_HEADER = '{offline.IDENTITY_HEADER}';" in body
+
+
+# ---------------------------------------------------------------------------
+# Read-only mode on a saved copy (KAN-146): what the page's JS is told
+# ---------------------------------------------------------------------------
+
+PINGPONG = pathlib.Path(__file__).resolve().parents[1]
+FIXTURES = pathlib.Path(__file__).parent / "fixtures"
+
+
+def _paths_blob(html):
+    found = re.search(r'<script id="snapshot-paths" type="application/json">(.*?)</script>', html, re.S)
+    return json.loads(found.group(1)) if found else None
+
+
+def _script_tags(html):
+    return re.findall(r'<script\b[^>]*\bsrc="[^"]*"[^>]*>', html)
+
+
+class TestOfflineNavigable:
+    """Which links on a saved copy may still open offline (snapshot_mode.js)."""
+
+    def test_is_the_allowlist_plus_the_scoreboard(self):
+        assert offline.OFFLINE_NAVIGABLE == offline.SNAPSHOT_ALLOWLIST | {"pingpong:live_scoreboard"}
+
+    def test_one_anchored_pattern_per_name(self):
+        sources = offline.offline_navigation_paths()
+        assert len(sources) == len(offline.OFFLINE_NAVIGABLE)
+        for source in sources:
+            assert source.startswith("^/") and source.endswith("$"), source
+            # JS has no (?P<name>...) and no \Z: the converters' own regexes only.
+            assert "(?P<" not in source and "\\Z" not in source, source
+
+    @pytest.mark.parametrize("name", sorted(offline.OFFLINE_NAVIGABLE))
+    def test_every_navigable_page_matches(self, name):
+        try:
+            path = reverse(name)
+        except NoReverseMatch:
+            path = reverse(name, kwargs={"pk": 12345})
+        assert any(re.search(s, path) for s in offline.offline_navigation_paths()), path
+
+    @pytest.mark.parametrize("name, kwargs", [
+        ("pingpong:match_add", None),
+        ("pingpong:match_edit", {"pk": 3}),
+        ("pingpong:match_confirm", {"pk": 3}),
+        ("pingpong:live_state", {"pk": 3}),
+        ("pingpong:live_sync", {"pk": 3}),
+        ("pingpong:live_join", {"token": "abc"}),
+        ("pingpong:notification_settings", None),
+        ("logout", None),
+        ("login", None),
+        ("service_worker", None),
+    ])
+    def test_pages_that_need_the_server_do_not(self, name, kwargs):
+        path = reverse(name, kwargs=kwargs)
+        assert not any(re.search(s, path) for s in offline.offline_navigation_paths()), path
+
+    def test_js_fixture_is_current(self):
+        # tests/js/snapshot_mode.test.mjs classifies links against this file.
+        # Regenerate: json.dumps(list(offline.offline_navigation_paths()), indent=2)
+        on_disk = json.loads((FIXTURES / "snapshot_paths.json").read_text())
+        assert on_disk == list(offline.offline_navigation_paths())
+
+
+@pytest.mark.django_db
+class TestReadOnlyModeMarkup:
+    def _page(self, enabled=True):
+        return TestPageMarkers()._page(enabled)
+
+    def test_flag_on_renders_the_patterns(self):
+        assert _paths_blob(self._page(True)) == list(offline.offline_navigation_paths())
+
+    def test_flag_off_renders_neither_patterns_nor_script(self):
+        html = self._page(False)
+        assert _paths_blob(html) is None
+        assert not any("snapshot_mode" in tag for tag in _script_tags(html))
+
+    def test_logged_out_pages_render_neither(self, settings):
+        settings.FEATURE_FLAGS = {**settings.FEATURE_FLAGS, FLAG: True}
+        html = Client().get(reverse("login")).content.decode()
+        assert _paths_blob(html) is None
+        assert "snapshot_mode" not in html
+
+    def test_script_is_deferred_after_offline_js(self):
+        tags = _script_tags(self._page(True))
+        mine = [i for i, t in enumerate(tags) if "snapshot_mode" in t]
+        theirs = [i for i, t in enumerate(tags) if "/offline." in t]
+        assert len(mine) == 1 and len(theirs) == 1
+        assert re.search(r"\bdefer\b", tags[mine[0]])
+        # offline.js's purge-on-logout listener must be armed first.
+        assert theirs[0] < mine[0]
+
+    def test_banner_text_is_marked_for_the_back_online_swap(self):
+        html = self._page(True)
+        start = html.index("data-snapshot-banner")
+        banner = html[start:html.index("</div>", start)]
+        assert "<span data-snapshot-text>" in banner
+        # The Refresh button is made by JS: never in the markup (fail closed).
+        assert "snapshot-refresh" not in html
+        assert "back online" not in html
+
+    def test_snapshot_mode_is_precached(self):
+        assert "pingpong/js/snapshot_mode.js" in offline.SW_PRECACHE
+
+    def test_every_icon_snapshot_mode_asks_for_is_in_the_sheet(self):
+        js = (PINGPONG / "static/pingpong/js/snapshot_mode.js").read_text()
+        wanted = set(re.findall(r"icon: '([a-z0-9-]+)'", js)) | set(re.findall(r"#i-([a-z0-9-]+)", js))
+        assert {"wifi-off", "refresh-cw"} <= wanted
+        defined = set(re.findall(r'id="i-([a-z0-9-]+)"', self._page(True)))
+        assert wanted <= defined, sorted(wanted - defined)
+
+
+class TestAmberIsMutedOnASavedCopy:
+    """The CSS half (KAN-146). e2e computes the colours; this pins the rule."""
+
+    def test_the_ball_token_is_repointed_under_the_snapshot_root(self):
+        css = (PINGPONG / "assets/app.css").read_text()
+        rule = re.search(r"html\[data-freshness='snapshot'\]\s*\{([^}]*)\}", css)
+        assert rule, "no snapshot override of the amber token"
+        assert "--ball: var(--bone-muted)" in rule.group(1)
+        assert re.search(r"html\[data-freshness='snapshot'\] \.live-dot\s*\{\s*animation: none;", css)
+
+    def test_every_amber_utility_resolves_through_the_ball_token(self):
+        # The rule above works only while nothing names amber directly.
+        config = (PINGPONG.parents[1] / "tailwind.config.js").read_text()
+        assert config.count("withOpacity('--ball')") == 2  # ball and its `warning` alias
+        for path in (PINGPONG / "templates").rglob("*.html"):
+            text = path.read_text()
+            for literal in ("amber-", "yellow-", "#f59e0b", "245 158 11", "245, 158, 11"):
+                assert literal not in text, f"{path.name} names amber directly: {literal}"

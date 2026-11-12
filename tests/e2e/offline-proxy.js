@@ -26,6 +26,9 @@ const http = require('http');
  * answer -- the production policy, for a spec where a live service worker
  * keeps applyProdCSP()'s page.route() from ever seeing the request.
  *
+ * `requests` logs every request that reached the proxy, whatever the mode
+ * (`{method, path, mode}`): "no request went out" is asserted against it.
+ *
  * Point a page at `proxy.origin` instead of the baseURL. Cookies are per host,
  * not per port, so the saved session applies; the worker registers afresh
  * for the proxy's origin, so its caches start empty in every test.
@@ -35,6 +38,7 @@ async function startOfflineProxy(targetURL, { csp } = {}) {
   let mode = 'online';
   const sockets = new Set();
   const hung = new Map();
+  const requests = [];
 
   function forward(req, res) {
     // Host is passed through unchanged: Django checks ALLOWED_HOSTS without
@@ -61,6 +65,7 @@ async function startOfflineProxy(targetURL, { csp } = {}) {
   }
 
   const server = http.createServer((req, res) => {
+    requests.push({ method: req.method, path: req.url, mode });
     if (mode === 'offline') {
       req.socket.destroy();
       return;
@@ -87,6 +92,7 @@ async function startOfflineProxy(targetURL, { csp } = {}) {
 
   return {
     origin: `http://localhost:${server.address().port}`,
+    requests,
     setMode(next) {
       mode = next;
       if (next === 'offline') {
