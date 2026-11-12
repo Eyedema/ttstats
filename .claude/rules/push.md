@@ -9,6 +9,8 @@ paths:
   - "ttstats/pingpong/templates/pingpong/notification_settings.html"
   - "ttstats/pingpong/static/pingpong/js/push.js"
   - "ttstats/pingpong/static/pingpong/js/offline.js"
+  - "ttstats/pingpong/static/pingpong/js/offline_page.js"
+  - "ttstats/pingpong/templates/pingpong/offline.html"
   - "ttstats/pingpong/offline.py"
   - "ttstats/pingpong/management/commands/generate_vapid_keys.py"
   - "tests/e2e/pwa*.js"
@@ -76,6 +78,16 @@ raises). `notifications.py` is the vocabulary (what each event says, to whom).
   (other identity, logged out, `snapshots:'off'` = kill switch, `purge`)
   deletes every other snapshot partition. Pure helpers are unit-tested in
   `tests/js/sw_snapshots.test.mjs` (vm harness `sw_harness.mjs`).
+- **The offline page (KAN-137) is `/offline/`, outside `/pingpong/`** so no
+  route claims it. Rendered without a request (`offline.offline_page_html`):
+  the same bytes for everyone, no CSRF, no identity meta (an empty one would
+  purge every copy). Precached into `ttstats-offline-<BUILD>` with no cookies;
+  its HTML is digested into `BUILD`, so editing the template reinstalls the
+  worker. Shown for a `/pingpong/` navigation with no saved copy only on a
+  network error, the proxy's 502/503/504, or no answer by `NAV_GIVE_UP_MS`
+  (12 s), and only while a snapshot partition exists (kill switch = off).
+  Never for a 2xx/3xx/4xx/500. `offline_page.js` lists the current partition
+  via `{type:'list-snapshots'}`.
 - **A stored scoreboard is one person's** (CSRF token, player ids). Stored only
   from a 200 carrying `X-TTStats-Identity` (`offline.request_identity`: HMAC of
   user + active club, KAN-132's fingerprint), filed in
@@ -95,7 +107,9 @@ raises). `notifications.py` is the vocabulary (what each event says, to whom).
   static 120 entries, scoreboards 8 and 7 days, snapshots 60 and 7 days.
 - New offline behaviour is a new `ROUTES` entry. Tests: `test_push_views.py`
   (rendered worker), `test_offline.py`, `test_offline_snapshots.py`,
-  `tests/js/sw_*.test.mjs`, `tests/e2e/scoreboard-offline.pwa.spec.js`,
+  `test_offline_page.py`, `tests/js/sw_*.test.mjs`,
+  `tests/js/offline_page.test.mjs`, `tests/e2e/scoreboard-offline.pwa.spec.js`,
+  `tests/e2e/offline-page.{pwa,nojs}.spec.js`,
   `tests/e2e/offline-snapshots.pwa.spec.js` (users `e2e-reader`,
   `e2e-reader-b`, `e2e-reader-off`: only they have the flag on).
 - **Never test the worker offline with `context.setOffline()`**: WebKit fails

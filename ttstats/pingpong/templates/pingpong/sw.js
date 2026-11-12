@@ -57,11 +57,22 @@
  *                                       -> returned as is (a login redirect
  *                                          is never masked), copy evicted
  *                       other 4xx       -> returned as is
- *                       5xx             -> the saved copy if any, else the 5xx
+ *                       5xx             -> the saved copy if any; else the
+ *                                          offline page for 502/503/504 (the
+ *                                          proxy answered, the app did not),
+ *                                          the 5xx itself for anything else
  *                       error, or no answer in NAV_TIMEOUT_MS
- *                                       -> the saved copy if any, else (hook:
- *                                          offlinePage, S12.6) the network's
- *                                          eventual answer or error
+ *                                       -> the saved copy if any; else, on an
+ *                                          error at once, on no answer at
+ *                                          NAV_GIVE_UP_MS (a slow network
+ *                                          keeps its chance), the OFFLINE PAGE
+ *                     The offline page (KAN-137, /offline/, outside /pingpong/
+ *                     so no route claims it) holds no one's data: precached at
+ *                     install with no cookies, it lists the saved pages by
+ *                     asking {type: 'list-snapshots'}. Shown only while there
+ *                     is a snapshot partition (flag on, logged in): the kill
+ *                     switch turns it off too. Not precached = the browser's
+ *                     error, as before. Never stored as a snapshot.
  *                     navigator.onLine === false skips the wait (a hint only:
  *                     iOS says true on lie-fi, hence the timeout). The fetch
  *                     is never aborted -- a navigate-mode Request cannot be
@@ -89,6 +100,11 @@
  *   ttstats-snapstate-<BUILD>         one entry: the current snapshot
  *                                     partition, so it survives the worker
  *                                     being stopped between events.
+ *   ttstats-offline-<BUILD>           one entry: the offline page (/offline/).
+ *                                     Its URL has no content hash, so its
+ *                                     bytes are part of BUILD (offline.py
+ *                                     build_key): an edited page is a new
+ *                                     build, and the new worker re-fetches it.
  *
  * BUILD = VERSION + a digest of the precache URLs. Those carry content hashes,
  * so a deploy that changes any of them changes these bytes, the browser
@@ -120,7 +136,14 @@
  *                                 Keep only that identity's scoreboards
  *                                 ("" keeps none); snapshots 'on' makes it
  *                                 the snapshot partition, anything else
- *                                 deletes every snapshot.
+ *                                 deletes every snapshot. Fetches the
+ *                                 offline page if it isn't cached yet.
+ *   {type: 'list-snapshots'}      offline_page.js. Answered on the port it
+ *                                 sends (else to the page) with {type:
+ *                                 'snapshots', snapshots, scoreboards}, each
+ *                                 [{url, title, savedAt, shown}] newest
+ *                                 first: the CURRENT partition's servable
+ *                                 copies, and the stored scoreboards.
  *   {type: 'purge'}               offline.js, on submit of a form marked
  *                                 data-sw-purge (Log out). Drop every copy
  *                                 of every kind; no snapshot partition.
@@ -148,16 +171,18 @@
  * unit-tested in a vm by tests/js/sw_*.test.mjs.
  */
 
-const VERSION = 'ttstats-v4';
+const VERSION = 'ttstats-v5';
 const BUILD = VERSION + '-{{ sw_build }}';
 const PRECACHE = {{ sw_precache_json|safe }};
 const FALLBACK_ICON = '{% static "pingpong/icons/app/icon-192.png" %}';
+const OFFLINE_URL = '{% url "offline_page" %}';
 
 const STATIC_CACHE = 'ttstats-static-' + BUILD;
 const LIVE_PREFIX = 'ttstats-live-' + BUILD + '-';
 const SNAP_PREFIX = 'ttstats-snap-' + BUILD + '-';
 const SNAP_STATE_CACHE = 'ttstats-snapstate-' + BUILD;
 const SNAP_STATE_KEY = '/__ttstats/snapshot-partition';
+const OFFLINE_CACHE = 'ttstats-offline-' + BUILD;
 const STATIC_MAX = 120;
 const LIVE_MAX = 8;
 const LIVE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -167,6 +192,12 @@ const SNAP_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 // snapshot is stale, so the network gets longer to answer with the truth.
 const LIVE_TIMEOUT_MS = 3000;
 const NAV_TIMEOUT_MS = 4000;
+// With no saved copy there is nothing better to show at NAV_TIMEOUT_MS, so a
+// slow network keeps its chance; past this the offline page is shown instead
+// of a spinner that never ends.
+const NAV_GIVE_UP_MS = 12000;
+// The proxy answered but the app did not: as good as no network.
+const GATEWAY_ERRORS = [502, 503, 504];
 const DAY_MS = 24 * 60 * 60 * 1000;
 const STORED_AT = 'X-TTStats-Stored-At';
 const IDENTITY_HEADER = 'X-TTStats-Identity';
@@ -177,6 +208,8 @@ const SERVED_FROM = 'X-TTStats-Served-From';
 // Rendered once each by base.html; pinned by test_offline_snapshots.py.
 const FRESHNESS_MARKER = 'data-freshness="network"';
 const TIME_PLACEHOLDER = '<time data-snapshot-time></time>';
+// On the offline page's <html>; pinned by test_offline_page.py.
+const OFFLINE_REASON_MARKER = 'data-offline-reason="network"';
 
 // Manifest storage names: app.<12 hex>.css. Nothing else is immutable.
 const HASHED_STATIC = /^\/static\/.+\.[0-9a-f]{12}\.[A-Za-z0-9]+$/;
@@ -190,6 +223,7 @@ function isCurrentCache(name) {
   return (
     name === STATIC_CACHE ||
     name === SNAP_STATE_CACHE ||
+    name === OFFLINE_CACHE ||
     name.startsWith(LIVE_PREFIX) ||
     name.startsWith(SNAP_PREFIX)
   );
@@ -209,6 +243,7 @@ self.addEventListener('install', (event) => {
           )
         )
       )
+      .then(() => precacheOfflinePage().catch(() => {}))
       .then(() => self.skipWaiting())
   );
 });
@@ -371,6 +406,23 @@ function extractTitle(html) {
     .replace(/&quot;/g, '"')
     .replace(/&#x?0*27;/g, "'")
     .replace(/&amp;/g, '&');
+}
+
+/* Does a navigation with no saved copy get the offline page, and worded
+ * how? 'network' (no answer, timeout, or the phone says offline), 'server'
+ * (the proxy's 502/503/504) or null: the network's own answer stands (a
+ * Django 500 included: the app answered, and its error page has a way out). */
+function offlineReason(kind, status) {
+  if (kind === 'error' || kind === 'offline' || kind === 'timeout') return 'network';
+  if (kind === 'server-error' && GATEWAY_ERRORS.includes(status)) return 'server';
+  return null;
+}
+
+/* The offline page, worded for `reason` (a plain string replace). */
+function markOfflinePage(html, reason) {
+  if (typeof html !== 'string') return null;
+  if (reason === 'network') return html;
+  return html.replace(OFFLINE_REASON_MARKER, () => 'data-offline-reason="server"');
 }
 
 /* ---- cache helpers ------------------------------------------------------ */
@@ -566,28 +618,76 @@ async function servableSnapshot(key, defer) {
   return new Response(html, { status: 200, statusText: 'OK', headers });
 }
 
-/* For the S12.6 offline page ({type: 'list-snapshots'}): what the current
- * partition holds, newest first. Not wired to a message yet. */
+function listed(url, title, savedAt, now) {
+  return { url, title, savedAt: new Date(savedAt).toISOString(), shown: formatSavedAt(savedAt, now).text };
+}
+
+/* For the offline page ({type: 'list-snapshots'}): what the CURRENT
+ * partition holds and may still be served, newest first. */
 async function listSnapshots() {
   const cache = await openSnapshots(await currentPartition());
   if (!cache) return [];
+  const now = Date.now();
   const items = [];
   for (const key of await cache.keys()) {
     const hit = await cache.match(key, { ignoreVary: true });
     if (!hit) continue;
-    items.push({
-      url: key.url,
-      title: decodeURIComponent(hit.headers.get(SNAPSHOT_TITLE) || ''),
-      savedAt: hit.headers.get(SNAPSHOT_AT),
-    });
+    const savedAt = Date.parse(hit.headers.get(SNAPSHOT_AT));
+    if (!isFresh(savedAt, now)) continue;
+    let title = '';
+    try {
+      title = decodeURIComponent(hit.headers.get(SNAPSHOT_TITLE) || '');
+    } catch (err) {
+      title = '';
+    }
+    items.push(listed(key.url, title, savedAt, now));
   }
   return items.reverse();
 }
 
-/* S12.6 hook: the offline fallback page for a navigation with no network and
- * no saved copy. Until it exists the browser's own error stands. */
-function offlinePage() {
-  return Promise.resolve(null);
+/* The stored scoreboards (one identity's at most: see WHOSE PAGE), newest
+ * first, for the offline page's "Live scoreboards you can keep scoring". */
+async function listScoreboards() {
+  const now = Date.now();
+  const items = [];
+  for (const name of await liveCacheNames()) {
+    const cache = await caches.open(name);
+    for (const key of await cache.keys()) {
+      const hit = await cache.match(key, { ignoreVary: true });
+      if (!hit) continue;
+      const storedAt = Number(hit.headers.get(STORED_AT)) || 0;
+      if (now - storedAt > LIVE_MAX_AGE_MS) continue;
+      items.push(listed(key.url, extractTitle(await hit.text()), storedAt, now));
+    }
+  }
+  return items.reverse();
+}
+
+/* Fetch the offline page into OFFLINE_CACHE unless it is there. No cookies:
+ * it is the same for everyone, and must never be anyone's. */
+async function precacheOfflinePage() {
+  const cache = await caches.open(OFFLINE_CACHE);
+  if (await cache.match(OFFLINE_URL)) return;
+  const response = await fetch(OFFLINE_URL, { credentials: 'omit', cache: 'no-cache' });
+  if (response.ok && !response.redirected && (!response.type || response.type === 'basic' || response.type === 'default')) {
+    await cache.put(OFFLINE_URL, response);
+  }
+}
+
+/* The offline page for a navigation with no answer and no saved copy, or
+ * null (not precached: the browser's own error stands). Never stored as a
+ * snapshot: it is answered from here, not from the network. */
+async function offlinePage(reason) {
+  if (!(await caches.has(OFFLINE_CACHE))) return null;
+  const hit = await (await caches.open(OFFLINE_CACHE)).match(OFFLINE_URL, { ignoreVary: true });
+  if (!hit) return null;
+  const html = markOfflinePage(await hit.text(), reason);
+  if (html === null) return null;
+  const headers = new Headers(hit.headers);
+  ['Content-Length', 'Content-Encoding'].forEach((name) => headers.delete(name));
+  headers.set(SERVED_FROM, 'offline-page');
+  headers.set('Cache-Control', 'no-store');
+  return new Response(html, { status: 200, statusText: 'OK', headers });
 }
 
 async function notifySnapshotFresh(clientId, url) {
@@ -676,13 +776,33 @@ const snapshotNavigation = {
     });
     defer(network.then(() => {}));
 
+    // No saved copy: the offline page if the network failed, else (and if
+    // the page isn't precached) the network's answer or error. Only with a
+    // snapshot partition, i.e. the flag on: the kill switch turns it off too.
+    const noCopy = async (kind, answer) => {
+      const reason = offlineReason(kind, answer ? answer.status : 0);
+      const page =
+        reason && (await currentPartition()) ? await offlinePage(reason).catch(() => null) : null;
+      return page || answer || network;
+    };
+
     const fallback = async (kind, answer) => {
       const copy = await servableSnapshot(key, defer).catch(() => null);
       const plan = planNavigation(kind, Boolean(copy));
       decide(plan.respond === 'copy');
       if (plan.respond === 'copy') return copy;
-      const page = await offlinePage(event, url);
-      return page || answer || network;
+      if (kind !== 'timeout') return noCopy(kind, answer);
+      // Slow, not dead (yet): the network keeps its chance until NAV_GIVE_UP_MS.
+      const giveUp = new Promise((resolve) =>
+        setTimeout(resolve, NAV_GIVE_UP_MS - NAV_TIMEOUT_MS, TIMED_OUT)
+      );
+      return Promise.race([network, giveUp]).then(
+        (late) => {
+          if (late === TIMED_OUT) return noCopy('timeout', null);
+          return late.status >= 500 ? noCopy('server-error', late) : late;
+        },
+        () => noCopy('error', null)
+      );
     };
 
     // The phone says it has no network: don't wait to find out. (true means
@@ -738,7 +858,23 @@ self.addEventListener('message', (event) => {
       Promise.all([
         keepOnlyPartition(IDENTITY.test(identity) ? identity : null),
         setPartition(partitionFromMessage(data)),
+        // Missed at install (no network then): every online page load retries.
+        precacheOfflinePage().catch(() => {}),
       ])
+    );
+  } else if (data.type === 'list-snapshots') {
+    // The offline page asks; it answers over the port it sent (or, without
+    // one, to the page itself). Only the current partition, never another.
+    const port = event.ports && event.ports[0];
+    const reply = (message) => {
+      if (port) port.postMessage(message);
+      else if (event.source && event.source.postMessage) event.source.postMessage(message);
+    };
+    event.waitUntil(
+      Promise.all([listSnapshots(), listScoreboards()]).then(
+        ([snapshots, scoreboards]) => reply({ type: 'snapshots', snapshots, scoreboards }),
+        () => reply({ type: 'snapshots', snapshots: [], scoreboards: [] })
+      )
     );
   } else if (data.type === 'purge') {
     event.waitUntil(Promise.all([keepOnlyPartition(null), setPartition(null)]));

@@ -90,6 +90,7 @@ SW_PRECACHE = (
     "pingpong/js/pull_to_refresh.js",
     "pingpong/js/prefetch.js",
     "pingpong/js/offline.js",
+    "pingpong/js/offline_page.js",
     "pingpong/js/live_rules.js",
     "pingpong/js/live_outbox.js",
     "pingpong/js/live_session.js",
@@ -98,20 +99,45 @@ SW_PRECACHE = (
 )
 
 
+# The offline fallback page (KAN-137): what the worker shows for a navigation
+# under /pingpong/ that got no answer and has no saved copy. The worker fetches
+# it at install, with no cookies, so it must never depend on who is asking:
+# it is rendered WITHOUT a request (no context processors, no CSRF token, no
+# identity meta -- an empty identity would make offline.js purge every copy).
+OFFLINE_PAGE_TEMPLATE = "pingpong/offline.html"
+# Rewritten by sw.js to "server" when the proxy answered 502/503/504 instead
+# of nothing at all; CSS swaps the heading. Rendered once, on <html>.
+OFFLINE_REASON_MARKER = 'data-offline-reason="network"'
+
+
+def offline_page_html() -> str:
+    """The offline page, identical for every viewer (see OFFLINE_PAGE_TEMPLATE)."""
+    from django.template.loader import render_to_string
+
+    return render_to_string(OFFLINE_PAGE_TEMPLATE)
+
+
 def precache_urls() -> list[str]:
     """`SW_PRECACHE` as served URLs (hashed under the manifest storage)."""
     return [staticfiles_storage.url(path) for path in SW_PRECACHE]
 
 
-def build_key(urls: list[str]) -> str:
+def build_key(urls: list[str], offline_page: str = "") -> str:
     """A short digest of the precache URLs, for the worker's cache names.
 
     The URLs carry content hashes in production, so a deploy that changes any
     of them changes this key, the worker's bytes change with it, the browser
     installs the new worker, and its `activate` deletes the caches named for
     the old key. Nobody has to remember to bump VERSION for a CSS change.
+
+    `offline_page` is the offline page's HTML (KAN-137). Its URL carries no
+    hash, so its bytes go into the digest instead: editing the template is a
+    new build, and phones re-fetch the page when the new worker installs.
     """
-    return hashlib.sha256("\n".join(urls).encode()).hexdigest()[:10]
+    material = "\n".join(urls)
+    if offline_page:
+        material += "\n" + hashlib.sha256(offline_page.encode()).hexdigest()
+    return hashlib.sha256(material.encode()).hexdigest()[:10]
 
 
 def identity_fingerprint(user_pk: int, club_pk: int | None) -> str:

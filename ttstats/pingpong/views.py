@@ -3792,8 +3792,29 @@ class ServiceWorkerView(TemplateView):
         urls = offline.precache_urls()
         # json.dumps, not a template loop: the list lands in a JS literal.
         ctx["sw_precache_json"] = json.dumps(urls)
-        ctx["sw_build"] = offline.build_key(urls)
+        ctx["sw_build"] = offline.build_key(urls, offline.offline_page_html())
         return ctx
+
+
+class OfflinePageView(View):
+    """The offline fallback page the service worker precaches (KAN-137).
+
+    At the site root, not under /pingpong/: the worker's snapshot route claims
+    every navigation under /pingpong/, and this page must be fetched (once, at
+    install, with no cookies) straight from the server. It is the same bytes
+    for everyone -- rendered without the request, so no context processor,
+    CSRF token, identity or session ever reaches it -- and the worker then
+    shows it in place of any /pingpong/ page that got no answer and has no
+    saved copy. The list of saved pages is built on the phone, by asking the
+    worker (static/pingpong/js/offline_page.js).
+    """
+
+    def get(self, request):
+        response = HttpResponse(offline.offline_page_html(), content_type="text/html; charset=utf-8")
+        # Revalidated whenever the worker (re)installs; never kept by a proxy
+        # under a stale build.
+        response["Cache-Control"] = "no-cache"
+        return response
 
 
 class ManifestView(TemplateView):

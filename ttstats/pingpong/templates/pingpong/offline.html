@@ -1,0 +1,97 @@
+{% load static icon_tags %}<!DOCTYPE html>
+{% comment %}
+The offline fallback page (KAN-137). sw.js precaches it at install and shows
+it in place of a /pingpong/ page that got no answer (or a 502/503/504) and has
+no saved copy. Rendered WITHOUT a request (pingpong/offline.py): the same bytes
+for every viewer, so nothing here may name a user, a club, a session or a CSRF
+token, and there is deliberately no <meta name="ttstats-identity">: offline.js
+would read an empty one as "logged out" and drop every saved copy.
+
+data-offline-reason is rewritten by sw.js to "server" when the proxy answered
+but the app did not (OFFLINE_REASON_MARKER); CSS alone swaps the wording.
+
+Fails closed: without JS (or without the worker) this is the static text, a
+Try again link that reloads the same URL, and links to Today and the Table,
+which the worker may then serve from saved copies. offline_page.js only adds
+the list of saved pages it gets from the worker. Neutral tokens: not amber
+(live only), not red (actions only).
+{% endcomment %}
+<html lang="en" data-offline-reason="network">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>No connection - TTStats</title>
+    <meta name="color-scheme" content="dark light">
+    <meta name="theme-color" content="#0b1220" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#f4f1ea" media="(prefers-color-scheme: light)">
+    <style>
+      html,body{background:#0b1220;color:#f4f1ea}
+      @media (prefers-color-scheme: light){html,body{background:#f4f1ea;color:#0f172a}}
+      .offline-server{display:none}
+      html[data-offline-reason="server"] .offline-server{display:inline}
+      html[data-offline-reason="server"] .offline-network{display:none}
+    </style>
+    <link rel="stylesheet" href="{% static 'pingpong/css/app.css' %}">
+    <script defer src="{% static 'pingpong/js/offline_page.js' %}"></script>
+</head>
+
+<body class="min-h-screen bg-court text-bone">
+    {% include 'pingpong/_icons.html' %}
+
+    <main class="mx-auto max-w-lg px-4 pb-16 pt-[max(2.5rem,env(safe-area-inset-top,0px))]" data-offline-page>
+        <p class="label-cap">TTStats</p>
+        <span class="rule my-2"></span>
+        <h1 class="flex items-start gap-3 text-heading">
+            {% icon "wifi-off" css="mt-1 flex-none text-bone-dim" %}
+            <span><span class="offline-network">No connection</span><span class="offline-server">TTStats isn't answering</span>, and this page isn't saved on your phone yet.</span>
+        </h1>
+
+        <p class="mt-3 text-[15px] text-bone-dim">
+            Pages you open with a connection are saved on this phone, so they still open next time there's no signal.
+        </p>
+
+        {# href="" is this same URL: without JS it reloads it too. #}
+        <a href="" class="btn-ghost mt-5" data-offline-retry>
+            {% icon "refresh-cw" size="sm" %}
+            Try again
+        </a>
+
+        <section class="mt-8" data-offline-static>
+            <p class="label-cap">Try a saved page</p>
+            <span class="rule my-2"></span>
+            <ul class="divide-y divide-court-line">
+                <li><a href="{% url 'pingpong:dashboard' %}" class="flex min-h-[44px] items-center justify-between gap-3 py-3 font-semibold">Today {% icon "chevron-right" size="sm" css="flex-none text-bone-dim" %}</a></li>
+                <li><a href="{% url 'pingpong:leaderboard' %}" class="flex min-h-[44px] items-center justify-between gap-3 py-3 font-semibold">The Table {% icon "chevron-right" size="sm" css="flex-none text-bone-dim" %}</a></li>
+            </ul>
+        </section>
+
+        <div class="mt-8" data-offline-saved hidden></div>
+
+        <p class="mt-8 text-[15px] text-bone-dim" data-offline-empty hidden>
+            Nothing is saved on this phone yet.
+        </p>
+    </main>
+
+    {# Cloned by offline_page.js; here so Tailwind sees the classes. #}
+    <template data-offline-group-template>
+        <section class="mb-8" data-offline-group>
+            <p class="label-cap" data-group-label></p>
+            <span class="rule my-2"></span>
+            <ul class="divide-y divide-court-line" data-group-items></ul>
+        </section>
+    </template>
+    <template data-offline-item-template>
+        <li>
+            <a class="flex min-h-[44px] items-center justify-between gap-3 py-3" data-item-link>
+                <span class="min-w-0">
+                    <span class="block truncate font-semibold" data-item-title></span>
+                    <span class="block text-[13px] text-bone-dim" data-item-time></span>
+                </span>
+                {% icon "chevron-right" size="sm" css="flex-none text-bone-dim" %}
+            </a>
+        </li>
+    </template>
+</body>
+
+</html>
