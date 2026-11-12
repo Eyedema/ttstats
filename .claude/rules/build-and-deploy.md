@@ -79,8 +79,11 @@ paths:
 - **Never ASGI while tenancy is a `threading.local`**: sync code from two
   requests can share an executor thread there. Path out:
   `docs/decisions/kan-148-shared-scoring.md`.
-- The e2e server (`scripts/e2e_server.sh`) is gunicorn gthread too (keep-alive off, as prod; Node reusing a socket gunicorn just closed aborted page scripts), but one
-  worker: its LocMemCache and SQLite are per process.
+- The e2e server (`scripts/e2e_server.sh`) stays on `runserver`, not gthread:
+  under gthread its one SQLite file serialized writes (lock errors, then ~300 ms
+  busy waits that opened CSRF-cookie races in the specs). gthread is covered by
+  pytest (`test_live_longpoll.py`, `test_middleware.py`), the held long-poll by
+  the two-phone e2e on runserver's unbounded threads.
 - **CI/CD** (`.github/workflows/main.yml`): tests with coverage on push/PR; SSH
   deploy on master. `.py` changes gate tests, frontend extensions gate the asset
   build. `npm run test:js` (`node --test tests/js/*.test.mjs`, no deps) runs

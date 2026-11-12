@@ -7,7 +7,7 @@ by WhiteNoise with hashed names, pre-compressed bodies and immutable caching.
 Without this the byte budgets (tests/e2e/budgets.spec.js) and `npm run perf`
 would measure uncompressed, unhashed, uncacheable files prod never serves.
 
-Run under gunicorn (scripts/e2e_server.sh, KAN-168) or `runserver --nostatic`; under a bare runserver Django's
+Run under `runserver --nostatic` (scripts/e2e_server.sh); under a bare runserver Django's
 own static handler answers /static/ before WhiteNoise sees it.
 """
 import os
@@ -58,14 +58,3 @@ LIVE_PRESENCE_LOST = int(os.environ.get('E2E_PRESENCE_LOST', '20'))
 # are pytest's (test_club_invites.py, test_shared_scoring.py, test_views.py).
 RATELIMIT_ENABLE = False
 
-# --- SQLite under threaded gunicorn (KAN-168) --------------------------------
-# The e2e server runs 8 threads against one SQLite file. select_for_update is
-# a no-op on SQLite, so two writers meet as a DEFERRED transaction upgrading
-# its read lock to a write lock, which fails at once with "database is locked"
-# (busy_timeout does not apply to that upgrade). IMMEDIATE takes the write
-# lock at BEGIN, where the timeout does apply, so writers queue as they do on
-# Postgres under the row lock. Prod is Postgres; this is e2e-only.
-if DATABASES['default']['ENGINE'] == 'django.db.backends.sqlite3':  # noqa: F405
-    DATABASES['default'].setdefault('OPTIONS', {}).update(  # noqa: F405
-        {'transaction_mode': 'IMMEDIATE', 'timeout': 20}
-    )
