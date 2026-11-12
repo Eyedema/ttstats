@@ -40,6 +40,10 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    # GET /healthz (KAN-109). First, so a probe skips host validation, the
+    # HTTPS redirect, sessions, auth and tenancy: Docker's plain-HTTP probe to
+    # 127.0.0.1 must get the same answer as the uptime check through the proxy.
+    'ttstats.healthz.HealthzMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
     # `Server-Timing: app;dur=..., db;dur=...;desc="N queries"`. Below WhiteNoise

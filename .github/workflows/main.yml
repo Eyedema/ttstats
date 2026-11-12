@@ -134,7 +134,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           # Ensure pytest and plugins are installed if not in requirements.txt
-          pip install pytest pytest-django pytest-cov
+          pip install pytest pytest-django pytest-cov pyyaml
 
       - name: Run tests with pytest
         if: needs.changes.outputs.py_changed == 'true'

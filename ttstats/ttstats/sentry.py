@@ -94,6 +94,8 @@ def _env_float(name, default):
 WARM_ENVIRON_KEY = "HTTP_X_TTSTATS_WARM"
 WARM_SAMPLE_FACTOR = 0.1
 
+UNTRACED_PATHS = frozenset({"/healthz", "/healthz/"})
+
 
 def make_traces_sampler(base_rate, warm_rate):
     """A `traces_sampler`: `warm_rate` for warm-up requests, else `base_rate`."""
@@ -101,6 +103,10 @@ def make_traces_sampler(base_rate, warm_rate):
     def traces_sampler(sampling_context):
         try:
             environ = sampling_context.get("wsgi_environ") or {}
+            # Probes, not visits (KAN-109): Docker every 10 s, the uptime
+            # monitor, the offline back-online check.
+            if environ.get("PATH_INFO") in UNTRACED_PATHS:
+                return 0
             if environ.get(WARM_ENVIRON_KEY) == "1":
                 return warm_rate
         except Exception:  # pragma: no cover - defensive; telemetry never raises

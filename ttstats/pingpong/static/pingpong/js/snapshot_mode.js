@@ -22,10 +22,12 @@
  *      shared phone that is what "log out" was for.
  *   2. "You're back online · Refresh": on the worker's `snapshot-fresh`
  *      (offline.js re-dispatches it as ttstats:snapshot-fresh), or when a
- *      cheap probe gets an answer: HEAD of the web app manifest (a Django
- *      view with no database work, never answered by the worker: it only
- *      takes GETs), `cache: 'no-store'`, on the `online` event, on return to
- *      the tab and every PROBE_MS while visible. Never an automatic reload:
+ *      cheap probe gets a 2xx: HEAD of /healthz (KAN-109: answered ahead of
+ *      the middleware stack, never cached, never answered by the worker,
+ *      which only takes GETs under /pingpong/ and /static/; a 503 means the
+ *      server is up but cannot serve, so it is not "back"),
+ *      `cache: 'no-store'`, on the `online` event, on return to the tab and
+ *      every PROBE_MS while visible. Never an automatic reload:
  *      the user may be reading. The button is created here, so without JS
  *      it does not exist.
  *   3. The banner's absolute time ("14:32", written by the worker, the only
@@ -50,6 +52,7 @@
   var TICK_MS = 30000;      // relative time refresh
   var PROBE_MS = 30000;     // "are we back?" while the page is visible
   var PROBE_TIMEOUT_MS = 5000;
+  var PROBE_URL = '/healthz';
   var NEEDS = 'Needs a connection';
   var HTMX_VERBS = ['get', 'post', 'put', 'patch', 'delete'];
   var HTMX_SELECTOR = HTMX_VERBS.map(function (v) {
@@ -227,12 +230,10 @@
       if (online || probing || !win.fetch) return;
       if (doc.visibilityState === 'hidden') return;
       if (win.navigator && win.navigator.onLine === false) return;
-      var link = doc.querySelector('link[rel="manifest"]');
-      if (!link) return;
       probing = true;
       var controller = win.AbortController ? new win.AbortController() : null;
       var timer = setTimeout(function () { if (controller) controller.abort(); }, PROBE_TIMEOUT_MS);
-      win.fetch(link.href, {
+      win.fetch(PROBE_URL, {
         method: 'HEAD',
         cache: 'no-store',
         credentials: 'same-origin',
@@ -262,6 +263,7 @@
   return {
     TICK_MS: TICK_MS,
     PROBE_MS: PROBE_MS,
+    PROBE_URL: PROBE_URL,
     compilePatterns: compilePatterns,
     classifyLink: classifyLink,
     relativeAge: relativeAge,

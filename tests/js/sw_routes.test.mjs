@@ -31,6 +31,15 @@ describe('service worker route table', () => {
     assert.equal(claims(listeners, '/pingpong/matches/7/live/point/', { method: 'POST' }), false);
   });
 
+  test('the health probe passes through untouched (KAN-109)', () => {
+    // snapshot_mode.js asks it whether the network is back: a worker answer
+    // would always say yes.
+    for (const method of ['HEAD', 'GET']) {
+      assert.equal(claims(listeners, '/healthz', { method }), false);
+      assert.equal(claims(listeners, '/healthz', { method, mode: 'navigate' }), false);
+    }
+  });
+
   test('sanity: the scoreboard navigation IS claimed', () => {
     // Proves the harness can see a claim, so the pass-throughs above mean something.
     assert.equal(claims(listeners, '/pingpong/matches/7/live/', { mode: 'navigate' }), true);

@@ -110,3 +110,11 @@ describe('userTriggered', () => {
     }
   });
 });
+
+describe('back-online probe', () => {
+  // KAN-109: /healthz is outside every worker route and never cached; the
+  // manifest it replaced said nothing about the database.
+  test('asks /healthz, at the root', () => {
+    assert.equal(Mode.PROBE_URL, '/healthz');
+  });
+});
