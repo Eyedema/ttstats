@@ -97,9 +97,10 @@
  *                                     Each carries X-Snapshot-At (ISO) and
  *                                     X-Snapshot-Title (URI-encoded <title>,
  *                                     for the S12.6 offline page).
- *   ttstats-snapstate-<BUILD>         one entry: the current snapshot
- *                                     partition, so it survives the worker
- *                                     being stopped between events.
+ *   ttstats-snapstate-<BUILD>         the current snapshot partition, so it
+ *                                     survives the worker being stopped
+ *                                     between events; and the last warm-up
+ *                                     run's {partition, at} (rate limit).
  *   ttstats-offline-<BUILD>           one entry: the offline page (/offline/).
  *                                     Its URL has no content hash, so its
  *                                     bytes are part of BUILD (offline.py
@@ -113,6 +114,24 @@
  * snapshot referencing CSS the static cache no longer holds would open
  * unstyled, banner rules aside). A deploy therefore empties the snapshots;
  * the next online visit refills them.
+ *
+ * BACKGROUND WARM-UP (KAN-136)
+ *
+ * The worker itself fetches pages nobody opened, so this is held tight. On
+ * {type: 'warm', urls} (snapshot_warm.js: idle, connection 'online', no
+ * Save-Data, the server's list of at most WARM_MAX allowlisted URLs):
+ *   - only URLs the snapshot route would claim, same origin, each once;
+ *   - only with a partition, at most once per WARM_INTERVAL_MS per partition
+ *     (claimed BEFORE fetching, persisted in ttstats-snapstate);
+ *   - one at a time, `priority: 'low'`, `cache: 'no-store'`, cookies, header
+ *     X-TTStats-Warm: 1 (server: no side effects, Sentry samples it lower);
+ *   - a page saved under WARM_SKIP_FRESH_MS ago is skipped;
+ *   - each answer goes through classifyAnswer/planNavigation exactly like a
+ *     navigation (stored only opted in + identity == partition, evicted on a
+ *     redirect/gone/un-opted answer);
+ *   - the run stops when the partition changes, the network fails, or an
+ *     answer is a redirect, another identity's page or a 5xx.
+ * One run at a time; a second request joins it.
  *
  * WHOSE PAGE (two people can share a phone)
  *
@@ -144,6 +163,9 @@
  *                                 [{url, title, savedAt, shown}] newest
  *                                 first: the CURRENT partition's servable
  *                                 copies, and the stored scoreboards.
+ *   {type: 'warm', urls}          snapshot_warm.js (see BACKGROUND WARM-UP).
+ *                                 A port, if sent, gets {type: 'warmed',
+ *                                 ran, reason, stored}.
  *   {type: 'purge'}               offline.js, on submit of a form marked
  *                                 data-sw-purge (Log out). Drop every copy
  *                                 of every kind; no snapshot partition.
@@ -198,6 +220,14 @@ const NAV_TIMEOUT_MS = 4000;
 const NAV_GIVE_UP_MS = 12000;
 // The proxy answered but the app did not: as good as no network.
 const GATEWAY_ERRORS = [502, 503, 504];
+// Background warm-up (KAN-136): at most WARM_MAX pages, once per
+// WARM_INTERVAL_MS per partition; a page saved less than WARM_SKIP_FRESH_MS
+// ago is not fetched again.
+const WARM_STATE_KEY = '/__ttstats/warm-state';
+const WARM_HEADER = 'X-TTStats-Warm';
+const WARM_MAX = 6;
+const WARM_INTERVAL_MS = 30 * 60 * 1000;
+const WARM_SKIP_FRESH_MS = 10 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const STORED_AT = 'X-TTStats-Stored-At';
 const IDENTITY_HEADER = 'X-TTStats-Identity';
@@ -423,6 +453,37 @@ function markOfflinePage(html, reason) {
   if (typeof html !== 'string') return null;
   if (reason === 'network') return html;
   return html.replace(OFFLINE_REASON_MARKER, () => 'data-offline-reason="server"');
+}
+
+/* The warm-up list a page sent, as snapshot keys: same origin, a page the
+ * snapshot route would claim (under /pingpong/, nothing under /live/), each
+ * once, at most WARM_MAX. Anything else is dropped, not fetched. */
+function warmTargets(urls, origin) {
+  if (!Array.isArray(urls)) return [];
+  const keys = [];
+  for (const raw of urls) {
+    if (typeof raw !== 'string') continue;
+    let url;
+    try {
+      url = new URL(raw, origin);
+    } catch (err) {
+      continue;
+    }
+    if (url.origin !== origin) continue;
+    if (!isSnapshotNavigation(url, { mode: 'navigate' })) continue;
+    const key = snapshotKey(url);
+    if (!keys.includes(key)) keys.push(key);
+  }
+  return keys.slice(0, WARM_MAX);
+}
+
+/* May `partition` warm at `now`, given the last run's {partition, at}? */
+function warmDue(state, partition, now) {
+  if (!partition) return false;
+  if (!state || state.partition !== partition || !Number.isFinite(state.at)) return true;
+  // A clock that went backwards must not block warming for days.
+  if (state.at > now + 60000) return true;
+  return now - state.at >= WARM_INTERVAL_MS;
 }
 
 /* ---- cache helpers ------------------------------------------------------ */
@@ -690,6 +751,88 @@ async function offlinePage(reason) {
   return new Response(html, { status: 200, statusText: 'OK', headers });
 }
 
+/* ---- background warm-up (KAN-136) --------------------------------------- */
+
+async function readWarmState() {
+  try {
+    if (!(await caches.has(SNAP_STATE_CACHE))) return null;
+    const hit = await (await caches.open(SNAP_STATE_CACHE)).match(WARM_STATE_KEY);
+    return hit ? await hit.json() : null;
+  } catch (err) {
+    return null;
+  }
+}
+
+async function writeWarmState(partition, at) {
+  const state = await caches.open(SNAP_STATE_CACHE);
+  await state.put(
+    WARM_STATE_KEY,
+    new Response(JSON.stringify({ partition, at }), { headers: { 'Content-Type': 'application/json' } })
+  );
+}
+
+async function savedRecently(partition, key, now) {
+  const cache = await openSnapshots(partition);
+  const hit = cache && (await cache.match(key, { ignoreVary: true }));
+  if (!hit) return false;
+  const savedAt = Date.parse(hit.headers.get(SNAPSHOT_AT));
+  return isFresh(savedAt, now) && now - savedAt < WARM_SKIP_FRESH_MS;
+}
+
+/* One run: claim the rate limit first (a run that fails still counts: it is
+ * server load the limit exists to bound), then fetch each page in turn and
+ * store it by the navigation route's own rules. Stops at the first sign the
+ * run is no longer wanted: the partition changed, no network, a redirect
+ * (session gone), another identity's page, or a 5xx. */
+async function runWarm(urls) {
+  const partition = await currentPartition();
+  const targets = warmTargets(urls, self.location.origin);
+  if (!partition || !targets.length) return { ran: false, reason: 'nothing to warm', stored: [] };
+  const now = Date.now();
+  if (!warmDue(await readWarmState(), partition, now)) {
+    return { ran: false, reason: 'rate-limited', stored: [] };
+  }
+  await writeWarmState(partition, now);
+
+  const stored = [];
+  const stop = (reason) => ({ ran: true, reason, stored });
+  for (const key of targets) {
+    if ((await currentPartition()) !== partition) return stop('partition changed');
+    if (await savedRecently(partition, key, Date.now())) continue;
+    let response;
+    try {
+      response = await fetch(key, {
+        credentials: 'same-origin',
+        cache: 'no-store',
+        // A hint where supported (Chromium); ignored elsewhere.
+        priority: 'low',
+        headers: { [WARM_HEADER]: '1' },
+      });
+    } catch (err) {
+      return stop('network');
+    }
+    const kind = classifyAnswer(response, partition);
+    const plan = planNavigation(kind, false);
+    if (plan.evict) await evictSnapshot(key);
+    // storeSnapshot re-checks the partition after reading the body.
+    if (plan.store && (await storeSnapshot(key, response, partition))) stored.push(key);
+    if (kind === 'redirect' || kind === 'foreign' || kind === 'server-error') return stop(kind);
+  }
+  return stop('done');
+}
+
+// One run at a time: two tabs asking together share it.
+let warming = null;
+
+function warm(urls) {
+  if (!warming) {
+    warming = runWarm(urls).finally(() => {
+      warming = null;
+    });
+  }
+  return warming;
+}
+
 async function notifySnapshotFresh(clientId, url) {
   if (!clientId) return;
   const client = await self.clients.get(clientId);
@@ -861,6 +1004,16 @@ self.addEventListener('message', (event) => {
         // Missed at install (no network then): every online page load retries.
         precacheOfflinePage().catch(() => {}),
       ])
+    );
+  } else if (data.type === 'warm') {
+    // snapshot_warm.js, idle after an online load (KAN-136). A port, if
+    // sent, gets {type: 'warmed', ran, reason, stored}.
+    const port = event.ports && event.ports[0];
+    event.waitUntil(
+      warm(data.urls).then(
+        (result) => port && port.postMessage({ type: 'warmed', ...result }),
+        () => port && port.postMessage({ type: 'warmed', ran: false, reason: 'error', stored: [] })
+      )
     );
   } else if (data.type === 'list-snapshots') {
     // The offline page asks; it answers over the port it sent (or, without

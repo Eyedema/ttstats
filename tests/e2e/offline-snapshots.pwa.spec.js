@@ -1,6 +1,7 @@
 const base = require('@playwright/test');
 const { PROD_CSP } = require('./helpers');
 const { startOfflineProxy } = require('./offline-proxy');
+const { noWarming } = require('./offline-warm-helpers');
 
 /**
  * KAN-131 offline reading: a page seen once reopens with no signal from a
@@ -45,6 +46,8 @@ test.use({ storageState: { cookies: [], origins: [] } });
 test.describe.configure({ timeout: 60000 });
 
 test.beforeEach(async ({ page }) => {
+  // These count what is saved: no background warm-up (KAN-136).
+  await noWarming(page);
   // CSP violations, for the "served copy keeps its policy" checks. Chart.js's
   // one `eval` refusal is expected under PROD_CSP (frontend-verification).
   await page.addInitScript(() => {

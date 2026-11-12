@@ -204,15 +204,28 @@ def offline_context(request):
       off when logged out), so the worker purges saved pages (KAN-132).
     * `ttstats_rendered_at`: when this HTML was rendered, ISO 8601 UTC, for
       `data-rendered-at` on `<html>`.
+    * `snapshot_warm_urls` (KAN-136): a callable, so the one query behind it
+      runs only when `base.html` renders the `snapshot-warm` json_script
+      (flag on). Empty on a warm-up fetch itself.
+    * On a warm-up fetch (`X-TTStats-Warm: 1`), `messages` is emptied: a
+      background fetch must not consume a flash message the user hasn't
+      seen yet (iterating the storage marks it read).
 
     See `pingpong/offline.py`.
     """
     from django.utils import timezone
 
-    from pingpong.offline import request_identity, snapshots_enabled
+    from pingpong.offline import is_warm, request_identity, snapshots_enabled, warm_urls
 
-    return {
+    user = getattr(request, 'user', None)
+    enabled = snapshots_enabled(user)
+    warm = is_warm(request)
+    context = {
         'ttstats_identity': request_identity(request),
-        'ttstats_snapshots': 'on' if snapshots_enabled(getattr(request, 'user', None)) else 'off',
+        'ttstats_snapshots': 'on' if enabled else 'off',
         'ttstats_rendered_at': timezone.now().strftime('%Y-%m-%dT%H:%M:%SZ'),
+        'snapshot_warm_urls': (lambda: warm_urls(user)) if enabled and not warm else list,
     }
+    if warm:
+        context['messages'] = []
+    return context

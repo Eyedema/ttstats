@@ -166,6 +166,50 @@ def snapshots_enabled(user) -> bool:
     return flags.is_enabled(SNAPSHOT_FLAG, user)
 
 
+# Background warm-up (KAN-136). After an online page load the page asks the
+# worker to fetch these, so Today, the Table, your own page and your last few
+# matches are saved before you reach the venue. Every URL is an allowlisted
+# read-only page (pinned by test_offline_warm.py); the worker re-checks them
+# and stores only what the server opts in, for the current partition.
+WARM_HEADER = "X-TTStats-Warm"
+WARM_MAX = 6
+WARM_RECENT_MATCHES = 3
+
+
+def is_warm(request) -> bool:
+    """Is this the worker's background warm-up fetch (not a visit)?"""
+    return request.headers.get(WARM_HEADER) == "1"
+
+
+def warm_urls(user) -> list[str]:
+    """The pages to warm for `user`, at most WARM_MAX.
+
+    Today, the Table (no query: the current season, as the tab links it), the
+    viewer's own player page and their last WARM_RECENT_MATCHES confirmed
+    matches in the active club. One query (the matches): the player is the one
+    `base.html` already loads, and the match ids come through the scoped
+    manager, so only matches this viewer can open are listed. Call it only
+    with the flag on (offline_context does).
+    """
+    from django.urls import reverse
+
+    if user is None or not user.is_authenticated:
+        return []
+    urls = [reverse("pingpong:dashboard"), reverse("pingpong:leaderboard")]
+    player = getattr(user, "player", None)
+    if player is not None:
+        from pingpong.models import Match
+
+        urls.append(reverse("pingpong:player_detail", args=[player.pk]))
+        recent = (
+            Match.objects.filter(participants__player=player, is_confirmed=True)
+            .order_by("-date_played", "-pk")
+            .values_list("pk", flat=True)[:WARM_RECENT_MATCHES]
+        )
+        urls.extend(reverse("pingpong:match_detail", args=[pk]) for pk in recent)
+    return urls[:WARM_MAX]
+
+
 def _may_snapshot(request, response) -> bool:
     return (
         request.method == "GET"

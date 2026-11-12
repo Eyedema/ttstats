@@ -190,3 +190,41 @@ class TestEnvFloat:
         monkeypatch.setenv("SENTRY_TRACES_SAMPLE_RATE", "half")
         with caplog.at_level(logging.WARNING):
             assert sentry._env_float("SENTRY_TRACES_SAMPLE_RATE", 0.0) == 0.0
+
+
+class TestWarmUpSampling:
+    """KAN-136: the worker's background warm-up fetches are not visits."""
+
+    def test_warm_requests_get_the_warm_rate(self):
+        sampler = sentry.make_traces_sampler(0.5, 0.05)
+        assert sampler({"wsgi_environ": {"HTTP_X_TTSTATS_WARM": "1"}}) == 0.05
+
+    def test_everything_else_gets_the_base_rate(self):
+        sampler = sentry.make_traces_sampler(0.5, 0.05)
+        assert sampler({"wsgi_environ": {"PATH_INFO": "/pingpong/"}}) == 0.5
+        assert sampler({"wsgi_environ": {"HTTP_X_TTSTATS_WARM": "0"}}) == 0.5
+        assert sampler({}) == 0.5
+        assert sampler({"wsgi_environ": None}) == 0.5
+
+    def _init(self, monkeypatch, **env):
+        import sentry_sdk
+
+        captured = {}
+        monkeypatch.setattr(sentry_sdk, "init", lambda **kwargs: captured.update(kwargs))
+        monkeypatch.setenv("SENTRY_DSN", "https://key@example.invalid/1")
+        monkeypatch.delenv("SENTRY_WARM_TRACES_SAMPLE_RATE", raising=False)
+        for name, value in env.items():
+            monkeypatch.setenv(name, value)
+        assert sentry.init_sentry() is True
+        return captured["traces_sampler"]
+
+    def test_init_samples_warm_ups_at_a_tenth_by_default(self, monkeypatch):
+        sampler = self._init(monkeypatch, SENTRY_TRACES_SAMPLE_RATE="0.2")
+        assert sampler({"wsgi_environ": {"HTTP_X_TTSTATS_WARM": "1"}}) == pytest.approx(0.02)
+        assert sampler({"wsgi_environ": {}}) == pytest.approx(0.2)
+
+    def test_the_warm_rate_can_be_set(self, monkeypatch):
+        sampler = self._init(
+            monkeypatch, SENTRY_TRACES_SAMPLE_RATE="0.2", SENTRY_WARM_TRACES_SAMPLE_RATE="0"
+        )
+        assert sampler({"wsgi_environ": {"HTTP_X_TTSTATS_WARM": "1"}}) == 0

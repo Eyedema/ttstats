@@ -10,6 +10,7 @@ paths:
   - "ttstats/pingpong/static/pingpong/js/push.js"
   - "ttstats/pingpong/static/pingpong/js/offline.js"
   - "ttstats/pingpong/static/pingpong/js/offline_page.js"
+  - "ttstats/pingpong/static/pingpong/js/snapshot_warm.js"
   - "ttstats/pingpong/templates/pingpong/offline.html"
   - "ttstats/pingpong/offline.py"
   - "ttstats/pingpong/management/commands/generate_vapid_keys.py"
@@ -18,6 +19,7 @@ paths:
   - "tests/e2e/*.pwa.spec.js"
   - "tests/e2e/offline-proxy.js"
   - "tests/e2e/offline-snapshot*.js"
+  - "tests/e2e/offline-warm-helpers.js"
 ---
 
 # PWA and web push
@@ -88,6 +90,19 @@ raises). `notifications.py` is the vocabulary (what each event says, to whom).
   (12 s), and only while a snapshot partition exists (kill switch = off).
   Never for a 2xx/3xx/4xx/500. `offline_page.js` lists the current partition
   via `{type:'list-snapshots'}`.
+- **Background warm-up (KAN-136)**: `base.html` renders `snapshot-warm`
+  (`offline.warm_urls`: Today, the Table, own player page, last 3 confirmed
+  matches; max 6, all allowlisted; one query, flag on only).
+  `snapshot_warm.js` posts `{type:'warm', urls}` when idle, only if
+  `TTStatsConnection.state()==='online'`, no Save-Data, not a saved copy.
+  The worker fetches one at a time with `X-TTStats-Warm: 1`, stores by the
+  navigation rules, at most once per 30 min per partition (state in
+  `ttstats-snapstate-<BUILD>`, claimed before fetching), skips copies under
+  10 min old, and stops on a partition change, no network, redirect,
+  foreign identity or 5xx. Warm requests must stay side-effect free: the
+  context processor empties `messages` for them (a flash would be consumed).
+  Offline specs that count saved pages call `noWarming(page)`
+  (`offline-warm-helpers.js`); the proxy counts `net.warmRequests`.
 - **A stored scoreboard is one person's** (CSRF token, player ids). Stored only
   from a 200 carrying `X-TTStats-Identity` (`offline.request_identity`: HMAC of
   user + active club, KAN-132's fingerprint), filed in
@@ -107,7 +122,8 @@ raises). `notifications.py` is the vocabulary (what each event says, to whom).
   static 120 entries, scoreboards 8 and 7 days, snapshots 60 and 7 days.
 - New offline behaviour is a new `ROUTES` entry. Tests: `test_push_views.py`
   (rendered worker), `test_offline.py`, `test_offline_snapshots.py`,
-  `test_offline_page.py`, `tests/js/sw_*.test.mjs`,
+  `test_offline_page.py`, `test_offline_warm.py`, `tests/js/sw_*.test.mjs`,
+  `tests/js/snapshot_warm.test.mjs`, `tests/e2e/offline-warm.pwa.spec.js`,
   `tests/js/offline_page.test.mjs`, `tests/e2e/scoreboard-offline.pwa.spec.js`,
   `tests/e2e/offline-page.{pwa,nojs}.spec.js`,
   `tests/e2e/offline-snapshots.pwa.spec.js` (users `e2e-reader`,

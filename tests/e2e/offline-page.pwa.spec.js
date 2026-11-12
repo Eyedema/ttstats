@@ -1,6 +1,7 @@
 const base = require('@playwright/test');
 const { PROD_CSP } = require('./helpers');
 const { startOfflineProxy } = require('./offline-proxy');
+const { noWarming } = require('./offline-warm-helpers');
 
 /**
  * KAN-137 (S12.6) / KAN-138 case 3: offline, a page that was never saved
@@ -27,6 +28,8 @@ test.use({ storageState: { cookies: [], origins: [] } });
 test.describe.configure({ timeout: 60000 });
 
 test.beforeEach(async ({ page }) => {
+  // These count what is saved: no background warm-up (KAN-136).
+  await noWarming(page);
   await page.addInitScript(() => {
     window.__cspViolations = [];
     document.addEventListener('securitypolicyviolation', (event) => {

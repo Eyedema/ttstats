@@ -38,6 +38,7 @@ export function controllableNetwork({ offlinePage = null } = {}) {
       );
     }
     net.calls += 1;
+    (net.requests = net.requests || []).push({ request, init });
     return new Promise((resolve, reject) => {
       net.resolve = resolve;
       net.reject = reject;
