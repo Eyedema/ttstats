@@ -33,6 +33,11 @@ paths:
   - "tests/e2e/scoreboard*.js"
   - "ttstats/pingpong/live_lobby_views.py"
   - "ttstats/pingpong/templates/pingpong/live_lobby.html"
+  - "ttstats/pingpong/templates/pingpong/live_join.html"
+  - "ttstats/pingpong/templatetags/qr_tags.py"
+  - "ttstats/pingpong/tests/test_qr_tags.py"
+  - "ttstats/pingpong/tests/test_shared_scoring.py"
+  - "ttstats/pingpong/tests/fixtures/live_contract.json"
   - "ttstats/pingpong/static/pingpong/js/live_lobby.js"
   - "tests/e2e/shared-scoring*.js"
   - "tests/e2e/shared-scoreboard*.js"
@@ -140,7 +145,8 @@ synced in a batch runs exactly the code a point tapped online runs.
 
 ## Every op carries a seq; dedupe before `is_live` (KAN-77)
 
-Ops (`start`, `point`, `undo`, `side_switch`) carry a client `seq`: **per
+Ops (`start`, `point`, `undo`, `side_switch`, `take_over`, `release`)
+carry a client `seq`: **per
 scorer** (KAN-149), from 1, gapless. Each phone is a `LiveScorer` row whose
 `applied_seq` is the highest applied; a match with no rows is the legacy
 shape, whose stream is `Match.live_applied_seq` and whose only scorer is
@@ -242,8 +248,9 @@ club check run **before** any wait; `last_seen_at` is still stamped.
 ## Shared scoring starts from a lobby (KAN-151 / KAN-152)
 
 `live_lobby_views.py`; flag `shared_scoring` gates only the entry points (the
-match form button, `LiveLobbyCreateView` 404s), never an open lobby or a join.
-The join link's credential rules are in `clubs.md`.
+match form button, `LiveLobbyCreateView` 404s, the Today card), never an open
+lobby or a join. The join link's credential rules are in `clubs.md`; the
+rollout runbook is in `docs/decisions/kan-148-shared-scoring.md`.
 
 - **`LiveLobby` expiry is lazy** (`LOBBY_TTL` 30 min): `current_status` reads
   an open lobby past `expires_at` as expired; no job flips it. One open lobby
@@ -446,15 +453,10 @@ false nothing below runs and the page sends no long-poll (e2e asserts it).
   (the seeded `E2E Partner` match).
 - **Two-phone e2e** (KAN-155): `shared-scoring-two-phones.js`, run by
   `shared-scoring.spec.js` (WebKit) and `.desktop.spec.js`: two contexts
-  (host = the suite's session, guest = `e2e-partner`, `partner.json`), each
-  test opens its own lobby and finishes its match. The guest's
-  match_confirm is stubbed (a GET confirms), offline is `offline-proxy.js`.
-  `settings/e2e.py` shortens the hold and presence thresholds (env-tunable)
-  and turns rate limits off; the limits are pytest's.
-- **Two-phone e2e** (KAN-155): `shared-scoring-two-phones.js`, run by
-  `shared-scoring.spec.js` and `.desktop.spec.js`: two contexts (host
-  `user.json`, guest `partner.json`); a new context needs an explicit empty
-  `storageState` to be anonymous (the runner injects the project's). Offline
-  via `offline-proxy.js`; the guest's match_confirm is stubbed so these
-  matches stay unconfirmed. `settings/e2e.py` shortens the hold (6 s) and
-  presence (6 / 20 s) and turns rate limits off (repeated join and login).
+  (host `user.json`, guest `e2e-partner`, `partner.json`), each test opens
+  its own lobby and finishes its match. A new context needs an explicit
+  empty `storageState` to be anonymous (the runner injects the project's).
+  Offline via `offline-proxy.js`; the guest's match_confirm is stubbed (a GET
+  confirms) so these matches stay unconfirmed. `settings/e2e.py` shortens
+  the hold (6 s) and presence (6 / 20 s), env-tunable, and turns rate limits
+  off (repeated join and login); the limits are pytest's.

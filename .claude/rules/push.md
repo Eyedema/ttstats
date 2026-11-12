@@ -4,6 +4,7 @@ paths:
   - "ttstats/pingpong/notifications.py"
   - "ttstats/pingpong/notification_limits.py"
   - "ttstats/pingpong/templates/pingpong/sw.js"
+  - "tests/js/sw_*.mjs"
   - "ttstats/pingpong/templates/pingpong/manifest.webmanifest"
   - "ttstats/pingpong/templates/pingpong/notification_settings.html"
   - "ttstats/pingpong/static/pingpong/js/push.js"

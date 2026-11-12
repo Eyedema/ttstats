@@ -71,5 +71,6 @@ so both count against `20/h` by IP. A legitimate join is about four requests.
   entry (only the resume banner), so there is nothing to sit next to.
 - Pruning old lobby rows (optional in the ticket): rows are tiny and expiry is
   lazy; add a `run_scheduled_jobs` job if the table ever matters.
-- `LiveStateView` still answers a finished match with `match_detail`, while
-  `live_sync` answers `match_confirm`; KAN-168 owns that view.
+- `LiveStateView` answered a finished match with `match_detail`, while
+  `live_sync` answered `match_confirm`. Since fixed by KAN-153: both answer
+  `match_confirm` (`kan-148-shared-scoring.md`).

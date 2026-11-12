@@ -1,9 +1,48 @@
 # Shared live scoring (KAN-148)
 
-Two phones scoring one match. The epic's later stories append their sections
-here. The per-scorer op streams (KAN-149) have their own record,
-`docs/decisions/kan-149-per-scorer-streams.md`; the rules are in
-`.claude/rules/live-scoring.md`.
+The two players of a 1v1 match score it together, each from their own phone,
+each tapping only their own points. This is the epic's record; two stories
+have their own: `kan-149-per-scorer-streams.md` (the stream model in detail)
+and `kan-151-152-live-lobby.md` (lobby, join flow, Today card). The rules are
+in `.claude/rules/live-scoring.md` and `.claude/rules/clubs.md` (the join
+link). How to turn it on: "Rollout" at the end.
+
+## Per-scorer op streams, not one per match
+
+Before this epic the live pipeline was single-writer: one gapless `seq` per
+match (`Match.live_applied_seq`), so a second device's ops were a gap and
+sent the client into read-only follow mode. Each phone is now a `LiveScorer`
+row (match, player, side) with its own `applied_seq`; each stream keeps the
+KAN-77 contract on its own (gapless, idempotent, checked after the lock and
+before `is_live`, rule rejections consume their seq), and the streams are
+merged **in arrival order** under the one `select_for_update()` lock through
+the one `live_ops.apply_op`. The solo host is the one-row case of the same
+model, so there is one code path (details: `kan-149-per-scorer-streams.md`).
+
+Rejected:
+
+- **One shared seq, with a server lock or a token handed between phones.**
+  Both phones must score offline independently (KAN-76); a shared counter
+  cannot be allocated offline.
+- **Ordering points by client timestamp.** Phone clocks drift, and reordering
+  already-applied points means rewriting the point log. Deferred to a v2
+  (see the game-boundary hazard below).
+
+## A lobby, not a match with an empty side
+
+The "waiting for an opponent" phase is a `LiveLobby` row (host, club,
+best-of, location, bearer token, expiry, status). **No `Match` exists until
+someone joins**, so no manager, list, stat, rating or template ever sees a
+one-sided match. The rejected alternative, creating the match first with an
+empty side 2, would have leaked everywhere: every one of those assumes two
+sides (`set_match_sides`, `MatchCreateView`). Details, including **the one
+place an unverified account is logged in** (a signup that holds an open
+lobby token in a club it belongs to, so the joiner is not blocked on email
+verification), are in `kan-151-152-live-lobby.md`.
+
+The QR is rendered on the server as inline SVG (`segno`, `qr_tags.qr_svg`):
+it works with JS off and has nothing to allow in CSP. A client-side QR
+library would add JS on slow 4G and fail open without it.
 
 ## Long-poll on threaded gunicorn (KAN-168)
 
@@ -16,6 +55,10 @@ Under ASGI, sync code from different requests can run on a shared executor
 thread, and a thread-local could hand one request's club to another: a
 tenancy leak with no error. A long-poll is plain HTTP through the proxy and
 the service worker, and a dropped one is re-issued by the existing backoff.
+
+Short polling every 1-2 s was the simpler option, but it is up to 1.5 s late
+and a request per phone every 1.5 s even when nothing happens; with memory to
+spare, holding a request is the better trade.
 
 ### Workers: gthread, 3 x 8
 
@@ -185,6 +228,22 @@ confirmation of a game point when another phone tapped within N ms, or the
 server could reject a game-ending point when the other stream's
 `last_seen_at` shows it mid-flight. Each costs latency on every game point;
 the decision waits for real two-phone usage.
+
+What v1 gives the players instead: presence on the other phone ("last seen
+25 s ago", KAN-154), the server's score always visible, and undo with
+`(sequence, by)` to repair it.
+
+**The v2 idea (not in this epic): order by `client_ts` with a per-stream
+clock offset.** Every op already carries `client_ts` (stored as
+`PointEvent.client_recorded_at`). Each sync gives the server a sample of
+`server_now - client_ts` for that stream; the minimum over recent samples
+estimates the phone's clock offset plus its fastest one-way delay. Ordering
+by the corrected time would put B's 10-10 before A's 11-10 in the example.
+Its costs: a late point has to be inserted *before* points already applied,
+which means re-running `live_scoring` from that point and rewriting the
+trailing `PointEvent` rows (and possibly un-ending a game), all of which the
+point log was designed never to do; and a phone that was offline for a whole
+game gives no fresh offset samples, exactly when ordering matters most.
 
 ### The fidelity harness for two streams
 
@@ -424,3 +483,108 @@ takeover spec waits about 30 s, not two minutes. IN_SYNC stays above
 server also turns `django-ratelimit` off: the join link (20/h) and the login
 form (5/15 min) are per IP, every spec request is 127.0.0.1, and
 `--repeat-each=10` alone exceeds both; the limits are pytest's.
+
+## Answers to the epic's open questions
+
+1. **Does finishing a co-scored match count as both players confirming?**
+   No. The confirmation rule is unchanged: both phones land on match_confirm
+   and each verified player confirms as before (unverified players still
+   auto-confirm). Changing it is the owner's call and a separate story.
+2. **A guest joining without an account?** Not now. The joiner logs in or
+   signs up (and may play unverified, see `kan-151-152-live-lobby.md`). A
+   token-scoped scoring right without a login is a possible later story.
+3. **Lobby expiry:** 30 minutes (`LOBBY_TTL`), read lazily; no job flips it.
+4. **Can the host start alone and let the opponent join mid-match?** No. The
+   match is created only when someone joins. The lobby's "Pick opponent
+   instead" cancels it and falls back to today's single-scorer form, with
+   best-of and location prefilled (`MatchCreateView.get_initial`).
+
+## Rollout
+
+The `shared_scoring` flag (`settings.FEATURE_FLAGS`, default False) gates
+only **creating** a lobby (the match form's button, `LiveLobbyCreateView`)
+and the viewer's Today card; an open lobby, the join link and the scoreboard
+work whatever the joiner's flag says, so turning it on for one host is
+enough to test both phones (the opponent joins by QR or link: without the
+flag they do not see the Today card). `dcp` / `dweb` are the aliases in `docs/tenancy-rollout.md`.
+
+### Before deploying: baseline
+
+The gthread workers (KAN-168) ship with this branch and change the whole
+site's concurrency, so record the "before" on the box first:
+
+```bash
+docker stats --no-stream $(dcp ps -q web)                 # web memory
+# select count(*) from pg_stat_activity where usename='pingpong'
+# ($POSTGRES_USER is pingpong, so current_user saves a level of quoting):
+dcp exec -T db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c \
+  "select count(*) from pg_stat_activity where usename = current_user"'
+dcp exec -T db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SHOW max_connections"'   # 100
+```
+
+Deploy, then repeat both after a few minutes of normal traffic and again
+during the real-device match. Expect at most 24 app connections (3 x 8),
+plus the psql session itself;
+held long-polls close theirs before waiting. Rollback of the worker model
+alone: `GUNICORN_THREADS=1` in `.env.prod`, `dcp up -d web`.
+
+### Step 1: on for the owner only
+
+No deploy, no restart (an override takes effect on the next request):
+
+```bash
+dweb shell -c "
+from django.contrib.auth.models import User
+from pingpong.models import FeatureFlagOverride
+u = User.objects.get(username='YOUR_USERNAME')
+FeatureFlagOverride.objects.update_or_create(
+    name='shared_scoring', user=u,
+    defaults={'enabled': True, 'note': 'KAN-156 shared scoring, owner phase'})
+"
+dweb shell -c "
+from django.contrib.auth.models import User
+from pingpong import flags
+print(flags.is_enabled('shared_scoring', User.objects.get(username='YOUR_USERNAME')))
+"   # True
+```
+
+Or in the admin: Feature flag overrides, add `shared_scoring` for the user,
+enabled. **Rollback:** delete the row.
+
+### Step 2: the real-device check (record results on KAN-156)
+
+Two phones at the venue, both with the app installed as a PWA, against prod:
+
+- [ ] **QR -> PWA or Safari?** Scan the lobby QR with the iPhone camera app
+      and record which opens. If Safari: its cookie jar is not the PWA's, so
+      check that log in -> join still lands on the scoreboard, and note the
+      result in this record.
+- [ ] **Time to first point**: from "show QR" on the host to the first point
+      applied (success criterion: under 30 s, no typing if the opponent is
+      already logged in).
+- [ ] **Tap-to-other-phone latency, p50 and p95 over a game** (target p50 <
+      500 ms, p95 < 2 s on venue 4G).
+- [ ] **One phone in airplane mode for a whole game**, then reconnected: its
+      points arrive exactly once and the final score matches what was tapped.
+- [ ] **Force-close one app** (battery-dead simulation): the other phone shows
+      it lost and takes over ("Score for both"); the match finishes.
+- [ ] **Server**: `docker stats` web memory and the `pg_stat_activity` count
+      (above) during the match, against the baseline.
+- [ ] Both phones land on match_confirm; ratings move only after both confirm.
+
+### Step 3: on for everyone
+
+```bash
+# .env.prod: add to the existing comma-separated list
+TTSTATS_FLAGS_ON=...,shared_scoring
+```
+
+```bash
+dcp up -d web
+dweb shell -c "from pingpong import flags; print(flags.is_enabled('shared_scoring'))"   # True
+```
+
+Then delete the owner's override (it no longer does anything) and watch
+Sentry for a week (success criterion 5: no new errors from the threaded
+workers). **Rollback:** remove `shared_scoring` from `TTSTATS_FLAGS_ON`,
+`dcp up -d web`. Matches already shared keep working; only new lobbies stop.
