@@ -146,6 +146,7 @@ class PlayerListView(LoginRequiredMixin, ListView):
     paginate_by = 10
 
 
+@offline.offline_snapshot
 class MatchListView(LoginRequiredMixin, ListView):
     """View to list all matches"""
 
@@ -234,6 +235,7 @@ class MatchListView(LoginRequiredMixin, ListView):
         return context
 
 
+@offline.offline_snapshot
 class MatchDetailView(LoginRequiredMixin, DetailView):
     """View to show details of a single match"""
 
@@ -466,6 +468,7 @@ class MatchDetailView(LoginRequiredMixin, DetailView):
         )
 
 
+@offline.offline_snapshot
 class PlayerDetailView(LoginRequiredMixin, DetailView):
     """View to show details of a single player"""
 
@@ -646,6 +649,7 @@ class PlayerDetailView(LoginRequiredMixin, DetailView):
         }
 
 
+@offline.offline_snapshot
 class DashboardView(LoginRequiredMixin, TemplateView):
     """Today: the three things that might need you, in that order.
 
@@ -1277,6 +1281,7 @@ class HowRatingsWorkView(LoginRequiredMixin, TemplateView):
     template_name = "pingpong/how_ratings_work.html"
 
 
+@offline.offline_snapshot
 class LeaderboardView(LoginRequiredMixin, TemplateView):
     """The seasons table: one club, one season or all-time, one format."""
 
@@ -1403,6 +1408,7 @@ class LeaderboardView(LoginRequiredMixin, TemplateView):
         }
 
 
+@offline.offline_snapshot
 class HeadToHeadStatsView(LoginRequiredMixin, TemplateView):
     """Detailed statistics comparison between two players"""
 
@@ -2049,6 +2055,7 @@ class ScheduledMatchCreateView(LoginRequiredMixin, CreateView):
         )
 
 
+@offline.offline_snapshot
 class CalendarView(LoginRequiredMixin, TemplateView):
     """Display calendar view of scheduled and past matches"""
 
@@ -2443,6 +2450,7 @@ class PasskeyManagementView(LoginRequiredMixin, View):
         messages.success(request, f"Passkey '{device_name}' deleted")
         return redirect('pingpong:passkey_management')
 
+@offline.offline_snapshot
 class ChampionshipListView(LoginRequiredMixin, ListView):
     """View to list all championships"""
 
@@ -2493,6 +2501,7 @@ class ChampionshipListView(LoginRequiredMixin, ListView):
         return context
 
 
+@offline.offline_snapshot
 class ChampionshipDetailView(LoginRequiredMixin, DetailView):
     """View to show championship details"""
 
