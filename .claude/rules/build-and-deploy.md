@@ -79,7 +79,7 @@ paths:
 - **Never ASGI while tenancy is a `threading.local`**: sync code from two
   requests can share an executor thread there. Path out:
   `docs/decisions/kan-148-shared-scoring.md`.
-- The e2e server (`scripts/e2e_server.sh`) is gunicorn gthread too, but one
+- The e2e server (`scripts/e2e_server.sh`) is gunicorn gthread too (keep-alive off, as prod; Node reusing a socket gunicorn just closed aborted page scripts), but one
   worker: its LocMemCache and SQLite are per process.
 - **CI/CD** (`.github/workflows/main.yml`): tests with coverage on push/PR; SSH
   deploy on master. `.py` changes gate tests, frontend extensions gate the asset
