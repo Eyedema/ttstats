@@ -115,3 +115,35 @@ class TestOtherAdminChangelists:
             reverse("admin:pingpong_scheduledmatch_changelist"), {"q": "Perpetua"}
         )
         assert [o.pk for o in resp.context["cl"].result_list] == [sm.pk]
+
+
+@pytest.mark.django_db
+class TestPlayerAdminAddForUserWithHiddenPlayer:
+    """A user whose Player has no club (or another club's) is invisible to the
+    scoped `Player.objects`, so Django's unique check on `user` passed and the
+    insert hit the DB constraint: a 500 on the admin add page (prod, test123)."""
+
+    @pytest.fixture(autouse=True)
+    def clubs_on(self, settings):
+        settings.FEATURE_FLAGS = {"clubs": True, "tenancy_canary": False}
+
+    def test_adding_a_second_player_for_the_same_user_is_a_form_error(self):
+        from .conftest import ClubFactory, ClubMembershipFactory
+
+        club = ClubFactory()
+        staff = UserFactory(is_staff=True, is_superuser=True)
+        PlayerFactory(user=staff, club=club)
+        ClubMembershipFactory(club=club, user=staff)
+        orphan_user = UserFactory()
+        PlayerFactory(user=orphan_user, club=None)
+
+        from django.test import Client
+
+        client = Client()
+        client.force_login(staff)
+        resp = client.post(
+            reverse("admin:pingpong_player_add"),
+            {"user": orphan_user.pk, "name": "Dup", "nickname": "", "playing_style": "normal", "notes": ""},
+        )
+        assert resp.status_code == 200
+        assert "already has a player" in resp.content.decode()

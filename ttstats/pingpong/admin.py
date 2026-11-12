@@ -1,4 +1,5 @@
 from datetime import date, timedelta
+from django import forms
 from django.contrib import admin, messages
 from django.contrib.admin import SimpleListFilter
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
@@ -347,9 +348,35 @@ class UserProfileAdmin(admin.ModelAdmin):
         self.message_user(request, f"Verified {count} profile(s).")
 
 
+class PlayerAdminForm(forms.ModelForm):
+    class Meta:
+        model = Player
+        fields = "__all__"
+
+    def clean_user(self):
+        """Unique `user`, checked across every club.
+
+        Django's unique check runs through the scoped default manager, which
+        cannot see a Player with no club or another club's; the insert then
+        hit the DB constraint as a 500. `_base_manager` is safe here: it only
+        answers "is this user taken", and returns nothing to render.
+        """
+        user = self.cleaned_data.get("user")
+        if user is not None:
+            taken = Player._base_manager.filter(user=user).exclude(pk=self.instance.pk)
+            if taken.exists():
+                raise forms.ValidationError(
+                    "This user already has a player (possibly with no club or another club's, "
+                    "which this list cannot show)."
+                )
+        return user
+
+
 @admin.register(Player)
 class PlayerAdmin(admin.ModelAdmin):
     """Player admin. Ratings live in PlayerRating (see the player's profile)."""
+
+    form = PlayerAdminForm
 
     list_display = (
         "name",
