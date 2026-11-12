@@ -49,6 +49,7 @@
   'use strict';
 
   var SLOW_MS = 2500;      // a request this slow means the link is struggling
+  var TICK_SLACK_MS = 50;  // the in-flight re-check fires this late (see beforeRequest)
   var TIMEOUT_MS = 8000;   // htmx.config.timeout: past this, give up honestly
   var OFFLINE_AFTER = 2;   // consecutive network errors that mean "offline"
   var TOAST_MS = 6000;     // a toast's life; one with an action gets longer
@@ -296,7 +297,11 @@
       var xhr = e.detail && e.detail.xhr;
       if (!xhr) return;
       apply(machine.begin(xhr));
-      setTimeout(function () { apply(machine.tick()); }, SLOW_MS);
+      // A timer may fire a few ms before Date.now() has moved SLOW_MS on, and
+      // tick() would then see the request as not slow yet, with nothing left to
+      // re-check it: a request that hangs forever would never mark the link
+      // degraded. Hence the slack.
+      setTimeout(function () { apply(machine.tick()); }, SLOW_MS + TICK_SLACK_MS);
     });
 
     // afterRequest fires for every outcome; a status of 0 means no response

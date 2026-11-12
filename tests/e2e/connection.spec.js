@@ -112,18 +112,21 @@ test.describe('connection state and toasts', () => {
     await expect.poll(() => connection(page)).toBe('online');
   });
 
-  test('requests delayed 3 s mark the link degraded; a fast one brings it back', async ({ page }) => {
+  test('slow requests mark the link degraded; a fast one brings it back', async ({ page }) => {
     await openLeaderboard(page);
     let slow = true;
+    // 5 s, not 3: the in-flight re-check fires at SLOW_MS + slack (2.55 s) and
+    // WebKit's timers run ~100 ms late under load, so a 3 s answer left too
+    // narrow a window to prove "degraded before it lands" (flaky in CI).
     await routeFragment(page, async (route) => {
-      if (slow) await sleep(3000);
+      if (slow) await sleep(5000);
       await route.fallback();
     });
 
     let responded = page.waitForResponse((r) => FRAGMENT.test(r.url()));
     await changeSeason(page);
     // Degraded while still in flight (SLOW_MS = 2.5 s), before it even lands.
-    await expect.poll(() => connection(page), { timeout: 2900 }).toBe('degraded');
+    await expect.poll(() => connection(page), { timeout: 4500 }).toBe('degraded');
     await responded;
     expect(await connection(page)).toBe('degraded');
     await expect(toast(page)).toHaveCount(0); // slow but answered: no error to report
