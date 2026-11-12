@@ -15,6 +15,7 @@ paths:
   - "tests/e2e/service-workers.spec.js"
   - "tests/e2e/*.pwa.spec.js"
   - "tests/e2e/offline-proxy.js"
+  - "tests/e2e/offline-snapshot*.js"
 ---
 
 # PWA and web push
@@ -49,15 +50,32 @@ raises). `notifications.py` is the vocabulary (what each event says, to whom).
   with no field, because without the field it could not be muted.
 - **`Match.result_notified_at` makes the result push exactly-once**
   (conditional `.update()` claim). Never set it by hand.
-- **`sw.js` caches two things and nothing else (KAN-82).** `ROUTES` =
+- **`sw.js` has three routes and nothing else.** `ROUTES` =
   `staticAssets` (cache-first, only `/static/` names carrying a 12-hex
-  manifest hash, so dev's unhashed files are never cached) then
-  `scoreboardShell` (navigations to `/pingpong/matches/<pk>/live/` only:
-  network first, 3 s timeout, stored copy on no answer/timeout/5xx). Anything
-  else, every POST, `/live/state/` and `/live/sync/` included, is not
-  intercepted; only same-origin GETs reach the table. A stale copy of any
-  other page is a lie; the scoreboard rebuilds from bootstrap + outbox.
-  A later route (KAN-131 snapshots) goes **after** `scoreboardShell`.
+  manifest hash, so dev's unhashed files are never cached), then
+  `scoreboardShell` (KAN-82: navigations to `/pingpong/matches/<pk>/live/`
+  only: network first, 3 s timeout, stored copy on no answer/timeout/5xx),
+  then `snapshotNavigation` (KAN-133: other navigations under `/pingpong/`,
+  never `/live/` or `HX-Request`). Anything else, every POST, htmx and
+  `fetch()` (prefetch included), `/live/state/` and `/live/sync/`, is not
+  intercepted; only same-origin GETs reach the table. The scoreboard is a
+  shell that rebuilds from bootstrap + outbox; a snapshot is stale and is
+  only ever served labelled.
+- **Snapshots (KAN-131): the server opts in, the worker labels.** Stored only
+  from a 2xx navigation carrying `X-TTStats-Snapshot: 1` whose identity equals
+  the current partition, and only if it holds both `FRESHNESS_MARKER` and
+  `SNAPSHOT_TIME_PLACEHOLDER` (`offline.py`). Network first, 4 s
+  (`NAV_TIMEOUT_MS`; skipped when `navigator.onLine === false`): the copy is
+  served only on no answer, timeout or 5xx, rewritten so CSS shows the
+  banner, with `X-TTStats-Served-From: snapshot`. 3xx/401/403/404/410 and an
+  un-opted 2xx evict it. The fetch is never aborted (a navigate-mode Request
+  can't take a signal): a late opted-in answer is stored and the page gets
+  `{type:'snapshot-fresh', url}`. `ttstats-snap-<BUILD>-<identity>`, LRU 60,
+  7 days. The current partition is set only by `{type:'identity', identity,
+  snapshots:'on'}` (persisted in `ttstats-snapstate-<BUILD>`); anything else
+  (other identity, logged out, `snapshots:'off'` = kill switch, `purge`)
+  deletes every other snapshot partition. Pure helpers are unit-tested in
+  `tests/js/sw_snapshots.test.mjs` (vm harness `sw_harness.mjs`).
 - **A stored scoreboard is one person's** (CSRF token, player ids). Stored only
   from a 200 carrying `X-TTStats-Identity` (`offline.request_identity`: HMAC of
   user + active club, KAN-132's fingerprint), filed in
@@ -72,10 +90,14 @@ raises). `notifications.py` is the vocabulary (what each event says, to whom).
 - **Cache names carry `BUILD` = `VERSION` + a digest of the precache URLs**
   (`offline.SW_PRECACHE`, content-hashed), so any deploy changing them
   reinstalls the worker and `activate` drops every `ttstats-*` cache not
-  current; stored pages never outlive their assets. Bump `VERSION` when the
-  worker's logic changes. Bounds: static 120 entries, scoreboards 8 and 7 days.
+  current; stored pages never outlive their assets (a deploy empties the
+  snapshots too). Bump `VERSION` when the worker's logic changes. Bounds:
+  static 120 entries, scoreboards 8 and 7 days, snapshots 60 and 7 days.
 - New offline behaviour is a new `ROUTES` entry. Tests: `test_push_views.py`
-  (rendered worker), `test_offline.py`, `tests/e2e/scoreboard-offline.pwa.spec.js`.
+  (rendered worker), `test_offline.py`, `test_offline_snapshots.py`,
+  `tests/js/sw_*.test.mjs`, `tests/e2e/scoreboard-offline.pwa.spec.js`,
+  `tests/e2e/offline-snapshots.pwa.spec.js` (users `e2e-reader`,
+  `e2e-reader-b`, `e2e-reader-off`: only they have the flag on).
 - **Never test the worker offline with `context.setOffline()`**: WebKit fails
   the loads before the worker runs, so nothing is ever served from cache and
   "not cached" assertions pass vacuously. Cut the network with

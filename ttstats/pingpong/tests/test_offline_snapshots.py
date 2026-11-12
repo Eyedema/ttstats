@@ -461,3 +461,73 @@ class TestPageMarkers:
         settings.FEATURE_FLAGS = {**settings.FEATURE_FLAGS, FLAG: True}
         html = Client().get(reverse("login")).content.decode()
         assert _snapshots_meta(html) == "off"
+
+
+# ---------------------------------------------------------------------------
+# The "saved copy" banner (KAN-145): what sw.js rewrites, rendered exactly
+# ---------------------------------------------------------------------------
+
+def _inline_head_style(html):
+    found = re.search(r"<head>.*?<style>(.*?)</style>", html, re.S)
+    assert found, "no inline <style> in <head>"
+    return found.group(1)
+
+
+@pytest.mark.django_db
+class TestSnapshotBanner:
+    """pytest sees the markup; e2e (offline-snapshots.pwa.spec.js and the
+    .nojs spec) sees whether it is on screen."""
+
+    def _page(self, enabled=True):
+        return TestPageMarkers()._page(enabled)
+
+    def test_time_placeholder_constant_is_the_exact_element(self):
+        assert offline.SNAPSHOT_TIME_PLACEHOLDER == "<time data-snapshot-time></time>"
+
+    @pytest.mark.parametrize("enabled", [True, False])
+    def test_banner_and_placeholder_render_once_on_every_page(self, enabled):
+        # Flag off too: a copy stored before the kill switch still needs it.
+        html = self._page(enabled)
+        assert html.count(offline.SNAPSHOT_TIME_PLACEHOLDER) == 1
+        assert html.count("data-snapshot-banner") == 1
+        assert 'class="snapshot-banner ' in html
+
+    def test_placeholder_sits_inside_the_banner_after_the_marker(self):
+        html = self._page()
+        banner = html.index("data-snapshot-banner")
+        assert html.index(offline.FRESHNESS_MARKER) < banner
+        assert banner < html.index(offline.SNAPSHOT_TIME_PLACEHOLDER)
+
+    def test_both_wordings_are_present(self):
+        html = self._page()
+        assert "No connection — saved copy from " in html
+        assert "Saved copy from " in html
+        assert " — may be out of date" in html
+
+    def test_banner_carries_the_wifi_off_glyph(self):
+        html = self._page()
+        start = html.index("data-snapshot-banner")
+        assert '<use href="#i-wifi-off">' in html[start:start + 1500]
+        assert 'id="i-wifi-off"' in html  # the sprite has the symbol
+
+    def test_hide_and_show_rules_are_inlined_in_head(self):
+        # Fail closed without the stylesheet, both ways (frontend.md).
+        style = _inline_head_style(self._page())
+        assert ".snapshot-banner,.snapshot-old{display:none}" in style
+        assert 'html[data-freshness="snapshot"] .snapshot-banner{display:block}' in style
+        assert 'html[data-snapshot-age="old"] .snapshot-old{display:inline}' in style
+        assert 'html[data-snapshot-age="old"] .snapshot-recent{display:none}' in style
+
+    def test_banner_is_not_amber_or_red(self):
+        html = self._page()
+        start = html.index("data-snapshot-banner")
+        banner = html[html.rindex("<div", 0, start):html.index("</div>", start)]
+        for forbidden in ("ball", "paddle", "live-dot", "amber", "red-"):
+            assert forbidden not in banner, forbidden
+
+    def test_worker_looks_for_the_same_strings(self, client):
+        body = client.get("/sw.js").content.decode()
+        assert f"const FRESHNESS_MARKER = '{offline.FRESHNESS_MARKER}';" in body
+        assert f"const TIME_PLACEHOLDER = '{offline.SNAPSHOT_TIME_PLACEHOLDER}';" in body
+        assert f"const SNAPSHOT_HEADER = '{offline.SNAPSHOT_HEADER}';" in body
+        assert f"const IDENTITY_HEADER = '{offline.IDENTITY_HEADER}';" in body

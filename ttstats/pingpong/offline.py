@@ -1,8 +1,8 @@
 """Server side of the service worker's offline caches (KAN-82, KAN-132).
 
 The worker (`templates/pingpong/sw.js`) caches hashed static files and the
-live scoreboard page (KAN-82), and -- once KAN-133 lands -- read-only page
-snapshots (KAN-131). This module owns the inputs it needs from Python:
+live scoreboard page (KAN-82), and read-only page snapshots (KAN-131,
+KAN-133). This module owns the inputs it needs from Python:
 
 * **What to precache at install** (`SW_PRECACHE`). Static paths, resolved
   through the staticfiles storage so they carry production's content hashes.
@@ -50,6 +50,9 @@ SNAPSHOT_FLAG = "offline_snapshots"
 # The exact attribute base.html renders on <html> and sw.js rewrites to
 # "snapshot" on a saved copy (KAN-134). Change both together.
 FRESHNESS_MARKER = 'data-freshness="network"'
+# The empty <time> in base.html's "saved copy" banner; sw.js fills it with
+# the copy's absolute time (KAN-145). A copy missing either is never served.
+SNAPSHOT_TIME_PLACEHOLDER = "<time data-snapshot-time></time>"
 # Set on a decorated view function (and on a decorated class), so the URL
 # sweep can find every opted-in route.
 SNAPSHOT_MARKER = "offline_snapshot"
