@@ -236,6 +236,9 @@ FEATURE_FLAGS = {
     # a QR code / join link (KAN-148). Gates only the entry points; a lobby
     # already open keeps working if this is turned off.
     'shared_scoring': False,
+    # Offline reading (KAN-131): allowlisted read-only pages send the
+    # X-TTStats-Snapshot opt-in so the service worker may keep a saved copy.
+    'offline_snapshots': False,
     # `seasons` (KAN-9) and `glicko2` (KAN-72) were retired by KAN-73: seasons
     # and Glicko-2 are always on. A stale name in TTSTATS_FLAGS_ON is ignored.
 }

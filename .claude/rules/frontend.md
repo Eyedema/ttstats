@@ -248,7 +248,8 @@ tap that never registered.
 - **`prefetch.js` fetches a tab's page on `touchstart`/`mousedown`** with
   `Purpose: prefetch`; `ttstats/prefetch.py` marks only that response
   `private, max-age=5` so the click's navigation is a cache hit. Normal
-  navigations stay uncacheable; a view's own `Cache-Control` wins.
+  navigations stay uncacheable; a view's own lifetime (`max-age`,
+  `no-cache`, `no-store`) wins, but a bare `private` (snapshot pages) does not.
 - **Allowlist: only `a[data-prefetch]`** (`_tab.html`, `_nav_row.html`). Every
   opted-in URL must be an idempotent GET page. Opt a row out with
   `data-no-prefetch` (`no_prefetch=True` on `_nav_row.html`; Admin does).
