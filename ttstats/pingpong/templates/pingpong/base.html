@@ -1,6 +1,7 @@
 {% load static humanize icon_tags %}
 <!DOCTYPE html>
-<html lang="en">
+{# data-freshness is rewritten by sw.js on a saved copy: render it exactly once (pingpong/offline.py FRESHNESS_MARKER). #}
+<html lang="en" data-freshness="network" data-rendered-at="{{ ttstats_rendered_at }}">
 
 <head>
     <meta charset="UTF-8">
@@ -94,6 +95,7 @@
     <script defer src="{% static 'pingpong/js/prefetch.js' %}"></script>
     {# Offline cache partition (KAN-82): offline.js tells the worker whose page this is. #}
     <meta name="ttstats-identity" content="{{ ttstats_identity }}">
+    <meta name="ttstats-snapshots" content="{{ ttstats_snapshots }}">
     <script defer src="{% static 'pingpong/js/offline.js' %}"></script>
 
     {% block extra_css %}{% endblock %}

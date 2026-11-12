@@ -11,7 +11,9 @@ again. This middleware marks a prefetch's HTML
 so the navigation is answered from the HTTP cache instead (Chromium even joins
 the prefetch while it is still in flight). Only prefetch requests are marked:
 a normal navigation is untouched, and so is anything a view already decided
-about caching (`never_cache` wins).
+about caching (`never_cache` wins). A bare `Cache-Control: private` -- what
+an offline-snapshot page sends (KAN-132, pingpong/offline.py) -- says who may
+store the page, not for how long, so a prefetch of one still gets its window.
 
 Why five seconds: the window only has to span a tap. Anything longer widens
 the one stale case, a prefetch followed within the window by a POST that
@@ -34,6 +36,16 @@ def is_prefetch(request):
     return False
 
 
+def _lifetime_undecided(response):
+    """No Cache-Control, or one that only says `private`."""
+    directives = {
+        part.split('=')[0].strip().lower()
+        for part in response.get('Cache-Control', '').split(',')
+        if part.strip()
+    }
+    return directives <= {'private'}
+
+
 class PrefetchCacheMiddleware:
     def __init__(self, get_response):
         self.get_response = get_response
@@ -44,7 +56,7 @@ class PrefetchCacheMiddleware:
             request.method == 'GET'
             and response.status_code == 200
             and not response.streaming
-            and not response.has_header('Cache-Control')
+            and _lifetime_undecided(response)
             and response.get('Content-Type', '').startswith('text/html')
             and is_prefetch(request)
         ):

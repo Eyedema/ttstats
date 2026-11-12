@@ -86,6 +86,24 @@ class TestEverythingElseIsLeftAlone:
         )
         assert not response.has_header('Cache-Control')
 
+    def test_a_bare_private_still_gets_the_window(self):
+        # What an offline-snapshot page sends (KAN-132): who may store it,
+        # not for how long. The prefetch must stay reusable.
+        def private(request):
+            response = _html(request)
+            response['Cache-Control'] = 'private'
+            return response
+
+        assert _run(private, Purpose='prefetch')['Cache-Control'] == EXPECTED
+
+    def test_a_view_lifetime_wins(self):
+        def own(request):
+            response = _html(request)
+            response['Cache-Control'] = 'private, max-age=60'
+            return response
+
+        assert _run(own, Purpose='prefetch')['Cache-Control'] == 'private, max-age=60'
+
     def test_a_view_that_said_never_cache_keeps_its_word(self):
         response = _run(never_cache(_html), Purpose='prefetch')
         assert 'no-cache' in response['Cache-Control']
