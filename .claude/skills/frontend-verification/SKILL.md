@@ -96,6 +96,8 @@ the `.nojs`/`.reduced` variants for any overlay or motion change.
 Don't use `--project=setup` on its own: Playwright adds it automatically as a
 dependency.
 
+**CI retries a failed test once** (`retries` in `playwright.config.js`, CI only; GitHub's WebKit runner stalls on a random test now and then). A test marked flaky in a green run is still a lead: look at it if it recurs.
+
 **A CI failure:** `gh run view <run-id> --log-failed | tail -100`. Don't re-run
 the whole suite locally to reproduce it; run only the failing spec.
 
