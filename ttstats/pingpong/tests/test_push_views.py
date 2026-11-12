@@ -207,6 +207,30 @@ class TestManifestView:
 
 
 @pytest.mark.django_db
+class TestBackgroundFetchesNeverMintACsrfCookie:
+    """`/sw.js` and the manifest are fetched by the browser in the background
+    (worker update checks, the back-online probe), sometimes without cookies.
+    Rendered with the request's context processors they called `get_token`
+    and answered with a fresh `csrftoken`, which replaced the one the open
+    login form was rendered with: the next login 403'd (KAN-131 CI, WebKit).
+    """
+
+    @pytest.mark.parametrize("url_name", ["service_worker", "manifest"])
+    def test_no_csrf_cookie_without_one(self, client, url_name):
+        response = client.get(reverse(url_name))
+        assert response.status_code == 200
+        assert "csrftoken" not in response.cookies
+
+    @pytest.mark.parametrize("url_name", ["service_worker", "manifest"])
+    def test_no_csrf_cookie_for_a_logged_in_user_either(self, client, url_name):
+        player = PlayerFactory(with_user=True)
+        client.force_login(player.user)
+        response = client.get(reverse(url_name))
+        assert response.status_code == 200
+        assert "csrftoken" not in response.cookies
+
+
+@pytest.mark.django_db
 class TestPushSubscribeView:
     def test_requires_login(self, client):
         response = client.post(

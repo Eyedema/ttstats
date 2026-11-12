@@ -3774,7 +3774,28 @@ class LiveSyncView(LoginRequiredMixin, View):
 # PWA + Web Push
 # ---------------------------------------------------------------------------
 
-class ServiceWorkerView(TemplateView):
+class _RenderedWithoutRequestMixin:
+    """Render the template without the request, so no context processor runs.
+
+    `/sw.js` and the manifest are not pages: the browser fetches them in the
+    background (worker update checks, the back-online probe), sometimes with
+    no cookies. With the request's context processors they called
+    `get_token`, and a cookie-less fetch got a freshly minted `csrftoken`
+    that replaced the one an open form was rendered with -- the next login
+    403'd (KAN-131). Neither template needs anything from the request.
+    """
+
+    def render_to_response(self, context, **response_kwargs):
+        from django.template.loader import render_to_string
+
+        context.pop("view", None)
+        return HttpResponse(
+            render_to_string(self.template_name, context),
+            content_type=self.content_type,
+        )
+
+
+class ServiceWorkerView(_RenderedWithoutRequestMixin, TemplateView):
     """Serve the service worker from the site root.
 
     This is a Django view rather than a static file on purpose. A worker's
@@ -3817,7 +3838,7 @@ class OfflinePageView(View):
         return response
 
 
-class ManifestView(TemplateView):
+class ManifestView(_RenderedWithoutRequestMixin, TemplateView):
     """The web app manifest, rendered so icon URLs go through {% static %}.
 
     Hardcoding `/static/...` here would break under prod's hashing manifest

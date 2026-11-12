@@ -21,7 +21,10 @@ raises). `notifications.py` is the vocabulary (what each event says, to whom).
   unsubscribes every device.
 - **`/sw.js` and `/manifest.webmanifest` are Django views at the site root.** A
   worker under `/static/` could only control `/static/`; the manifest needs
-  `{% static %}` for hashed icon URLs.
+  `{% static %}` for hashed icon URLs. **Both render without the request**
+  (`_RenderedWithoutRequestMixin`): the browser fetches them in the
+  background, sometimes cookie-less, and a context processor's `get_token`
+  minted a `csrftoken` that broke the next login (403, KAN-131 CI).
 - **Registering the worker and supporting push are different capabilities.**
   iOS exposes `PushManager` only after install. `push.js` splits `swSupported`
   from `pushSupported`; don't re-merge them.
