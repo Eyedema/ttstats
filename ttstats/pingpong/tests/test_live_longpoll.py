@@ -625,12 +625,15 @@ class TestGunicornConfig:
         lines = (REPO_ROOT / "requirements.txt").read_text().splitlines()
         assert any(re.fullmatch(r"gunicorn==\d+\.\d+\.\d+", line.strip()) for line in lines)
 
-    def test_e2e_runs_the_same_worker_class(self):
+    def test_e2e_stays_on_runserver(self):
+        """Not gthread: one SQLite file under 8 threads made the e2e suite
+        flaky on CI (build-and-deploy.md). runserver has no request timeout
+        and unbounded threads, so a held long-poll there needs no budget."""
         text, _ = self._flags("scripts/e2e_server.sh")
-        assert "--worker-class gthread" in text
+        assert "manage.py runserver" in text
+        assert "gunicorn" not in text.split("exec", 1)[1]
 
-    @pytest.mark.parametrize("path", ["docker/django/entrypoint.sh", "scripts/e2e_server.sh"])
-    def test_timeout_outlives_the_wait_and_the_client_abort(self, path, settings):
-        _, timeout = self._flags(path)
+    def test_timeout_outlives_the_wait_and_the_client_abort(self, settings):
+        _, timeout = self._flags("docker/django/entrypoint.sh")
         assert timeout is not None
         assert int(timeout.group(1)) > settings.LIVE_LONGPOLL_WAIT + live_longpoll.ABORT_SLACK

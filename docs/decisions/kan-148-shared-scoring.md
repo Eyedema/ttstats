@@ -121,8 +121,13 @@ never wakes to uncommitted data and a 40-op batch is one write.
   `(LIVE_LONGPOLL_WAIT + live_longpoll.ABORT_SLACK) * 1000` = 25 000: the
   client's own timer already includes the 5 s slack, so it types no number.
 - The service worker passes `/live/state/` through (`tests/js/sw_routes.test.mjs`).
-- The e2e server runs gunicorn gthread with **one** worker: its cache is
-  LocMemCache and its database SQLite, both per process.
+- The e2e server was moved to gunicorn gthread and **moved back to
+  `runserver`** before release: CI's WebKit job failed four runs running.
+  Under 8 threads one SQLite file meant write-lock errors; with IMMEDIATE
+  transactions, ~300 ms busy waits per request, which let a late CSRF-refresh
+  response re-set an old `csrftoken` cookie (login 403); and gunicorn's 2 s
+  keep-alive reset sockets Playwright's `route.fetch` reused. gthread itself is
+  pinned by pytest; the e2e suite tests the browser, not the worker class.
 
 ### The path to real push: contextvars
 
