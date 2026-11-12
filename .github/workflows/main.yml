@@ -22,6 +22,7 @@ jobs:
     outputs:
       py_changed: ${{ steps.check_files.outputs.py_changed }}
       assets_changed: ${{ steps.check_files.outputs.assets_changed }}
+      e2e_needed: ${{ steps.check_files.outputs.e2e_needed }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -62,6 +63,18 @@ jobs:
           else
             echo "No frontend files were changed"
             echo "assets_changed=false" >> $GITHUB_OUTPUT
+          fi
+
+          # The browser suite only cares about Python the server runs. A commit
+          # touching only pytest files (or conftest) cannot change a page, so
+          # it skips the ~10 runner-minutes of e2e. Assets still always count,
+          # and so does this workflow: a change to how e2e runs must run it.
+          APP_PY=$(echo "$CHANGED_FILES" | grep "\.py$" | grep -vE "(^|/)tests/|(^|/)conftest\.py$" || true)
+          if [ -n "$APP_PY" ] || grep -q "^assets_changed=true" $GITHUB_OUTPUT \
+             || echo "$CHANGED_FILES" | grep -q "^\.github/workflows/"; then
+            echo "e2e_needed=true" >> $GITHUB_OUTPUT
+          else
+            echo "e2e_needed=false" >> $GITHUB_OUTPUT
           fi
 
   test:
@@ -215,31 +228,41 @@ jobs:
   # Note the job itself always runs and gates its own steps, rather than being
   # skipped by an `if:` at the job level. A skipped job causes everything that
   # `needs` it to skip too, which would silently take the deploy with it.
+  #
+  # Split across 4 runners. The suite is serial within a runner (workers: 1,
+  # one SQLite file), but each shard boots its own server and database, so
+  # shards share nothing. Playwright runs the `setup` (login) dependency in
+  # every shard. `needs: e2e` waits for all four.
   e2e:
-    name: Browser tests (WebKit / iPhone)
+    name: Browser tests (WebKit / iPhone) ${{ matrix.shard }}/4
     needs: changes
     runs-on: ubuntu-latest
+    strategy:
+      # Let the other shards finish so one failure shows the whole picture.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Set up Node
-        if: needs.changes.outputs.py_changed == 'true' || needs.changes.outputs.assets_changed == 'true'
+        if: needs.changes.outputs.e2e_needed == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
 
       - name: Set up Python
-        if: needs.changes.outputs.py_changed == 'true' || needs.changes.outputs.assets_changed == 'true'
+        if: needs.changes.outputs.e2e_needed == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
           cache: 'pip'
 
       - name: Install dependencies
-        if: needs.changes.outputs.py_changed == 'true' || needs.changes.outputs.assets_changed == 'true'
+        if: needs.changes.outputs.e2e_needed == 'true'
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
@@ -249,12 +272,12 @@ jobs:
       # the client that shipped with it, so a bare "playwright" key would serve
       # a stale binary after an upgrade.
       - name: Resolve Playwright version
-        if: needs.changes.outputs.py_changed == 'true' || needs.changes.outputs.assets_changed == 'true'
+        if: needs.changes.outputs.e2e_needed == 'true'
         id: pw
         run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> $GITHUB_OUTPUT
 
       - name: Cache Playwright browsers
-        if: needs.changes.outputs.py_changed == 'true' || needs.changes.outputs.assets_changed == 'true'
+        if: needs.changes.outputs.e2e_needed == 'true'
         id: pw_cache
         uses: actions/cache@v4
         with:
@@ -266,40 +289,40 @@ jobs:
       # installing all three roughly triples this step.
       - name: Install WebKit
         if: >-
-          (needs.changes.outputs.py_changed == 'true' || needs.changes.outputs.assets_changed == 'true')
+          needs.changes.outputs.e2e_needed == 'true'
           && steps.pw_cache.outputs.cache-hit != 'true'
         run: npx playwright install --with-deps webkit
 
       - name: Install WebKit system deps (cached browser)
         if: >-
-          (needs.changes.outputs.py_changed == 'true' || needs.changes.outputs.assets_changed == 'true')
+          needs.changes.outputs.e2e_needed == 'true'
           && steps.pw_cache.outputs.cache-hit == 'true'
         run: npx playwright install-deps webkit
 
       # scripts/e2e_server.sh rebuilds the CSS, migrates a throwaway SQLite
       # file and seeds the fixture; Playwright starts and stops it.
       - name: Run Playwright suite
-        if: needs.changes.outputs.py_changed == 'true' || needs.changes.outputs.assets_changed == 'true'
+        if: needs.changes.outputs.e2e_needed == 'true'
         env:
           E2E_PYTHON: python
           SECRET_KEY: "test-secret-key-for-ci-only"
-        run: npx playwright test --project=setup --project=iphone-safari --project=iphone-pwa --project=iphone-no-js --project=iphone-reduced
+        run: npx playwright test --project=setup --project=iphone-safari --project=iphone-pwa --project=iphone-no-js --project=iphone-reduced --shard=${{ matrix.shard }}/4
 
       - name: Upload Playwright report
         if: >-
           failure()
-          && (needs.changes.outputs.py_changed == 'true' || needs.changes.outputs.assets_changed == 'true')
+          && needs.changes.outputs.e2e_needed == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-report
+          name: playwright-report-${{ matrix.shard }}
           path: |
             playwright-report/
             test-results/
           retention-days: 14
 
       - name: Skip message
-        if: needs.changes.outputs.py_changed == 'false' && needs.changes.outputs.assets_changed == 'false'
-        run: echo "⏭️  Skipping browser tests - no Python or frontend files were changed" >> $GITHUB_STEP_SUMMARY
+        if: needs.changes.outputs.e2e_needed != 'true'
+        run: echo "⏭️  Skipping browser tests - no app Python or frontend files were changed" >> $GITHUB_STEP_SUMMARY
 
   # The image is built here, on a 16GB runner, instead of on the 3.7GB VPS.
   # Building there spiked memory hard enough to reach the OOM killer and made a
