@@ -240,7 +240,7 @@ TTSTATS_FLAGS_ON=tenancy_canary
 ```
 
 ```bash
-dcp up -d web        # restart to pick up the env
+WEB_IMAGE="$IMAGE" SENTRY_RELEASE="${IMAGE##*:}" dcp up -d web   # IMAGE: see glicko2-cutover.md "Restarting web"; a bare up runs :latest
 ```
 
 **Verify:** as the overridden user, walk the full smoke checklist. Then:
@@ -269,7 +269,7 @@ TTSTATS_FLAGS_ON=clubs,tenancy_canary
 ```
 
 ```bash
-dcp up -d web
+WEB_IMAGE="$IMAGE" SENTRY_RELEASE="${IMAGE##*:}" dcp up -d web
 dweb shell -c "from pingpong import flags; print(flags.is_enabled('clubs'))"   # True
 ```
 
@@ -285,7 +285,7 @@ canary cannot detect a filter applied to the *wrong* club; a human can.
 
 **Gate before step 7:** a week of no canary lines and no user reports.
 
-**Rollback:** remove `clubs` from `TTSTATS_FLAGS_ON`, `dcp up -d web`. Previous
+**Rollback:** remove `clubs` from `TTSTATS_FLAGS_ON` and restart web pinned to the running image (never a bare `dcp up -d web`). Previous
 behaviour returns within one request. **No deploy and no migration** — this is
 what the whole flag apparatus is for.
 
