@@ -41,7 +41,8 @@
 
   var VERSION = 1;
   var KEY_PREFIX = 'ttstats:live-outbox:v' + VERSION + ':';
-  var OP_TYPES = ['start', 'point', 'undo', 'side_switch'];
+  // take_over / release: KAN-154 (who scores the other side).
+  var OP_TYPES = ['start', 'point', 'undo', 'side_switch', 'take_over', 'release'];
 
   function storageKey(matchPk, userId) {
     return KEY_PREFIX + String(matchPk) + ':' + String(userId);
@@ -238,6 +239,17 @@
         var before = ops.length;
         ops = ops.filter(function (op) { return op.seq !== seq; });
         if (ops.length !== before) save();
+      },
+
+      // Shared scoring (KAN-153): the server's stream stops at `appliedSeq`
+      // but this outbox's first pending op is further on, so the ops in
+      // between are lost for good. Renumber what is left, in order, from
+      // appliedSeq + 1 so it can still be sent. Never drops an op.
+      renumberAfter: function (appliedSeq) {
+        var next = (Number.isInteger(appliedSeq) ? appliedSeq : 0) + 1;
+        ops = ops.map(function (op, i) { return Object.assign(copyOp(op), { seq: next + i }); });
+        lastSeq = ops.length ? next + ops.length - 1 : Math.max(lastSeq, next - 1);
+        save();
       },
 
       snapshot: function () {

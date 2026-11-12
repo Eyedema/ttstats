@@ -27,11 +27,16 @@ DATABASES = {
         'HOST': os.environ.get('DB_HOST', 'db'),
         'PORT': os.environ.get('DB_PORT', '5432'),
         # Keep a worker's connection open between requests instead of paying
-        # a Postgres connect + auth on every one. Gunicorn runs 3 *sync*
-        # workers (docker/django/entrypoint.sh), one thread each, so this holds
-        # at most 3 idle connections plus whatever a cron job opens -- far
-        # under max_connections. Switching to gevent/threaded workers would
-        # make it one connection per greenlet/thread: revisit this then.
+        # a Postgres connect + auth on every one. Connections are per thread,
+        # and gunicorn runs gthread workers since KAN-168
+        # (docker/django/entrypoint.sh: GUNICORN_WORKERS=3 x
+        # GUNICORN_THREADS=8), so this holds at most 24 connections plus
+        # whatever a cron job or psql opens. The `db` service in
+        # compose.prod.yml is this app's alone and sets no max_connections,
+        # so Postgres's default of 100 applies: 60 s stays. A held long-poll
+        # closes its connection before waiting (views._release_db_connection),
+        # so waiting phones do not count against it. Raising workers x threads
+        # past ~80 means lowering this or raising max_connections.
         # DB_CONN_MAX_AGE=0 restores Django's close-after-every-request.
         'CONN_MAX_AGE': int(os.environ.get('DB_CONN_MAX_AGE', '60')),
         # A reused connection is pinged at the start of each request, so one
@@ -51,6 +56,9 @@ if REDIS_URL:
     SESSION_ENGINE = 'django.contrib.sessions.backends.cached_db'
 # Security settings for production
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+# Rate limits key on the client, not on Traefik: gunicorn's REMOTE_ADDR is
+# the proxy for every request. Last hop of X-Forwarded-For (ttstats/client_ip.py).
+RATELIMIT_IP_META_KEY = 'ttstats.client_ip.client_ip'
 SECURE_SSL_REDIRECT = True
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True

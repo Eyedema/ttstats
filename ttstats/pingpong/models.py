@@ -9,7 +9,7 @@ from django.db.models import Count, Exists, F, OuterRef, Q
 from django.utils import timezone
 
 from . import match_state, player_hues, seasons
-from .managers import ChampionshipManager, ClubDataManager, GameManager, LiveMatchManager, MatchManager, PlayerManager, ScheduledMatchManager, SeasonStandingManager
+from .managers import ChampionshipManager, ClubDataManager, GameManager, LiveLobbyManager, LiveMatchManager, MatchManager, PlayerManager, ScheduledMatchManager, SeasonStandingManager
 
 # Email verification token expires after 24 hours
 VERIFICATION_TOKEN_EXPIRY = timedelta(hours=24)
@@ -491,6 +491,11 @@ class Match(ClubStampedMixin, SideLabelMixin, models.Model):
     # duplicate is a retried match point arriving after it. Written with a
     # queryset ``.update()`` in the op's own transaction, like ``live_state``.
     live_applied_seq = models.PositiveIntegerField(null=True, blank=True)
+    # Match-wide revision of the live state (KAN-149): +1 for every op that
+    # changed it, from any scorer's stream. Duplicates, gaps and rule
+    # rejections leave it alone. Pollers compare it to decide whether to
+    # re-fetch. Written with the state, in the same queryset ``.update()``.
+    live_rev = models.PositiveIntegerField(default=0)
 
     # Set the first time the "match confirmed, here is your Elo" push goes
     # out. Three separate signal paths can reach that point for the same
@@ -560,6 +565,15 @@ class Match(ClubStampedMixin, SideLabelMixin, models.Model):
     @property
     def winner_label(self):
         return self.side_label(self.winner_side) if self.winner_side else ""
+
+    @property
+    def is_shared(self):
+        """True when more than one non-revoked ``LiveScorer`` writes to it.
+
+        Reads the prefetch cache when the live views loaded the scorers
+        (``live_ops.load_scorers``), so it costs nothing there.
+        """
+        return sum(1 for s in self.live_scorers.all() if s.revoked_at is None) > 1
 
     def players_on(self, side):
         """Players on one side of the match, read from MatchParticipant.
@@ -972,6 +986,16 @@ class PointEvent(models.Model):
     # server minutes late, so ``created_at`` (server time) stops meaning "when
     # it happened"; momentum and duration features should prefer this when set.
     client_recorded_at = models.DateTimeField(null=True, blank=True)
+    # Who tapped the point (KAN-150): the scorer whose stream applied it, on
+    # every match including single-scorer ones. Null on rows from before the
+    # field existed (never backfilled) and if the player is deleted.
+    recorded_by = models.ForeignKey(
+        "Player",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="recorded_points",
+    )
 
     class Meta:
         ordering = ["sequence"]
@@ -997,6 +1021,166 @@ class PointEvent(models.Model):
         if self.serving_side is None:
             return None
         return self.scoring_side == self.serving_side
+
+
+class LiveScorer(models.Model):
+    """One phone's op stream on a live match (KAN-149).
+
+    Every scorer numbers its own ops from 1 (``applied_seq`` is the highest
+    applied), so two phones scoring one match never look like gaps to each
+    other. The match row lock still serializes the streams.
+
+    A match with no rows at all is the legacy shape: its stream is
+    ``Match.live_applied_seq`` and its only scorer is ``Match.scorekeeper``.
+
+    **Not club-stamped.** It is only ever reached through a match that came
+    through the club-scoped manager, so it is transitively safe (like
+    ``PointEvent``).
+    """
+
+    class Role(models.TextChoices):
+        HOST = "host", "Host"
+        GUEST = "guest", "Guest"
+
+    match = models.ForeignKey(
+        Match, on_delete=models.CASCADE, related_name="live_scorers"
+    )
+    player = models.ForeignKey(
+        Player, on_delete=models.PROTECT, related_name="live_scorer_rows"
+    )
+    side = models.PositiveSmallIntegerField(choices=Side.choices)
+    role = models.CharField(max_length=8, choices=Role.choices)
+    applied_seq = models.PositiveIntegerField(default=0)
+    # True for a solo scorer, who scores both sides. The join flow (KAN-152)
+    # creates both rows with False; S13.6's takeover sets it on the survivor.
+    can_score_both = models.BooleanField(default=False)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    joined_at = models.DateTimeField(default=timezone.now)
+    # Presence. Written at most every live_ops.SEEN_EVERY, so polling does not
+    # turn into a write per poll.
+    last_seen_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["joined_at", "pk"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["match", "player"], name="uniq_live_scorer_match_player"
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.role} {self.player_id} on side {self.side} of match {self.match_id}"
+
+
+# How long a shared-scoring lobby's join link works (KAN-151). Long enough to
+# find the opponent and get them signed up; short enough that a link left in
+# a chat is dead by the next session at the table.
+LOBBY_TTL = timedelta(minutes=30)
+
+
+class LiveLobby(ClubStampedMixin, models.Model):
+    """A live match waiting for its opponent (KAN-151 / KAN-152).
+
+    The host starts it without picking anyone and shows a QR code of the join
+    link; whoever opens ``/pingpong/live/join/<token>/`` and is in the club
+    becomes side 2, and ``services.start_shared_match`` creates the match.
+
+    **The token is a bearer credential**, like ``ClubInvite.token``: shown
+    only on the host's lobby page, never logged, scrubbed from Sentry
+    (``TOKEN_PATH_PREFIXES``). Expiry is lazy: an open lobby past
+    ``expires_at`` *reads* as expired (``current_status``); no job flips it.
+    At most one open lobby per host, enforced by the database too.
+    """
+
+    class Status(models.TextChoices):
+        OPEN = "open", "Open"
+        JOINED = "joined", "Joined"
+        CANCELLED = "cancelled", "Cancelled"
+        EXPIRED = "expired", "Expired"
+
+    host = models.ForeignKey(
+        Player, on_delete=models.PROTECT, related_name="live_lobbies"
+    )
+    club = models.ForeignKey(
+        "Club",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        db_index=True,
+        related_name="live_lobbies",
+    )
+    best_of = models.IntegerField(default=5)
+    location = models.ForeignKey(
+        Location, on_delete=models.SET_NULL, null=True, blank=True
+    )
+    token = models.CharField(max_length=64, unique=True, db_index=True)
+    status = models.CharField(
+        max_length=10, choices=Status.choices, default=Status.OPEN
+    )
+    match = models.OneToOneField(
+        Match,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="lobby",
+    )
+    # KAN-157: listed on Today for the rest of the club, who can join by pk
+    # without the token. The host opts out on the match form; off means only
+    # a token holder can join.
+    open_to_club = models.BooleanField(default=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    expires_at = models.DateTimeField()
+
+    all_objects = models.Manager()
+    objects = LiveLobbyManager()
+
+    class Meta:
+        default_manager_name = "objects"
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["host"],
+                condition=Q(status="open"),
+                name="uniq_open_lobby_per_host",
+            )
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self.token:
+            self.token = uuid.uuid4().hex
+        if self.expires_at is None:
+            self.expires_at = (self.created_at or timezone.now()) + LOBBY_TTL
+        super().save(*args, **kwargs)
+
+    @property
+    def is_expired(self):
+        return timezone.now() >= self.expires_at
+
+    @property
+    def current_status(self):
+        """The status as of now: an open lobby past its expiry reads as expired."""
+        if self.status == self.Status.OPEN and self.is_expired:
+            return self.Status.EXPIRED
+        return self.status
+
+    @property
+    def is_open(self):
+        return self.current_status == self.Status.OPEN
+
+    @property
+    def ended_reason(self):
+        """Why the link no longer works, in words the holder can act on."""
+        status = self.current_status
+        if status == self.Status.EXPIRED:
+            return "This link has expired. Ask for a new code."
+        if status == self.Status.CANCELLED:
+            return "This match was cancelled. Ask for a new code."
+        if status == self.Status.JOINED:
+            return "Someone else has already joined this match."
+        return ""
+
+    def __str__(self):
+        return f"Lobby {self.pk} by player {self.host_id} ({self.current_status})"
 
 
 class MatchPointSummary(models.Model):

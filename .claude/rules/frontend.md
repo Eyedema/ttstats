@@ -197,7 +197,7 @@ tap that never registered.
 ## Page weight and speed (KAN-119)
 
 - **The e2e server serves static the way prod does** (`settings/e2e.py`:
-  manifest + gzip storage, WhiteNoise, `runserver --nostatic`), so a template
+  manifest + gzip storage, WhiteNoise, gunicorn gthread as in prod), so a template
   naming a file missing from the manifest 500s in e2e as it would in prod.
 - **Byte budgets live in `tests/e2e/budgets.spec.js`** (WebKit, cold cache,
   compressed bytes from `request.sizes()`). A story that makes a page lighter

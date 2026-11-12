@@ -308,6 +308,17 @@ class ScheduledMatchManager(ScopedManagerMixin, models.Manager):
         return qs.filter(mine | Exists(championship_qs))
 
 
+class LiveLobbyManager(ScopedManagerMixin, models.Manager):
+    """Shared-scoring lobbies (KAN-151): a host sees their own, in their club.
+
+    The joiner is not the host, so the join view looks the token up through
+    ``LiveLobby.all_objects`` and checks the club itself (KAN-24 audit).
+    """
+
+    def _scope_to_user(self, qs, player):
+        return qs.filter(host=player)
+
+
 class ClubDataManager(ScopedManagerMixin, models.Manager):
     """Club-owned rows with no participation dimension: `Season`, `PlayerRating`.
 

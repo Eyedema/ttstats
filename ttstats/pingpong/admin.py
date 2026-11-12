@@ -19,6 +19,7 @@ from .models import (
     FeatureFlagOverride,
     Game,
     JobRun,
+    LiveLobby,
     Location,
     Match,
     MatchConfirmation,
@@ -837,6 +838,23 @@ class ChampionshipAdmin(admin.ModelAdmin):
         return obj._participant_count
 
     participant_count.short_description = "Participants"
+
+
+@admin.register(LiveLobby)
+class LiveLobbyAdmin(admin.ModelAdmin):
+    """Shared-scoring lobbies (KAN-151). Read-mostly: the token is a bearer
+    credential, so it is shown read-only and never editable or searchable."""
+
+    list_display = ("pk", "host", "club", "best_of", "status", "created_at", "expires_at", "match")
+    list_filter = ("status",)
+    search_fields = ("host__name",)
+    raw_id_fields = ("host", "match", "location")
+    readonly_fields = ("token", "created_at", "current_status")
+
+    def current_status(self, obj):
+        return obj.current_status
+
+    current_status.short_description = "Status now"
 
 
 @admin.register(EloHistory)

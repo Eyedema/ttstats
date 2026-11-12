@@ -51,6 +51,13 @@ class TestScrubUrl:
         assert "deadbeefcafe" not in scrubbed
         assert scrubbed == "https://x.test/pingpong/join/[redacted]/"
 
+    def test_redacts_a_shared_scoring_join_token(self):
+        """KAN-152: the lobby's join link is a bearer credential too."""
+        assert "live/join" in sentry.TOKEN_PATH_PREFIXES
+        scrubbed = sentry.scrub_url("https://x.test/pingpong/live/join/0123abcd/")
+        assert "0123abcd" not in scrubbed
+        assert scrubbed == "https://x.test/pingpong/live/join/[redacted]/"
+
     def test_redacts_an_email_verification_token(self):
         scrubbed = sentry.scrub_url("/pingpong/verify-email/abc123/")
         assert "abc123" not in scrubbed

@@ -46,6 +46,12 @@ async function applyProdCSP(page) {
       // was in flight (the scoreboard's CSRF refresh, KAN-81): Playwright
       // then continued it itself, without the policy. Anything else is a
       // real failure.
+      if (/socket hang up|ECONNRESET|ECONNREFUSED|EPIPE/i.test(String(err))) {
+        // The network itself failed (the offline proxy, KAN-155): to the
+        // page that is a failed request, as on a phone in a dead zone.
+        await route.abort('failed').catch(() => {});
+        return;
+      }
       if (!/disposed|Test ended|closed|already handled/i.test(String(err))) throw err;
     }
   });

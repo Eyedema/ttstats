@@ -67,23 +67,24 @@ docker compose -f compose.prod.yml up --build -d
 ### Factory Reference (`conftest.py`)
 
 ```python
-UserFactory(username="...", is_staff=True, ...)  # Creates User via create_user(), password="testpass123"
-PlayerFactory(name="...", with_user=True)        # with_user=True creates and links a User
+UserFactory(username="...", is_staff=True, ...)  # create_user(), password="testpass123"
+PlayerFactory(name="...", with_user=True)        # Also creates and links a User
 LocationFactory(name="...")
-MatchFactory(player1=p1, player2=p2, best_of=5)  # Singles: one player per side
+MatchFactory(player1=p1, player2=p2, best_of=5)  # Singles
 MatchFactory(team1_players=[p1,p2], team2_players=[p3,p4], is_double=True)  # Doubles match
-MatchFactory(confirmed=True)                     # Auto-confirms match after creation
+MatchFactory(confirmed=True)                     # Auto-confirmed
 GameFactory(match=m, game_number=1, team1_score=11, team2_score=5)
 ScheduledMatchFactory(player1=p1, player2=p2, scheduled_date=date, scheduled_time=time)
-ChampionshipFactory(name="...", with_entries=[[p1], [p2]], created_by=player)  # Round-robin championship
+ChampionshipFactory(name="...", with_entries=[[p1], [p2]], created_by=player)  # Round-robin; with_participants= aliases with_entries
+LiveScorerFactory(match=m, player=p)             # Guest stream, side 2
 ```
 
 `team1_players`/`team2_players` are historical names for side 1 / side 2.
-`ChampionshipFactory(with_participants=...)` is an alias for `with_entries`.
 
 Fixtures and helpers: `complete_match` (finished singles, 3-0 side 1, best of 5),
 `confirm_match(match)`, `confirm_match_silent(match)`,
-`create_match(side1_players, side2_players, **kwargs)`.
+`create_match(side1_players, side2_players, **kwargs)`,
+`live_match(shared=, started=)` (host scorer row included).
 
 ### Known Gotchas
 
@@ -92,11 +93,11 @@ Fixtures and helpers: `complete_match` (finished singles, 3-0 side 1, best of 5)
 3. **Signals fire on User creation.** Every `UserFactory()` creates a `UserProfile` with a verification token. Don't create profiles manually.
 4. **Game.save() triggers Match.save().** Creating enough games sets the match winner. Tests that check "no winner yet" must not create too many games.
 5. **Match confirmations use a junction table.** Singles need 2 confirmations, doubles 4 -- but only *verified* players count. Use `confirmed=True` in MatchFactory or `confirm_match()`.
-6. **Ratings update on confirmation only.** Use `confirm_match()` or `confirm_match_silent()` to trigger it.
-7. **Manager tests need thread-local manipulation.** Import `_thread_locals` from `ttstats.middleware`, set/clear `_thread_locals.user`, and clean up in an `autouse` fixture.
+6. **Ratings update on confirmation only** (`confirm_match()` / `confirm_match_silent()`).
+7. **Manager tests need thread-locals.** Set/clear `ttstats.middleware._thread_locals.user`; clean up in an `autouse` fixture.
 8. **`base.html` requires `user.player.pk`.** Every logged-in user in a view test needs a linked Player or rendering raises `NoReverseMatch`. Use `_staff_with_player()` for staff.
-9. **Emails in tests:** use `mailoutbox` or `django.core.mail.outbox`.
-10. **LocMemCache persists between tests.** The autouse `_clear_cache` fixture in `conftest.py` clears it before and after each test.
+9. **Emails in tests:** `mailoutbox`.
+10. **LocMemCache persists between tests.** The autouse `_clear_cache` fixture clears it around each test.
 11. **The `clubs` flag.** Forcing it on for the whole suite fails ~200 tests by design (pre-backfill fixtures with no club see nothing). Tenancy suites opt in per class.
 
 ### Required integration flows
@@ -110,6 +111,7 @@ When adding a feature, also add an integration test for its happy path. These mu
 5. Head-to-head with data (`test_views.py::TestHeadToHead*`)
 6. Club invite -> anonymous signup -> membership (`test_club_invites.py::TestAnonymousSignupThroughAnInvite`)
 7. Season: confirm -> leaderboard -> rollover job -> archive (`test_integration.py::TestSeasonLifecycleIntegration`)
+8. Shared scoring: lobby -> signup -> join -> both phones score -> confirm (`test_shared_scoring.py::TestSharedScoringIntegration`)
 
 ---
 

@@ -28,6 +28,8 @@ print(json.dumps({
     'conn_health_checks': db.get('CONN_HEALTH_CHECKS'),
     # Unset in prod.py means Django's default, the plain `db` engine.
     'session_engine': getattr(prod, 'SESSION_ENGINE', 'django.contrib.sessions.backends.db'),
+    'ratelimit_ip_meta_key': getattr(prod, 'RATELIMIT_IP_META_KEY', None),
+    'live_longpoll_max_held': getattr(prod, 'LIVE_LONGPOLL_MAX_HELD', None),
 }))
 """
 
@@ -36,7 +38,8 @@ def _prod_settings(**env):
     full = {
         key: value
         for key, value in os.environ.items()
-        if key not in ('REDIS_URL', 'DB_CONN_MAX_AGE', 'DJANGO_SETTINGS_MODULE')
+        if key not in ('REDIS_URL', 'DB_CONN_MAX_AGE', 'DJANGO_SETTINGS_MODULE',
+                       'GUNICORN_THREADS', 'LIVE_LONGPOLL_MAX_HELD')
     }
     full.update(REQUIRED_ENV)
     full.update(env)
@@ -76,3 +79,27 @@ class TestSessionEngine:
         s = _prod_settings()
 
         assert s['session_engine'] == 'django.contrib.sessions.backends.db'
+
+
+class TestClientIp:
+    def test_ratelimits_key_on_the_proxys_last_hop(self):
+        """Behind Traefik REMOTE_ADDR is the proxy, so `key='ip'` would be one
+        bucket for the whole site (5 failed logins locks everyone out)."""
+        s = _prod_settings()
+
+        assert s['ratelimit_ip_meta_key'] == 'ttstats.client_ip.client_ip'
+
+
+class TestHeldLongPolls:
+    def test_three_threads_per_process_stay_free_by_default(self):
+        assert _prod_settings()['live_longpoll_max_held'] == 5
+
+    def test_follows_the_thread_count(self):
+        assert _prod_settings(GUNICORN_THREADS='12')['live_longpoll_max_held'] == 9
+
+    def test_env_overridable(self):
+        assert _prod_settings(LIVE_LONGPOLL_MAX_HELD='2')['live_longpoll_max_held'] == 2
+
+    def test_never_below_one(self):
+        assert _prod_settings(GUNICORN_THREADS='2')['live_longpoll_max_held'] == 1
+

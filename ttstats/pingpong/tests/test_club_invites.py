@@ -431,6 +431,11 @@ class TestAnonymousSignupThroughAnInvite:
         assert club.user_is_member(user)
         assert club.role_for(user) == ClubRole.MEMBER
         assert Player.objects.filter(user=user).exists()
+        # The new Player is in the club too. At signup the request is
+        # anonymous, so a write through the scoped manager would match no row
+        # and leave the club NULL: the player would then be hidden from its
+        # own owner ("You must have a player profile").
+        assert Player._base_manager.get(user=user).club_id == club.pk
 
         # 4. Registration's own behaviour is untouched -- not forked.
         assert len(mailoutbox) == 1

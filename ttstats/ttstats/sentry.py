@@ -44,7 +44,9 @@ logger = logging.getLogger(__name__)
 # are replaced with [redacted] before an event is sent. See the module
 # docstring: this list is the whole defence, so a new token-bearing URL has to
 # be added here at the same time it is added to urls.py.
-TOKEN_PATH_PREFIXES = ("join", "verify-email")
+# "live/join" (KAN-152) is also caught by "join"; it is listed so the
+# shared-scoring link is covered by name, not by coincidence.
+TOKEN_PATH_PREFIXES = ("join", "verify-email", "live/join")
 
 _TOKEN_PATH_RE = re.compile(
     r"(/(?:%s)/)[^/?#]+" % "|".join(re.escape(p) for p in TOKEN_PATH_PREFIXES)
