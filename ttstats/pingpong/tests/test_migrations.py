@@ -407,3 +407,74 @@ class TestClientRecordedAtMigration:
 
         _migrate_to(CLIENT_RECORDED_AT)
         assert "client_recorded_at" in _columns("pingpong_pointevent")
+
+
+LIVE_SCORER = "0049_live_scorer"
+
+
+@pytest.mark.django_db(transaction=True)
+class TestLiveScorerMigration:
+    """KAN-158: the table, ``Match.live_rev``, and host rows for the matches
+    that were live at deploy time -- forward, backward and forward again."""
+
+    def _old(self):
+        return MigrationExecutor(connection).loader.project_state(
+            (APP, CLIENT_RECORDED_AT)
+        ).apps
+
+    def _world(self):
+        """At 0048: one live match (scorekeeper on side 2, seq 4), one live
+        match whose scorekeeper is not a participant (staff umpire), and one
+        finished live-scored match."""
+        apps = self._old()
+        Player = apps.get_model(APP, "Player")
+        Match = apps.get_model(APP, "Match")
+        Participant = apps.get_model(APP, "MatchParticipant")
+        p1 = Player._base_manager.create(name="Mig One")
+        p2 = Player._base_manager.create(name="Mig Two")
+        umpire = Player._base_manager.create(name="Mig Umpire")
+
+        def match(**fields):
+            m = Match._base_manager.create(best_of=5, **fields)
+            Participant.objects.create(match=m, player=p1, side=1)
+            Participant.objects.create(match=m, player=p2, side=2)
+            return m.pk
+
+        live = match(is_live=True, scorekeeper=p2, live_applied_seq=4, live_state={"x": 1})
+        umpired = match(is_live=True, scorekeeper=umpire, live_state={"x": 1})
+        finished = match(is_live=False, scorekeeper=p1, live_applied_seq=9)
+        return live, umpired, finished, p2.pk, umpire.pk
+
+    def test_forward_backward_forward(self, at_head):
+        _migrate_to(CLIENT_RECORDED_AT)
+        live, umpired, finished, p2, umpire = self._world()
+
+        _migrate_to(LIVE_SCORER)
+        from pingpong.models import LiveScorer, Match
+
+        assert "live_rev" in _columns("pingpong_match")
+        row = LiveScorer.objects.get(match_id=live)
+        assert (row.player_id, row.side, row.role) == (p2, 2, "host")
+        assert row.applied_seq == 4
+        assert row.can_score_both is True
+        assert row.revoked_at is None
+        umpire_row = LiveScorer.objects.get(match_id=umpired)
+        assert (umpire_row.player_id, umpire_row.side, umpire_row.applied_seq) == (umpire, 1, 0)
+        # Only matches live at deploy time: the finished one stays row-less.
+        assert not LiveScorer.objects.filter(match_id=finished).exists()
+
+        # The host's stream advances after the deploy, past the mirror.
+        LiveScorer.objects.filter(pk=row.pk).update(applied_seq=7)
+
+        _migrate_to(CLIENT_RECORDED_AT)
+        assert "pingpong_livescorer" not in _tables()
+        assert "live_rev" not in _columns("pingpong_match")
+        old_match = self._old().get_model(APP, "Match")
+        # Reversal hands the stream back to the match column, so the old code
+        # dedupes against the highest seq any phone had applied.
+        assert old_match._base_manager.get(pk=live).live_applied_seq == 7
+        assert old_match._base_manager.get(pk=finished).live_applied_seq == 9
+
+        _migrate_to(LIVE_SCORER)
+        assert LiveScorer.objects.get(match_id=live).applied_seq == 7
+        assert Match.all_objects.get(pk=live).live_rev == 0

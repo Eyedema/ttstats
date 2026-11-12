@@ -6,6 +6,10 @@ paths:
   - "ttstats/pingpong/templates/pingpong/club_*.html"
   - "ttstats/pingpong/tests/test_club*.py"
   - "tests/e2e/club-*.spec.js"
+  - "ttstats/pingpong/live_lobby_views.py"
+  - "ttstats/pingpong/templates/pingpong/live_join.html"
+  - "ttstats/pingpong/tests/test_shared_scoring.py"
+  - "ttstats/ttstats/sentry.py"
 ---
 
 # Clubs: switcher, invites, roles
@@ -49,6 +53,34 @@ It lives in `_nav_menu.html`, rendered by both the drawer and the desktop sideba
 - **The generated link is shown once**, on the redirect after creation.
 - New token-bearing routes must be added to `TOKEN_PATH_PREFIXES` in
   `ttstats/sentry.py` in the same commit.
+
+## A shared-scoring join link is a bearer credential too
+
+`LiveLobby` + `/pingpong/live/join/<token>/` (KAN-152, `live_lobby_views.py`)
+follows every rule above: `uuid4().hex`, `all_objects` lookup by token then
+`compare_digest`, `20/h` on GET per user (per IP when anonymous; an
+anonymous POST is bounced to the GET unlooked-up), parked in the session
+(`pending_live_join`), registration hooked (`consume_pending_live_join`, after
+`consume_pending_invite`), a real page per dead reason, `live/join` in
+`TOKEN_PATH_PREFIXES`.
+
+- **Login comes back via `live/join/` (resume), never `?next=<join URL>`**, so
+  the token is in no URL but its own. The token is shown only on the host's
+  lobby page (pinned to the host even for staff) and only while open.
+- **Membership of the lobby's club is checked before joining**, and only then
+  `set_active_club`; the match gets `club=lobby.club` explicitly.
+- **Signup never logs in, a join link included**: with a parked, open lobby
+  in a club the new account is in, the token stays parked and the "verify
+  your email" page says the match is waiting. Verifying in this browser
+  (`EmailVerifyView`) or a login without its own `next` (`CustomLoginView`)
+  resumes via `pending_live_join_url` -> `live/join/`. An unverified session
+  could create auto-confirming matches against verified clubmates and
+  register a passkey, bypassing verification for good.
+- The claim is a conditional `.update()` (`start_shared_match`), like `claim()`.
+- **The Today card's join is not a credential path** (KAN-157):
+  `live/lobby/<pk>/join/` finds the lobby through `scope_to_active_club` and
+  only if the host left `open_to_club` on; it shares `_resolve_join` and
+  `start_shared_match` with the link and never renders the token.
 
 ## Club roles
 

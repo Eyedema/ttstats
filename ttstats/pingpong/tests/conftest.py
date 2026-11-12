@@ -6,8 +6,9 @@ from django.core.cache import cache as django_cache
 from django.test import Client
 from factory.django import DjangoModelFactory
 
-from pingpong.models import Championship, ChampionshipEntry, ChampionshipEntryMember, Club, ClubMembership, ClubRole, Game, JobRun, Location, Match, MatchConfirmation, Player, PlayerRating, ScheduledMatch, Season, SeasonStanding
-from pingpong.services import set_match_sides, set_scheduled_match_sides
+from pingpong import live_scoring
+from pingpong.models import Championship, ChampionshipEntry, ChampionshipEntryMember, Club, ClubMembership, ClubRole, Game, JobRun, LiveLobby, LiveScorer, Location, Match, MatchConfirmation, Player, PlayerRating, ScheduledMatch, Season, SeasonStanding, Side
+from pingpong.services import create_live_match, set_match_sides, set_scheduled_match_sides
 
 
 # ---------------------------------------------------------------------------
@@ -193,6 +194,34 @@ class MatchFactory(DjangoModelFactory):
         return match
 
 
+class LiveScorerFactory(DjangoModelFactory):
+    """A phone's op stream on a live match (KAN-149).
+
+    Defaults to a guest on side 2; pass ``role=LiveScorer.Role.HOST`` and
+    ``side=Side.ONE`` for a host. ``live_match()`` creates the host row for
+    you -- use this for the second scorer, or for a hand-built shape.
+    """
+
+    class Meta:
+        model = LiveScorer
+
+    match = factory.SubFactory(MatchFactory, is_live=True)
+    player = factory.SubFactory(PlayerFactory, with_user=True)
+    side = Side.TWO
+    role = LiveScorer.Role.GUEST
+
+
+class LiveLobbyFactory(DjangoModelFactory):
+    """A shared-scoring lobby (KAN-151), open for ``LOBBY_TTL``. Pass
+    ``club=`` explicitly in tenancy tests; the token is generated on save."""
+
+    class Meta:
+        model = LiveLobby
+
+    host = factory.SubFactory(PlayerFactory, with_user=True)
+    best_of = 5
+
+
 class GameFactory(DjangoModelFactory):
     class Meta:
         model = Game
@@ -297,6 +326,40 @@ def create_match(side1_players, side2_players, **kwargs):
     match = Match.objects.create(**kwargs)
     set_match_sides(match, side1_players, side2_players)
     match.save()
+    return match
+
+
+def live_match(player1=None, player2=None, *, best_of=5, started=False,
+               initial_server="team1", shared=False, verified=True, **match_kwargs):
+    """A live singles match created the way production creates one.
+
+    Goes through ``services.create_live_match``, so it carries its host
+    ``LiveScorer`` row (player1, side 1). ``shared=True`` adds player2 as a
+    guest scorer on side 2 and takes ``can_score_both`` off the host, the
+    shape the join flow (KAN-152) produces. ``started=True`` picks
+    ``initial_server``. Both players are email-verified unless
+    ``verified=False``.
+    """
+    player1 = player1 or PlayerFactory(with_user=True)
+    player2 = player2 or PlayerFactory(with_user=True)
+    if verified:
+        for p in (player1, player2):
+            if p.user_id:
+                p.user.profile.email_verified = True
+                p.user.profile.save()
+    match = create_live_match(
+        Match(best_of=best_of, **match_kwargs),
+        scorekeeper=player1,
+        side1_players=[player1],
+        side2_players=[player2],
+        can_score_both=not shared,
+    )
+    if shared:
+        LiveScorerFactory(match=match, player=player2, side=Side.TWO)
+    if started:
+        state = live_scoring.set_initial_server(match.live_state, initial_server)
+        Match.all_objects.filter(pk=match.pk).update(live_state=state)
+    match.refresh_from_db()
     return match
 
 

@@ -137,3 +137,19 @@ class TestRetiredFlagOverrides:
         assert not FeatureFlagOverride.objects.filter(
             name__in=["seasons", "glicko2"]
         ).exists()
+
+
+@pytest.mark.django_db
+class TestSharedLiveMatch:
+    """KAN-153: a two-phone live match for the "my side" scoreboard specs."""
+
+    def test_one_shared_live_match_survives_a_reseed(self):
+        _seed()
+        _seed()
+        shared = [
+            m for m in Match.all_objects.filter(is_live=True, scorekeeper__name="E2E Player")
+            if m.is_shared
+        ]
+        assert len(shared) == 1
+        rows = {(s.player.name, s.side, s.can_score_both) for s in shared[0].live_scorers.all()}
+        assert rows == {("E2E Player", 1, False), ("E2E Partner", 2, False)}

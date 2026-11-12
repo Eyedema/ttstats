@@ -34,6 +34,7 @@ from .conftest import (
     ClubFactory,
     ClubMembershipFactory,
     GameFactory,
+    LiveLobbyFactory,
     MatchFactory,
     PlayerFactory,
     ScheduledMatchFactory,
@@ -208,12 +209,41 @@ URL_EXPECTATIONS = {
     "live_side_switch": ("detail", "live_match"),
     "live_undo": ("detail", "live_match"),
     "live_sync": ("detail", "live_match"),
+    # KAN-154: the host removes a phone; the match is looked up like the
+    # other live routes (scoped all_objects), so another club's pk 404s.
+    "live_remove_scorer": ("detail", "live_match"),
+    # --- Shared scoring (KAN-151 / KAN-152) ----------------------------------
+    # The lobby is host-only through the scoped LiveLobby manager; another
+    # club's lobby pk 404s like any detail row.
+    "live_lobby": ("detail", "lobby"),
+    "live_lobby_status": ("detail", "lobby"),
+    "live_lobby_cancel": ("detail", "lobby"),
+    # KAN-157: the Today card's token-free join. all_objects scoped to the
+    # active club, so another club's lobby pk 404s; its own host gets the
+    # "your own lobby" page.
+    "live_lobby_join": ("detail", "lobby"),
+    "live_lobby_create": (
+        "agnostic",
+        "Creates a lobby stamped with the viewer's club; reads no club data. "
+        "Location choices are scoped (test_shared_scoring.py).",
+    ),
+    "live_join": (
+        "agnostic",
+        "Token-addressed like club_invite_accept: the token is the "
+        "authorization, it is rate limited, and joining requires membership "
+        "of the lobby's club (test_shared_scoring.py::TestJoinView).",
+    ),
+    "live_join_resume": (
+        "agnostic",
+        "Redirects to the join link parked in the viewer's own session.",
+    ),
 }
 
 # Which HTTP verb each route actually answers. A GET against a POST-only view
 # returns 405 and would pass a naive "not 200" assertion while testing nothing.
 POST_ONLY = {
     "match_confirm",
+    "live_lobby_cancel",
     "championship_register",
     "championship_unregister",
     "championship_start",
@@ -222,6 +252,7 @@ POST_ONLY = {
     "live_side_switch",
     "live_undo",
     "live_sync",
+    "live_remove_scorer",
     "push_subscribe",
     "push_unsubscribe",
     "push_test",
@@ -232,6 +263,12 @@ POST_ONLY = {
 PK_KWARG = {
     "game_add": "match_pk",
     "scheduled_match_convert": "scheduled_match_pk",
+}
+
+# Routes with a second kwarg besides the object's pk. Any value: the match
+# lookup (the tenancy boundary) runs first.
+EXTRA_KWARGS = {
+    "live_remove_scorer": {"player_pk": 1},
 }
 
 # A *valid* body for the endpoints that validate their payload before they look
@@ -319,6 +356,9 @@ class Tenant:
         )
         self.live_match.refresh_from_db()
 
+        # An open shared-scoring lobby hosted by this club's player (KAN-151).
+        self.lobby = LiveLobbyFactory(host=self.player, club=self.club)
+
         # An archived season with a frozen final table (KAN-51).
         from django.utils import timezone
 
@@ -342,6 +382,7 @@ class Tenant:
             "championship": self.championship.pk,
             "live_match": self.live_match.pk,
             "season": self.season.pk,
+            "lobby": self.lobby.pk,
         }[kind]
 
     def client(self):
@@ -377,7 +418,8 @@ def _url(name, tenant):
     if kind != "detail":
         return reverse(f"pingpong:{name}")
     kwarg = PK_KWARG.get(name, "pk")
-    return reverse(f"pingpong:{name}", kwargs={kwarg: tenant.pk_for(arg)})
+    kwargs = {kwarg: tenant.pk_for(arg), **EXTRA_KWARGS.get(name, {})}
+    return reverse(f"pingpong:{name}", kwargs=kwargs)
 
 
 def _fetch(client, name, url):

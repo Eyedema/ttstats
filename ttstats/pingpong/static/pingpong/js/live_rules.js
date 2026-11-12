@@ -160,7 +160,9 @@
     }
 
     // Returns [newState, completedGame]; completedGame is null unless the
-    // point ended a game. opts.now is the timestamp string to record.
+    // point ended a game. opts.now is the timestamp string to record;
+    // opts.by (KAN-150) is who recorded the point, stored on the event as
+    // "by" when given and read by no rule.
     function applyPoint(state, side, opts) {
       if (!hasServer(state)) {
         throw rulesError('Match has not started — initial_server not set');
@@ -189,6 +191,7 @@
       }
 
       var event = { side: side, t: timestamp, game: state.current_game_number };
+      if (opts && opts.by !== undefined && opts.by !== null) event.by = opts.by;
       if (completedGame !== null) {
         event.game_end = true;
         event.final_t1 = completedGame.team1_score;

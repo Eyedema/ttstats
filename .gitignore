@@ -54,6 +54,7 @@ test-results/
 playwright-report/
 ttstats/e2e.sqlite3
 tests/e2e/.auth/
+tests/e2e/.last-run/
 
 # Local demo dataset for design work (manage.py seed_demo) and the
 # screenshots taken from it. Both are regenerable and neither belongs in git.

@@ -232,6 +232,10 @@ FEATURE_FLAGS = {
     # the hottest path in the app, so it is separately killable without a
     # deploy -- and gated again by TENANCY_CANARY_SAMPLE_RATE below.
     'tenancy_canary': False,
+    # Two-phone live scoring: start a match without an opponent and hand them
+    # a QR code / join link (KAN-148). Gates only the entry points; a lobby
+    # already open keeps working if this is turned off.
+    'shared_scoring': False,
     # `seasons` (KAN-9) and `glicko2` (KAN-72) were retired by KAN-73: seasons
     # and Glicko-2 are always on. A stale name in TTSTATS_FLAGS_ON is ignored.
 }
@@ -247,6 +251,28 @@ for _flag_name in os.environ.get('TTSTATS_FLAGS_ON', '').split(','):
     _flag_name = _flag_name.strip()
     if _flag_name in FEATURE_FLAGS:
         FEATURE_FLAGS[_flag_name] = True
+
+# Shared live scoring (KAN-168): how long `GET .../live/state/?wait=1` holds a
+# request before answering 204. Must stay well under gunicorn's --timeout
+# (60, docker/django/entrypoint.sh); the client aborts at this plus
+# live_longpoll.ABORT_SLACK, a number it is sent and never types.
+LIVE_LONGPOLL_WAIT = 20
+
+# How many /live/state/?wait=1 requests one process may hold at once; past it
+# the poll answers 204 `X-Longpoll: busy` at once and the client backs off
+# ~1 s. GUNICORN_THREADS - 3 (5 of 8): held phones can never take every
+# thread, so ops and pages always have three. Never below 1.
+LIVE_LONGPOLL_MAX_HELD = max(1, int(os.environ.get(
+    'LIVE_LONGPOLL_MAX_HELD',
+    int(os.environ.get('GUNICORN_THREADS', '8')) - 3,
+)))
+
+# Presence of the other phone in a shared match (KAN-154), in seconds since
+# its last_seen_at: "in sync" under IN_SYNC, "last seen ... ago" past it, and
+# "not seen for ..." plus the "Score for both" action past LOST. Sent to the
+# scoreboard in its bootstrap (scoreboard-config.presence); never typed in JS.
+LIVE_PRESENCE_IN_SYNC = 10
+LIVE_PRESENCE_LOST = 120
 
 # Redis Cache Configuration
 REDIS_URL = os.environ.get('REDIS_URL')

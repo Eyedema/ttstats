@@ -1,0 +1,79 @@
+{% extends "pingpong/base.html" %}
+{% load icon_tags player_tags %}
+
+{% block title %}Join a live match - TTStats{% endblock %}
+{% block nav_title %}Join match{% endblock %}
+
+{% comment %}
+The join link (KAN-152), one template for every identity branch: `state` is
+invalid / ended / anonymous / own / not_member / confirm. A dead link always
+gets a real page with the specific reason, never a 500 or Django's 403
+(clubs.md: invite links are bearer credentials, and so is this one).
+{% endcomment %}
+
+{% block content %}
+<div class="mx-auto max-w-md space-y-5 py-6" data-testid="live-join" data-state="{{ state }}">
+
+  {% if state == "invalid" or state == "ended" %}
+  <div class="text-center space-y-4">
+    <div class="flex justify-center text-muted-foreground">{% icon "circle-x" css="w-10 h-10" %}</div>
+    <h2 class="text-title">This link doesn't work</h2>
+    <p class="text-muted-foreground">{% if state == "invalid" %}This join link is not valid.{% else %}{{ reason }}{% endif %}</p>
+    <a href="{% url 'pingpong:dashboard' %}" class="btn-paddle w-full min-h-[48px]">Go to Today</a>
+  </div>
+
+  {% else %}
+  <section class="surface p-4 space-y-1">
+    <p class="text-[18px] font-extrabold leading-tight">
+      {{ lobby.host.name }} wants to score a match with you
+    </p>
+    <p class="text-[14px] font-semibold text-muted-foreground">
+      Best of {{ lobby.best_of }}{% if lobby.club %} at {{ lobby.club.name }}{% endif %}{% if lobby.location %} · {{ lobby.location.name }}{% endif %}
+    </p>
+  </section>
+
+  {% if state == "anonymous" %}
+  <p class="text-[15px] font-semibold">Who are you? Log in or create an account, and you'll come straight back here.</p>
+  <div class="space-y-3">
+    <a href="{{ login_url }}" class="btn-paddle w-full min-h-[48px]">
+      {% icon "log-in" size="sm" %}<span>Log in</span>
+    </a>
+    <a href="{% url 'pingpong:signup' %}" class="btn-ghost w-full min-h-[48px]">
+      {% icon "user-plus" size="sm" %}<span>Create an account</span>
+    </a>
+  </div>
+
+  {% elif state == "own" %}
+  <p class="text-[15px] font-semibold">This is your own lobby. Show the code to your opponent.</p>
+  <a href="{% url 'pingpong:live_lobby' lobby.pk %}" class="btn-paddle w-full min-h-[48px]">Back to the code</a>
+
+  {% elif state == "not_member" %}
+  <p class="text-[15px] font-semibold">
+    You're not a member of {% if lobby.club %}{{ lobby.club.name }}{% else %}this club{% endif %}.
+    Ask {{ lobby.host.name }} to send you a club invite.
+  </p>
+  {% if email_sent_to %}<p class="text-[13px] text-muted-foreground">We've sent a verification link to {{ email_sent_to }}.</p>{% endif %}
+  <a href="{% url 'pingpong:dashboard' %}" class="btn-ghost w-full min-h-[48px]">Go to Today</a>
+
+  {% elif state == "confirm" %}
+  <div class="flex items-center gap-3">
+    <span class="{{ player|hue }} hue-bar w-1 h-10"></span>
+    <p class="text-[18px] font-extrabold">Join as {{ player.name }}?</p>
+  </div>
+  <form method="post" action="{{ join_path }}">
+    {% csrf_token %}
+    <button type="submit" class="btn-paddle w-full min-h-[48px]" data-testid="join-match">
+      {% icon "play" size="sm" %}<span>Join match</span>
+    </button>
+  </form>
+  <form method="post" action="{% url 'logout' %}">
+    {% csrf_token %}
+    <input type="hidden" name="next" value="{{ join_path }}">
+    <button type="submit" class="btn-quiet w-full min-h-[44px]">
+      {% icon "log-out" size="sm" %}<span>Not you? Log out</span>
+    </button>
+  </form>
+  {% endif %}
+  {% endif %}
+</div>
+{% endblock %}

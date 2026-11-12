@@ -19,6 +19,8 @@ File format (one sequence per line, so a diff names the sequences that moved):
   ``steps[0]`` describes ``initial_state(best_of)`` and ``steps[i + 1]``
   follows ``ops[i]``. Ops are ``["start", side]``, ``["point", side, now]``,
   ``["undo"]`` and ``["switch"]``; ``now`` is an opaque timestamp string.
+  A point recorded with an author (KAN-150) is ``["point", side, now, by]``,
+  ``by`` an opaque player id the event carries as ``"by"``.
 - each step describes a flat record: the state's ``state_keys`` plus ``srv``
   (``current_server``), ``sw`` (``should_prompt_side_switch``), ``done``
   (``is_match_complete``), ``win`` (``match_winner``) and ``r`` (the op's
@@ -113,10 +115,14 @@ class Recorder:
     def start(self, side):
         return self._do(["start", side], lambda: (ls.set_initial_server(self.state, side), None))
 
-    def point(self, side):
+    def point(self, side, by=None):
         self.clock += 1
         now = f"t{self.clock}"
-        return self._do(["point", side, now], lambda: ls.apply_point(self.state, side, now=now))
+        if by is None:
+            return self._do(["point", side, now], lambda: ls.apply_point(self.state, side, now=now))
+        return self._do(
+            ["point", side, now, by], lambda: ls.apply_point(self.state, side, now=now, by=by)
+        )
 
     def undo(self):
         return self._do(["undo"], lambda: ls.undo_last_point(self.state))
@@ -270,6 +276,28 @@ def odd_ops(name, rng, best_of, server):
     return rec
 
 
+def attributed(name, rng, best_of, server):
+    """Two scorers (KAN-150): every point carries ``by``, the id of whoever
+    tapped it -- usually the scoring side's own phone, sometimes a solo host
+    scoring both. Undos cross game ends with attributed events."""
+    rec = Recorder(name, best_of)
+    rec.start(server)
+    phones = {"team1": rng.randint(1, 500), "team2": rng.randint(501, 1000)}
+    bias = rng.uniform(0.35, 0.65)
+    while not rec.complete:
+        side = "team1" if rng.random() < bias else "team2"
+        by = phones[side] if rng.random() < 0.8 else phones[ls.other(side)]
+        result = rec.point(side, by=by)
+        if result and "game_number" in result and rng.random() < 0.5:
+            for _ in range(rng.randint(1, 3)):
+                rec.undo()
+        elif rng.random() < 0.05:
+            rec.undo()
+    if rng.random() < 0.5:
+        rec.undo()
+    return rec
+
+
 def generate() -> dict:
     sequences = []
     scenarios = (
@@ -279,6 +307,8 @@ def generate() -> dict:
         ("undo_past_cap", undo_past_cap, 4),
         ("deciding_switch", deciding_game_switch, 4),
         ("odd_ops", odd_ops, 2),
+        # Appended, so every sequence above keeps its seed and its bytes.
+        ("attributed", attributed, 2),
     )
     seed = 0
     for label, build, per_combo in scenarios:

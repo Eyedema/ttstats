@@ -1,0 +1,93 @@
+# Shared-scoring lobby and join flow (KAN-151, KAN-152)
+
+Part of KAN-148. Rules: `.claude/rules/clubs.md` (the join link) and
+`.claude/rules/live-scoring.md` (the lobby). This records the choices.
+
+## A new account verifies before it joins (never an unverified login)
+
+The first version logged a new, unverified account in when its signup held
+an open lobby token in its club, so the joiner was not blocked on email.
+Review removed it: a 24 h session on an unverified account can create
+matches against verified clubmates that auto-confirm (any unverified side
+auto-confirms) and register a passkey, which bypasses verification for good.
+
+Now `consume_pending_live_join` never calls `login()`. A member's signup
+keeps the token parked and shows the normal "verify your email" page with
+"Your match is waiting" and a "Log in" whose `next` is the resume route.
+Verifying in the same browser (`EmailVerifyView` logs a verified account in)
+or a later login without its own `next` (`CustomLoginView`) goes through
+`pending_live_join_url`: the resume route if the parked lobby is still open,
+else the token is dropped and they land on Today. A non-member still gets
+the dead end at once.
+
+The same change fixed `accept_club_invite` at signup: it set the new
+Player's club through the scoped `Player.objects`, which matches no row for
+an anonymous request, so an invited player stayed club-less and could not
+see its own profile (`match_confirm`: "You must have a player profile").
+The old auto-confirm had hidden it from the integration test.
+
+## Login returns through `live/join/`, not `?next=<join URL>`
+
+The ticket asks for a safe `next` and also that the token appear in no URL
+but the join path. Both hold: the token is parked in the session, and the
+login `next` is the token-free `live/join/` resume route, which redirects to
+the join URL. "Not you? Log out" posts `next` in the form body.
+
+## The lobby views live in their own module
+
+`live_lobby_views.py`, like `season_views.py`: views.py is 4,000 lines and
+three KAN-148 stories edit it in parallel. views.py only gains the
+registration hook call and `MatchCreateView.get_initial` (the
+"Pick opponent instead" prefill).
+
+## Staff cannot open another host's lobby
+
+The scoped manager lets staff see every lobby in their club; the lobby page
+additionally filters on `host=<viewer>`, because the page shows the bearer
+token.
+
+## The join rate limit: GET only, per user when signed in
+
+`20/h`, `key="user_or_ip"`, GET only, like the invite accept. The first
+version counted GET and POST by IP; in prod every request's REMOTE_ADDR was
+the proxy (see `build-and-deploy.md`), and even with the real address a club
+night shares one, so 20 joins an hour would have been the whole room's.
+Signed in, the bucket is the user's; anonymous, the client's IP. A POST is
+not counted, so it must not be an oracle: an anonymous POST is redirected
+to the GET without a lookup, and a signed-in POST is a verified member's,
+already limited by their GETs.
+
+## "Waiting for an opponent" on Today (KAN-157)
+
+- **The host opts in, default on.** The card widens who can join from "whoever
+  holds the code" to "any member of the club", so the match form has a
+  "Let anyone in the club join" checkbox, rendered checked
+  (`LiveLobby.open_to_club`, default True). An unchecked box posts nothing,
+  so a missing field reads as off (fail closed); the lobby page says which
+  it is. Default on because at the club both players are usually signed in
+  already, which is the whole point of the card.
+- **A token-free route, `live/lobby/<pk>/join/`,** reached only from the
+  card. The lookup is `LiveLobby.all_objects` + `scope_to_active_club` +
+  `open_to_club=True` (KAN-24 audit), so another club's lobby or a private
+  one is a 404 whoever asks (staff included). It renders the same
+  `live_join.html` and posts through the same `start_shared_match`; every
+  identity branch (own, ended, rejoin, lost race) is `_resolve_join`, shared
+  with the token link. The confirm form and "Not you?" point at the pk
+  route, so the token never reaches a non-host's page. No rate limit: a pk
+  is not a credential, and the route only shows what Today already lists.
+- **Not cached, not amber, not refreshed.** `DashboardView._waiting_lobbies`
+  queries on every load (Today has no fragment cache; only "Lately" is in
+  the cache and it is unaffected), so no invalidation is needed. Gated on
+  the `shared_scoring` flag like the other entry points; the route itself is
+  not, like the token link.
+- Newest first, at most 3 (`TODAY_LOBBY_LIMIT`), never the viewer's own.
+
+## Not done here
+
+- A "Score live with a shared link" entry on Today: Today has no "Score live"
+  entry (only the resume banner), so there is nothing to sit next to.
+- Pruning old lobby rows (optional in the ticket): rows are tiny and expiry is
+  lazy; add a `run_scheduled_jobs` job if the table ever matters.
+- `LiveStateView` answered a finished match with `match_detail`, while
+  `live_sync` answered `match_confirm`. Since fixed by KAN-153: both answer
+  `match_confirm` (`kan-148-shared-scoring.md`).

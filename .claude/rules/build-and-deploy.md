@@ -7,6 +7,8 @@ paths:
   - "compose*.yml"
   - ".github/workflows/**"
   - "ttstats/ttstats/settings/**"
+  - "ttstats/ttstats/client_ip.py"
+  - "ttstats/pingpong/tests/test_client_ip.py"
   - "requirements.txt"
   - ".env*"
 ---
@@ -56,9 +58,32 @@ paths:
 - Optional `.env.prod` vars (see `.env.prod.example`): `VAPID_*` for push,
   `SENTRY_*` for Sentry. Unset, both are no-ops. `DB_CONN_MAX_AGE` (default 60,
   `0` = close per request) sets persistent connections, with `CONN_HEALTH_CHECKS`.
-- **Gunicorn runs 3 sync workers** (`entrypoint.sh`): at most 3 persistent
-  connections. Moving to gevent or threads multiplies that; revisit
-  `CONN_MAX_AGE` in the same change.
+- **Gunicorn runs gthread workers** (`entrypoint.sh`, KAN-168):
+  `GUNICORN_WORKERS` (3) x `GUNICORN_THREADS` (8), `--timeout 60` (must stay
+  above `LIVE_LONGPOLL_WAIT` + 5). Connections are per thread: at most 24
+  persistent ones against Postgres's default `max_connections` of 100 (the
+  `db` service is ours alone), so `CONN_MAX_AGE` stays 60. Raising
+  workers x threads means revisiting it in the same change.
+- **`--worker-connections` defaults to the thread count**
+  (`GUNICORN_WORKER_CONNECTIONS`): gthread's default 1000 queues connections
+  behind busy threads; equal, a saturated worker stops accepting and another
+  takes the connection. Cost: no keep-alive (the boot warning "No keepalived
+  connections" is expected). **gunicorn is pinned** (`==25.0.1`): that
+  accept/keep-alive behaviour was read from its source; re-read on upgrade.
+- **Rate limits key on `ttstats.client_ip.client_ip`** (`RATELIMIT_IP_META_KEY`
+  in prod.py): the right-most `X-Forwarded-For` hop, which Pangolin's Traefik
+  appends, else `REMOTE_ADDR`. gunicorn's `REMOTE_ADDR` is always the proxy
+  (`--forwarded-allow-ips` covers only the scheme), so `key="ip"` was one
+  bucket for the whole site. Assumes one proxy of ours; a CDN in front means
+  skipping its hop too. Dev/test have no proxy and keep `REMOTE_ADDR`.
+- **Never ASGI while tenancy is a `threading.local`**: sync code from two
+  requests can share an executor thread there. Path out:
+  `docs/decisions/kan-148-shared-scoring.md`.
+- The e2e server (`scripts/e2e_server.sh`) stays on `runserver`, not gthread:
+  under gthread its one SQLite file serialized writes (lock errors, then ~300 ms
+  busy waits that opened CSRF-cookie races in the specs). gthread is covered by
+  pytest (`test_live_longpoll.py`, `test_middleware.py`), the held long-poll by
+  the two-phone e2e on runserver's unbounded threads.
 - **CI/CD** (`.github/workflows/main.yml`): tests with coverage on push/PR; SSH
   deploy on master. `.py` changes gate tests, frontend extensions gate the asset
   build. `npm run test:js` (`node --test tests/js/*.test.mjs`, no deps) runs
