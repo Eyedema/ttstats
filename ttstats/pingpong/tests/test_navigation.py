@@ -276,6 +276,20 @@ class TestScriptLoading:
         assert re.search(r"\bdefer\b", tags[0])
         assert "data-no-pull-refresh" not in body
 
+    def test_connection_js_is_deferred_after_htmx_and_before_its_readers(self):
+        """KAN-135. It sets htmx.config.timeout (so after htmx) and prefetch.js /
+        pull_to_refresh.js read its state (so before them)."""
+        user, _ = _verified_user_with_player()
+        body = _login_client(user).get(reverse("pingpong:dashboard")).content.decode()
+        tags = self._script_tags(body)
+        index = {name: [i for i, t in enumerate(tags) if name in t]
+                 for name in ("vendor/htmx", "connection", "pull_to_refresh", "prefetch")}
+        assert len(index["connection"]) == 1
+        assert re.search(r"\bdefer\b", tags[index["connection"][0]])
+        assert index["vendor/htmx"][0] < index["connection"][0]
+        assert index["connection"][0] < index["pull_to_refresh"][0]
+        assert index["connection"][0] < index["prefetch"][0]
+
     def test_no_external_script_in_head_blocks_the_parser(self):
         user, _ = _verified_user_with_player()
         body = _login_client(user).get(reverse("pingpong:dashboard")).content.decode()
@@ -378,6 +392,18 @@ class TestIconSprite:
         defined = set(re.findall(r'id="i-([a-z0-9-]+)"', self._sprite()))
         wanted = set(re.findall(r"#i-([a-z0-9-]+)", js)) | set(re.findall(r"'(wifi-off|refresh-cw)'", js))
         assert {"refresh-cw", "wifi-off"} <= wanted
+        assert wanted <= defined, f"missing from the sprite: {sorted(wanted - defined)}"
+
+    def test_every_icon_connection_js_asks_for_is_in_the_sheet(self):
+        """connection.js builds its toasts from the sprite (KAN-135)."""
+        import pathlib
+        from django.conf import settings
+
+        js = (pathlib.Path(settings.BASE_DIR) / "pingpong/static/pingpong/js/connection.js").read_text()
+        defined = set(re.findall(r'id="i-([a-z0-9-]+)"', self._sprite()))
+        wanted = set(re.findall(r"icon: '([a-z0-9-]+)'", js)) | set(re.findall(r"svg\('([a-z0-9-]+)'", js))
+        wanted |= set(re.findall(r"\|\| '([a-z0-9-]+)'", js))
+        assert {"wifi-off", "clock", "circle-alert", "x", "info"} <= wanted
         assert wanted <= defined, f"missing from the sprite: {sorted(wanted - defined)}"
 
     def test_every_achievement_icon_is_in_the_sheet(self):

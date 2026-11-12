@@ -90,6 +90,8 @@
          where it only re-asserts an existing subscription. -->
     {{ push_config|json_script:"push-config" }}
     <script defer src="{% static 'pingpong/js/push.js' %}"></script>
+    {# Connection state + htmx timeouts/toasts (KAN-135); before the two scripts that read its state. #}
+    <script defer src="{% static 'pingpong/js/connection.js' %}"></script>
     {# Installed-app pull to refresh; opt a page out with data-no-pull-refresh. #}
     <script defer src="{% static 'pingpong/js/pull_to_refresh.js' %}"></script>
     <script defer src="{% static 'pingpong/js/prefetch.js' %}"></script>
