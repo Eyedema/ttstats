@@ -41,6 +41,7 @@ SW_PRECACHE = (
     "pingpong/fonts/archivo-600.woff2",
     "pingpong/fonts/archivo-800.woff2",
     "pingpong/js/push.js",
+    "pingpong/js/connection.js",
     "pingpong/js/pull_to_refresh.js",
     "pingpong/js/prefetch.js",
     "pingpong/js/offline.js",

@@ -234,7 +234,8 @@ tap that never registered.
   upward or mostly horizontal.
 - One non-passive `touchmove` (only `preventDefault()` stops the rubber band);
   it returns at once unless a vertical pull is underway.
-- Offline (`navigator.onLine === false`): "No connection", no reload.
+- Offline (`TTStatsConnection.state() === 'offline'`, else
+  `navigator.onLine === false`): "No connection", no reload.
   Reduced motion: `.is-static`, text only.
 - The indicator is created by the script (fails closed); its CSS is outside
   `@layer` because Tailwind doesn't scan JS and would purge it. Its icons
@@ -255,7 +256,8 @@ tap that never registered.
 - **Code denylist in `prefetch.js`**, whatever the markup says: `/live/`,
   `confirm/`, `join/`, logout, admin, `/accounts/`, `/webauthn/`,
   `edit|delete|start|register|unregister|convert|switch/`, non-`/pingpong/`,
-  cross-origin, `target`, `download`, the current page, Save-Data.
+  cross-origin, `target`, `download`, the current page, Save-Data, and any
+  connection state but `online` (KAN-135).
 - **Chromium joins an in-flight prefetch; WebKit and Gecko don't**, so on
   those (no `navigator.userAgentData`) a click mid-prefetch is held until it
   is cached. If the held navigation wasn't a cache hit (no HTTP cache, e.g.
@@ -265,3 +267,30 @@ tap that never registered.
   shown document carrying `private, max-age=5`.
 - No hover prefetch: it widens the one stale case (prefetch, then a POST
   redirecting to that URL inside 5 s) for pages the user may never open.
+
+## Connection state and htmx failures (KAN-135)
+
+`static/pingpong/js/connection.js`, plain JS, deferred after htmx and before
+`pull_to_refresh.js` / `prefetch.js` (which read it). UMD: the pure machine is
+unit-tested in `tests/js/connection.test.mjs`.
+
+- **State `online | degraded | offline` from what requests did**, not from
+  `navigator.onLine` (iOS says `true` on lie-fi): offline = browser offline or
+  2 network errors in a row; degraded = last request >= `SLOW_MS` (2500), in
+  flight past it, timed out, or one network error; online = one under
+  `SLOW_MS`. Exposed as `html[data-connection]`, a `ttstats:connection` event
+  on `document` and `window.TTStatsConnection.state()` (which re-reads
+  `onLine === false` on every call: only `true` lies).
+- **`htmx.config.timeout` = `TIMEOUT_MS` (8000)**. `htmx:sendError`,
+  `htmx:timeout` and 5xx `htmx:responseError` get a toast; leftover
+  `.htmx-request` / `[data-disabled-by-htmx]` are cleared. No auto-retry; a
+  GET's toast has one "Try again" (`htmx.ajax` from the same source element).
+- **`window.TTStatsToast.show(message, {icon, action: {label, onClick},
+  duration})`** is the one toast: neutral tokens (not amber, not red), above
+  the tab bar and safe area, `role=status`. Created by JS, so it fails closed.
+- "Slow connection" line: only while degraded and only with
+  `<meta name="ttstats-snapshots" content="on">`; toggled by `hidden`.
+- **Exempt: anything under `/live/`, `#scoreboard`, `[data-live-lobby]`**: no
+  htmx hooks, no timeout, no toasts (KAN-76 owns that sync).
+- **Playwright WebKit can't fire an XHR timeout while a route holds the
+  request**; it reports it when the route lets go. Specs: `connection*.spec.js`.

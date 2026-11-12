@@ -71,6 +71,8 @@ class TestPrecacheList:
             "pingpong/js/live_session.js",
             "pingpong/js/scoreboard.js",
             "pingpong/js/offline.js",
+            # base.html loads it on every page, the scoreboard included (KAN-135).
+            "pingpong/js/connection.js",
         ):
             assert path in offline.SW_PRECACHE
 
