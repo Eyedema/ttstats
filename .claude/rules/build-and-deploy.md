@@ -91,5 +91,8 @@ paths:
 - **CI/CD** (`.github/workflows/main.yml`): tests with coverage on push/PR; SSH
   deploy on master. `.py` changes gate tests, frontend extensions gate the asset
   build. `npm run test:js` (`node --test tests/js/*.test.mjs`, no deps) runs
-  in the test job whenever either changed.
+  in the test job whenever either changed. The e2e job is gated on
+  `e2e_needed` (frontend, or `.py` outside `tests/`/`conftest.py`) and split
+  into 4 `--shard` runners, each with its own server and SQLite file, since
+  the suite is `workers: 1` within a runner.
 - Tenancy cutover runbook: `docs/tenancy-rollout.md`.
