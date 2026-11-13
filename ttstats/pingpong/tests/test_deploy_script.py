@@ -142,13 +142,126 @@ class TestHappyPath:
         assert "previous: none" in result.stdout
 
 
-class TestFailures:
-    @pytest.mark.parametrize("step", ["pull", "up", "login"])
-    def test_a_failed_step_fails_the_deploy_and_keeps_last_good(self, tmp_path, step):
-        box = Box(tmp_path, fail=[step])
+class TestOneMigrate:
+    """KAN-114: makemigrations --check, migrate and collectstatic run once,
+    with the new image, before the swap."""
+
+    def test_pre_swap_tasks_run_once_before_up(self, tmp_path):
+        box = Box(tmp_path)
+        assert box.run(NEW, "new222").returncode == 0
+        verbs = box.verbs()
+
+        assert verbs.count("compose run") == 1
+        assert verbs.index("compose pull") < verbs.index("compose run") < verbs.index("compose up")
+        run = next(c for c in box.state["calls"] if "run" in c["argv"])
+        command = " ".join(run["argv"])
+        assert command.count("migrate --noinput") == 1
+        assert "makemigrations --check --dry-run &&" in command
+        assert "collectstatic --noinput" in command
+        assert run["web_image"] == NEW
+        # Never via the entrypoint (it would exec gunicorn), never with deps.
+        assert "--entrypoint" in run["argv"] and "--no-deps" in run["argv"]
+
+    def test_nothing_migrates_after_the_swap(self, tmp_path):
+        box = Box(tmp_path)
+        box.run(NEW, "new222")
+        assert not any("migrate" in " ".join(e) for e in box.state.get("execs", []))
+
+    def test_a_failed_pre_swap_task_never_swaps(self, tmp_path):
+        box = Box(tmp_path, fail=["run"])
         (box.state_dir / ".last-good-image").write_text(OLD + "\n")
 
-        result = box.run(NEW, "new222", GHCR_USER="bot", GHCR_TOKEN="t0ken")
+        result = box.run(NEW, "new222")
 
-        assert result.returncode != 0
+        assert result.returncode == 3
+        assert "compose up" not in box.verbs()
+        assert box.state["running"] == OLD
         assert box.last_good == OLD
+
+    def test_up_waits_for_the_healthcheck(self, tmp_path):
+        box = Box(tmp_path)
+        box.run(NEW, "new222")
+        up = next(c for c in box.state["calls"] if "up" in c["argv"])
+        assert "--wait" in up["argv"]
+
+
+class TestSmokeAndRollback:
+    """KAN-116: the public /healthz must report the new release and the
+    smoke pages must answer, or the previous image goes back."""
+
+    def test_smoke_checks_release_then_pages(self, tmp_path):
+        box = Box(tmp_path)
+        result = box.run(NEW, "new222", PUBLIC_URL="https://tt.example")
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        curls = box.state["curls"]
+        assert curls[0] == "https://tt.example/healthz"
+        for path in ("/accounts/login/", "/pingpong/login/", "/sw.js"):
+            assert f"https://tt.example{path}" in curls
+
+    def _assert_rolled_back(self, box, result):
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert box.state["running"] == OLD
+        last_up = [c for c in box.state["calls"] if "up" in c["argv"]][-1]
+        assert last_up["web_image"] == OLD
+        assert last_up["release"] == "old111"
+        assert box.last_good is None or box.last_good == OLD
+        assert "rolled back" in result.stdout
+        # Reported from inside the container that is serving again.
+        assert any("python" in e for e in box.state.get("execs", []))
+
+    def test_unhealthy_new_container_rolls_back(self, tmp_path):
+        box = Box(tmp_path, healthy={NEW: False})
+        self._assert_rolled_back(box, box.run(NEW, "new222", SMOKE_TIMEOUT="0"))
+
+    def test_broken_page_rolls_back(self, tmp_path):
+        box = Box(tmp_path, broken_pages={NEW: ["/pingpong/login/"]})
+        result = box.run(NEW, "new222")
+        self._assert_rolled_back(box, result)
+        assert "/pingpong/login/ answered 500" in result.stdout
+
+    def test_wrong_release_on_healthz_rolls_back(self, tmp_path):
+        """The proxy still reaching the old container counts as a failure."""
+        box = Box(tmp_path)
+        # The image is tagged differently from the SHA we were asked to ship.
+        result = box.run(NEW, "not-this-sha", SMOKE_TIMEOUT="0")
+        self._assert_rolled_back(box, result)
+
+    def test_failed_rollback_is_exit_4(self, tmp_path):
+        box = Box(tmp_path, healthy={NEW: False, OLD: False})
+        result = box.run(NEW, "new222", SMOKE_TIMEOUT="0")
+        assert result.returncode == 4
+        assert "ROLLBACK FAILED" in result.stdout
+
+    def test_nothing_to_roll_back_to_is_exit_4(self, tmp_path):
+        box = Box(tmp_path, running="", healthy={NEW: False})
+        result = box.run(NEW, "new222", SMOKE_TIMEOUT="0")
+        assert result.returncode == 4
+
+    def test_previous_image_falls_back_to_last_good(self, tmp_path):
+        box = Box(tmp_path, running="", healthy={NEW: False})
+        (box.state_dir / ".last-good-image").write_text(OLD + "\n")
+        result = box.run(NEW, "new222", SMOKE_TIMEOUT="0")
+        assert result.returncode == 1
+        assert box.state["running"] == OLD
+
+    def test_a_sentry_failure_does_not_change_the_outcome(self, tmp_path):
+        box = Box(tmp_path, healthy={NEW: False}, fail=["exec"])
+        result = box.run(NEW, "new222", SMOKE_TIMEOUT="0")
+        assert result.returncode == 1
+
+
+class TestFailures:
+    def test_failed_pull_is_exit_3_and_changes_nothing(self, tmp_path):
+        box = Box(tmp_path, fail=["pull"])
+        (box.state_dir / ".last-good-image").write_text(OLD + "\n")
+        result = box.run(NEW, "new222")
+        assert result.returncode == 3
+        assert "compose up" not in box.verbs()
+        assert box.last_good == OLD
+
+    def test_failed_login_fails_before_pulling(self, tmp_path):
+        box = Box(tmp_path, fail=["login"])
+        result = box.run(NEW, "new222", GHCR_USER="bot", GHCR_TOKEN="t0ken")
+        assert result.returncode != 0
+        assert "compose pull" not in box.verbs()

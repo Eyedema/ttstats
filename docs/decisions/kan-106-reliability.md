@@ -38,3 +38,32 @@ owner's phone. Rules that follow from it live in `.claude/rules/ops.md`.
   manifest to `HEAD /healthz`.** The manifest answered 200 with the database
   down; `/healthz` answers 503, so "You're back online" now means the pages
   will actually load.
+
+## Deploys (KAN-110)
+
+- **The deploy is a committed script** (`deploy/deploy.sh`, KAN-113), first
+  moved verbatim so the move could not break a deploy, then changed. The
+  workflow keeps only `git pull` (so the script that runs is the new one).
+- **One migrate, before the swap** (KAN-114). Before: the entrypoint ran
+  collectstatic + migrate on every container start, and the workflow ran both
+  again after `up`. Now a one-off `compose run` with the new image runs
+  `makemigrations --check && migrate && collectstatic` while the old
+  container serves, and prod's entrypoint skips them (`SKIP_BOOT_TASKS=1`).
+  A failure there stops the deploy with nothing swapped. The price is the
+  expand/contract rule: old code must tolerate the new schema.
+  collectstatic into the shared volume is safe for the old container: names
+  are content-hashed and nothing deletes the old ones (40 CSS versions on the
+  VPS on 2026-11-13); the old process has its manifest in memory.
+- **Smoke test through the real proxy** (KAN-116). The VPS reaches its own
+  public name through Pangolin (~0.1 s), so the check is the user's path:
+  TLS, Traefik, routing. `/healthz` must report the new `release` (proves the
+  proxy reaches the *new* container, not a stale one) and five pages must
+  answer 200: both login templates (forms, CSRF, static manifest), `/sw.js`
+  and the manifest (rendered without a request), `/offline/`.
+- **Rollback is the previous image, never migrations.** Exit codes separate
+  "rolled back" (1) from "nothing changed" (3) and "rollback failed" (4).
+  The Sentry message is sent from inside the serving container (it has the
+  SDK and DSN; the host has neither), best effort: the red workflow is the
+  guaranteed signal.
+- The first deploy of KAN-114/116 rolls back to an image without `/healthz`
+  only if it fails; that is why KAN-109 + KAN-113 shipped one deploy earlier.

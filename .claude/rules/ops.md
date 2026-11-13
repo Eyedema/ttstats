@@ -42,3 +42,19 @@ Why each piece is shaped as it is: `docs/decisions/kan-106-reliability.md`.
 - **Every compose call pins `WEB_IMAGE` and `SENTRY_RELEASE`**; never a bare
   `dcp up -d web` (falls back to `:latest`).
 - **Never run jobs from the deploy** (`jobs.md`): the SSH step has a timeout.
+- **Migrate and collectstatic run once, before the swap** (KAN-114), with the
+  new image in a one-off `compose run --entrypoint sh` while the old container
+  serves; `makemigrations --check` gates it (exit 3: nothing swapped).
+  Prod web sets `SKIP_BOOT_TASKS=1`, so the entrypoint skips them.
+- **Migrations are expand/contract.** The previous release runs against the
+  new schema until the swap, and again after a rollback (which never reverts
+  migrations). Add nullable/defaulted columns and new tables in one release;
+  drop or rename only in a later one, after nothing reads the old shape.
+- **collectstatic is additive**: `static_volume` keeps old hashed files, so the
+  old container keeps its assets. Never `--clear` it in a deploy.
+- **Smoke test, then rollback** (KAN-116): `up --wait` on the healthcheck,
+  then the public `/healthz` must report the new `release` and the smoke pages
+  must answer 200 within `SMOKE_TIMEOUT`. Else the previous image goes back
+  (same checks), Sentry gets a message naming both SHAs, and the script exits
+  1 (red workflow). Exit 4 = the rollback failed too: look now.
+

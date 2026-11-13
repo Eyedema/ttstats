@@ -64,6 +64,7 @@ if argv and argv[0] == "compose":
             sys.exit(1)
     elif cmd == "exec":
         state.setdefault("execs", []).append(rest)
+        fail_if("exec")
     elif cmd == "stop":
         state["running"] = ""
 elif argv[:1] == ["inspect"]:
