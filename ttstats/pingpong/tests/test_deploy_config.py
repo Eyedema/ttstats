@@ -89,3 +89,16 @@ class TestBootTasks:
         entrypoint = (REPO / "docker" / "django" / "entrypoint.sh").read_text()
         assert 'if [ "${SKIP_BOOT_TASKS:-0}" = "1" ]' in entrypoint
         assert "makemigrations --check --dry-run" in entrypoint
+
+
+class TestRolloutAlias:
+    def test_web_has_a_stable_alias_on_the_proxy_network(self):
+        """KAN-115: Pangolin targets `ttstats-web:8000`, which survives the
+        container-name changes a rollout causes."""
+        networks = _compose()["services"]["web"]["networks"]
+        assert "ttstats-web" in networks["pangolin"]["aliases"]
+        assert "pingpong_network" in networks
+
+    def test_web_has_no_container_name(self):
+        """A fixed name would make scaling to two containers impossible."""
+        assert "container_name" not in _compose()["services"]["web"]

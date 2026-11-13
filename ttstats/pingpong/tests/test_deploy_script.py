@@ -181,8 +181,15 @@ class TestOneMigrate:
     def test_up_waits_for_the_healthcheck(self, tmp_path):
         box = Box(tmp_path)
         box.run(NEW, "new222")
-        up = next(c for c in box.state["calls"] if "up" in c["argv"])
+        up = next(c for c in box.state["calls"] if "up" in c["argv"] and "web" in c["argv"])
         assert "--wait" in up["argv"]
+
+    def test_db_and_redis_come_up_without_touching_web(self, tmp_path):
+        box = Box(tmp_path)
+        box.run(NEW, "new222")
+        first_up = next(c for c in box.state["calls"] if "up" in c["argv"])
+        assert first_up["argv"][-2:] == ["db", "redis"]
+        assert "--no-deps" in first_up["argv"]
 
 
 class TestSmokeAndRollback:
@@ -265,3 +272,46 @@ class TestFailures:
         result = box.run(NEW, "new222", GHCR_USER="bot", GHCR_TOKEN="t0ken")
         assert result.returncode != 0
         assert "compose pull" not in box.verbs()
+
+
+class TestRollout:
+    """KAN-115: SWAP_MODE=rollout starts the new container beside the old one
+    and stops the old one only once the new one is healthy."""
+
+    def test_new_container_healthy_then_old_stopped(self, tmp_path):
+        box = Box(tmp_path)
+        result = box.run(NEW, "new222", SWAP_MODE="rollout")
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert [c["image"] for c in box.state["containers"]] == [NEW]
+        verbs = box.verbs()
+        scale_up = next(i for i, c in enumerate(box.state["calls"])
+                        if "--scale" in c["argv"])
+        assert "--no-recreate" in box.state["calls"][scale_up]["argv"]
+        assert box.state["calls"][scale_up]["web_image"] == NEW
+        # The old container is stopped (drained) only after the new is healthy.
+        assert verbs.index("stop") > scale_up
+        stop = next(c for c in box.state["calls"] if c["argv"][0] == "stop")
+        assert stop["argv"][1:3] == ["-t", "30"] and stop["argv"][-1] == "c0"
+
+    def test_unhealthy_new_container_is_removed_and_old_never_touched(self, tmp_path):
+        box = Box(tmp_path, healthy={NEW: False})
+        result = box.run(NEW, "new222", SWAP_MODE="rollout", SMOKE_TIMEOUT="0")
+
+        assert "c0" not in box.state.get("removed", [])
+        assert [c["image"] for c in box.state["containers"]] == [OLD]
+        # Then the rollback finds the old image already serving and keeps it.
+        assert result.returncode == 1, result.stdout + result.stderr
+
+    def test_smoke_failure_after_rollout_rolls_back_the_same_way(self, tmp_path):
+        box = Box(tmp_path, broken_pages={NEW: ["/sw.js"]})
+        result = box.run(NEW, "new222", SWAP_MODE="rollout")
+
+        assert result.returncode == 1
+        assert [c["image"] for c in box.state["containers"]] == [OLD]
+        assert box.state["containers"][0]["id"] != "c0"  # a fresh old-image container
+
+    def test_default_mode_is_recreate(self, tmp_path):
+        box = Box(tmp_path)
+        box.run(NEW, "new222")
+        assert not any("--scale" in c["argv"] for c in box.state["calls"])

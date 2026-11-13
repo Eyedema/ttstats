@@ -30,7 +30,8 @@
 #
 # Env overrides (tests, by hand): COMPOSE_FILE, DEPLOY_STATE_DIR, PUBLIC_URL,
 # SMOKE_TIMEOUT (s, default 90), SMOKE_INTERVAL (s, default 2),
-# WAIT_TIMEOUT (s, default 180, the healthcheck wait).
+# WAIT_TIMEOUT (s, default 180, the healthcheck wait), SWAP_MODE
+# (recreate|rollout), STOP_GRACE (s, default 30, the old container's drain).
 set -euo pipefail
 
 usage() {
@@ -52,6 +53,10 @@ PUBLIC_URL="${PUBLIC_URL:-https://pingpong.ubaldopuocci.org}"
 SMOKE_TIMEOUT="${SMOKE_TIMEOUT:-90}"
 SMOKE_INTERVAL="${SMOKE_INTERVAL:-2}"
 WAIT_TIMEOUT="${WAIT_TIMEOUT:-180}"
+# recreate (stop, then start: a gap) or rollout (start beside, then stop:
+# KAN-115). rollout needs Pangolin's target to be the `ttstats-web` alias.
+SWAP_MODE="${SWAP_MODE:-recreate}"
+STOP_GRACE="${STOP_GRACE:-30}"
 # Pages a broken release cannot serve: two templates with forms (CSRF,
 # static manifest), the PWA files rendered without a request, the offline page.
 SMOKE_PATHS="/accounts/login/ /pingpong/login/ /manifest.webmanifest /sw.js /offline/"
@@ -75,9 +80,58 @@ release_of() {
 
 # Bring web up on an image and wait for its healthcheck. Pinned, always.
 swap_to() {
+  if [ "$SWAP_MODE" = rollout ]; then
+    rollout_to "$@"
+  else
+    recreate_to "$@"
+  fi
+}
+
+# Stop the old container, start the new: a gap of gunicorn's boot.
+recreate_to() {
   local image="$1" release="$2"
   WEB_IMAGE="$image" SENTRY_RELEASE="$release" \
     dcp up -d --wait --wait-timeout "$WAIT_TIMEOUT" web
+}
+
+health_of() {
+  docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$1" 2>/dev/null || echo gone
+}
+
+# KAN-115: start the new container BESIDE the old one, wait for it to be
+# healthy, then stop the old one (gunicorn drains in-flight requests on
+# SIGTERM). Both answer to the `ttstats-web` alias on the pangolin network,
+# which is what Pangolin's target must name (container names alternate
+# between -1 and -2). A new container that never gets healthy is removed and
+# the old one was never touched.
+rollout_to() {
+  local image="$1" release="$2" old new id deadline status
+  old="$(dcp ps -q web 2>/dev/null || true)"
+  WEB_IMAGE="$image" SENTRY_RELEASE="$release" \
+    dcp up -d --no-deps --no-recreate --scale web=$(( $(printf '%s\n' "$old" | grep -c . || true) + 1 )) web || return 1
+  new=""
+  for id in $(dcp ps -q web); do
+    case " $(echo $old) " in *" $id "*) ;; *) new="$id" ;; esac
+  done
+  if [ -z "$new" ]; then
+    log "rollout: no new container appeared"
+    return 1
+  fi
+  deadline=$(( $(date +%s) + WAIT_TIMEOUT ))
+  while :; do
+    status="$(health_of "$new")"
+    [ "$status" = healthy ] && break
+    if [ "$status" = unhealthy ] || [ "$status" = gone ] || [ "$(date +%s)" -ge "$deadline" ]; then
+      log "rollout: new container $new is $status; removing it, the old one keeps serving"
+      docker rm -f "$new" >/dev/null 2>&1 || true
+      return 1
+    fi
+    sleep "$SMOKE_INTERVAL"
+  done
+  log "rollout: $new healthy; stopping the old container(s)"
+  for id in $old; do
+    docker stop -t "$STOP_GRACE" "$id" >/dev/null && docker rm "$id" >/dev/null || true
+  done
 }
 
 # Through the real proxy: /healthz must report the expected release, then
@@ -132,7 +186,14 @@ rollback() {
   local prev_release
   prev_release="$(release_of "$PREVIOUS_IMAGE")"
   log "FAILED ($reason): rolling back to $PREVIOUS_IMAGE"
-  if swap_to "$PREVIOUS_IMAGE" "$prev_release" && smoke "$prev_release"; then
+  # A rollout that discarded an unhealthy container left the old one serving:
+  # nothing to swap back, only to verify.
+  local swap="swap_to"
+  if [ "$(dcp ps -q web | grep -c .)" = 1 ] && [ "$(running_web_image)" = "$PREVIOUS_IMAGE" ]; then
+    log "the previous image is still the one serving; verifying only"
+    swap="true"
+  fi
+  if "$swap" "$PREVIOUS_IMAGE" "$prev_release" && smoke "$prev_release"; then
     notify_sentry "Deploy of $SHA failed ($reason); rolled back to $prev_release"
     log "rolled back: $PREVIOUS_IMAGE is serving. Migrations were NOT reverted."
     exit 1
@@ -166,10 +227,13 @@ if ! dcp run --rm --no-deps -T --entrypoint sh web -c \
   exit 3
 fi
 
-log "swap: web -> $IMAGE, waiting for healthy"
-# db and redis too, as before: a config change to either is applied here.
-# Neither has a healthcheck, so --wait only waits for them to be running.
-if ! dcp up -d --wait --wait-timeout "$WAIT_TIMEOUT"; then
+# db and redis first, as before: a config change to either is applied here
+# (a no-op otherwise). Neither has a healthcheck.
+log "db, redis"
+dcp up -d --no-deps db redis || { log "db/redis failed to start"; exit 3; }
+
+log "swap ($SWAP_MODE): web -> $IMAGE, waiting for healthy"
+if ! swap_to "$IMAGE" "$SHA"; then
   rollback "new container never became healthy"
 fi
 

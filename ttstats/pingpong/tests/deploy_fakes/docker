@@ -3,13 +3,15 @@
 
 State lives in the JSON file named by FAKE_DOCKER_STATE:
 
-    running       image the `web` container runs ("" = none)
-    healthy       {image: bool}; missing = True. `up --wait` fails for False.
-    fail          list of step names that exit 1: pull, run, up, login
+    running       image of the newest `web` container ("" = none). Tests set
+                  it to seed one container; the fake keeps it in sync.
+    containers    [{"id", "image"}] -- the web containers, oldest first
+    healthy       {image: bool}; missing = True. Drives `up --wait` and
+                  `inspect` health.
+    fail          step names that exit 1: pull, run, up, login, exec
     run_output    stdout of `compose run` (pre-swap tasks)
 
-Every call is appended to `calls` as {"argv": [...], "web_image": ...,
-"release": ...} so tests can assert order and pinning.
+Every call is appended to `calls` as {"argv", "web_image", "release"}.
 """
 import json
 import os
@@ -19,6 +21,12 @@ path = os.environ["FAKE_DOCKER_STATE"]
 with open(path) as fh:
     state = json.load(fh)
 
+if "containers" not in state:
+    state["containers"] = (
+        [{"id": "c0", "image": state["running"]}] if state.get("running") else []
+    )
+state.setdefault("next_id", len(state["containers"]))
+
 argv = sys.argv[1:]
 state.setdefault("calls", []).append({
     "argv": argv,
@@ -27,7 +35,13 @@ state.setdefault("calls", []).append({
 })
 
 
+def healthy(image):
+    return state.get("healthy", {}).get(image, True)
+
+
 def save():
+    containers = state["containers"]
+    state["running"] = containers[-1]["image"] if containers else ""
     with open(path, "w") as fh:
         json.dump(state, fh)
 
@@ -39,14 +53,25 @@ def fail_if(step):
         sys.exit(1)
 
 
+def new_container(image):
+    cid = f"c{state['next_id']}"
+    state["next_id"] += 1
+    state["containers"].append({"id": cid, "image": image})
+    return cid
+
+
+def find(cid):
+    return next((c for c in state["containers"] if c["id"] == cid), None)
+
+
 if argv and argv[0] == "compose":
     rest = argv[1:]
     while rest and rest[0] == "-f":
         rest = rest[2:]
     cmd = rest[0] if rest else ""
     if cmd == "ps":
-        if state.get("running"):
-            print("c0ffee")
+        for c in state["containers"]:
+            print(c["id"])
     elif cmd == "pull":
         fail_if("pull")
     elif cmd == "run":
@@ -55,20 +80,40 @@ if argv and argv[0] == "compose":
             print(state["run_output"])
     elif cmd == "up":
         fail_if("up")
-        image = os.environ.get("WEB_IMAGE", "ghcr.io/eyedema/ttstats-web:latest")
-        state["running"] = image
-        state.setdefault("ups", []).append(image)
-        if "--wait" in rest and not state.get("healthy", {}).get(image, True):
-            save()
-            sys.stderr.write("fake docker: container web is unhealthy\n")
-            sys.exit(1)
+        services = [a for a in rest[1:] if not a.startswith("-") and not a[0].isdigit()
+                    and a not in ("web=2", "web=3")]
+        # `up -d` with no service names means every service, web included.
+        if not services or "web" in services:
+            state.setdefault("ups", []).append(argv)
+            image = os.environ.get("WEB_IMAGE", "ghcr.io/eyedema/ttstats-web:latest")
+            if "--no-recreate" in rest and "--scale" in rest:
+                want = int(rest[rest.index("--scale") + 1].split("=")[1])
+                while len(state["containers"]) < want:
+                    new_container(image)
+            else:
+                state["containers"] = []
+                new_container(image)
+                if "--wait" in rest and not healthy(image):
+                    save()
+                    sys.stderr.write("fake docker: container web is unhealthy\n")
+                    sys.exit(1)
     elif cmd == "exec":
         state.setdefault("execs", []).append(rest)
         fail_if("exec")
-    elif cmd == "stop":
-        state["running"] = ""
 elif argv[:1] == ["inspect"]:
-    print(state.get("running", ""))
+    target = find(argv[-1])
+    fmt = argv[argv.index("--format") + 1] if "--format" in argv else ""
+    if target is None:
+        save()
+        sys.exit(1)
+    if "Health" in fmt:
+        print("healthy" if healthy(target["image"]) else "unhealthy")
+    else:
+        print(target["image"])
+elif argv[:1] in (["stop"], ["rm"]):
+    ids = [a for a in argv[1:] if not a.startswith("-") and not a.isdigit()]
+    state.setdefault("removed", []).extend(ids)
+    state["containers"] = [c for c in state["containers"] if c["id"] not in ids]
 elif argv[:1] == ["login"]:
     sys.stdin.read()
     fail_if("login")

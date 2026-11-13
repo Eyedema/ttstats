@@ -63,8 +63,14 @@ services:
       - db
       - redis
     networks:
-      - pingpong_network
-      - pangolin
+      pingpong_network:
+      pangolin:
+        # The name Pangolin's target should use (KAN-115). A rollout runs a
+        # second web container beside the first, and container names
+        # alternate (ttstats-web-1, -2), so only an alias is stable. Not the
+        # bare service name `web`: other stacks share this network.
+        aliases:
+          - ttstats-web
 
 volumes:
   pgdata:
