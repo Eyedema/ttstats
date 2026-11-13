@@ -8,6 +8,7 @@ paths:
   - "ttstats/pingpong/tests/test_healthz.py"
   - "ttstats/pingpong/tests/test_deploy_config.py"
   - "ttstats/pingpong/tests/test_deploy_script.py"
+  - "ttstats/pingpong/tests/test_backup_scripts.py"
 ---
 
 # Operations: health, deploys, backups (KAN-106)
@@ -58,3 +59,23 @@ Why each piece is shaped as it is: `docs/decisions/kan-106-reliability.md`.
   (same checks), Sentry gets a message naming both SHAs, and the script exits
   1 (red workflow). Exit 4 = the rollback failed too: look now.
 
+
+## Backups (KAN-107/108)
+
+- `deploy/backup/backup.sh` (nightly 02:45 UTC, before the 03:15 jobs) and
+  `restore_drill.sh` (monthly) run from **host cron**, not the job runner:
+  `pg_dump` exists only in the `db` container. Setup: `deploy/backup/README.md`.
+- **Encrypted before it leaves the box** (age, to every recipient), plaintext
+  only in the `mktemp -d` dir removed by `trap`. **The main private key is
+  never on the VPS**; the drill decrypts with a second, drill-only recipient.
+- **Upload to `.partial`, then `moveto`**: a half upload never carries a
+  backup's name. Retention (7 daily, 4 weekly, 6 monthly, 10 adhoc) runs only
+  after every upload succeeded and goes by the timestamp in the name, never
+  mtime; only `ttstats-YYYYmmdd-HHMM[-tag].dump.age` names are ever deleted.
+- **Restores come from a dump, never `migrate`** (migration 0010 cannot apply
+  to an empty Postgres, KAN-75). The drill restores into a throwaway
+  `postgres:16` (512 MB, no network) and compares counts with prod, read-only.
+- Both check in to Sentry by URL (`SENTRY_CRON_URL_*`); a check-in failure
+  never fails the backup. The cron pipe to `logger` loses the exit status, so
+  Sentry is where a failed night shows.
+- Tests: `test_backup_scripts.py` with stand-ins for docker, age, rclone, curl.
