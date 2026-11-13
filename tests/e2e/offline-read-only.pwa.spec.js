@@ -273,9 +273,9 @@ test.describe("You're back online · Refresh", () => {
     const mark = net.requests.length;
     await page.evaluate(() => window.dispatchEvent(new Event('online')));
     await expect(refresh(page)).toBeVisible({ timeout: 10000 });
-    // The probe: a HEAD of the manifest, which the worker does not answer.
+    // The probe: a HEAD of /healthz (KAN-109), which the worker does not answer.
     expect(sentSince(net, mark, (r) => r.method === 'HEAD').map((r) => r.path)).toContain(
-      '/manifest.webmanifest'
+      '/healthz'
     );
     await expect(page.locator('html')).toHaveAttribute('data-freshness', 'snapshot');
 
