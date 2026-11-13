@@ -58,7 +58,8 @@ Init runs in `settings/prod.py` at **import time**, to catch boot failures.
 - **Traces go through `make_traces_sampler`**: `SENTRY_TRACES_SAMPLE_RATE`,
   except the worker's warm-up fetches (`X-TTStats-Warm: 1`, KAN-136), sampled
   at a tenth of it (`SENTRY_WARM_TRACES_SAMPLE_RATE` overrides): they are not
-  visits. Their errors are reported as usual.
+  visits. Their errors are reported as usual. `/healthz` (`UNTRACED_PATHS`)
+  is never traced: probes, not visits (`ops.md`).
 - **No browser SDK.** Adding one needs `connect-src` in `prod.py` and `PROD_CSP`.
 
 ## Server-Timing on every rendered response

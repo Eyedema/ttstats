@@ -75,7 +75,7 @@ and `docs/decisions/kan-131-offline-snapshots.md`.
   cancelled in `htmx:confirm`/`beforeRequest` (capture; toast only for a user
   trigger). Log out offline: toast, but `offline.js` still purges (it is never
   stopped). "You're back online · Refresh" on `snapshot-fresh` or a 2xx from a
-  `HEAD` of the manifest (`online`, tab shown, every 30 s); never auto-reloads;
+  `HEAD /healthz` (KAN-109; a 503 is not "back") (`online`, tab shown, every 30 s); never auto-reloads;
   the button is JS-made. Amber is muted in CSS (app.css, `--ball` re-pointed).
   e2e: `offline-read-only.pwa.spec.js` (the proxy's `requests` log) and
   `.nojs`.

@@ -40,6 +40,21 @@ services:
       SENTRY_RELEASE: ${SENTRY_RELEASE:-}
     volumes:
       - static_volume:/app/static
+    # KAN-109. GET /healthz from inside the container: plain HTTP to
+    # 127.0.0.1, which HealthzMiddleware answers ahead of host validation and
+    # the HTTPS redirect. 503 (DB down, migration pending) or no answer within
+    # the timeout counts as a failure; Redis down does not (`degraded`, 200).
+    # The image has no curl, hence python. Docker does not restart an
+    # unhealthy container on its own: the status is what the deploy's swap
+    # and smoke test wait on (deploy/deploy.sh).
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=8).status == 200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # The entrypoint may run collectstatic + migrate before gunicorn binds.
+      start_period: 120s
+      start_interval: 2s
     depends_on:
       - db
       - redis

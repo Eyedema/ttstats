@@ -46,6 +46,7 @@ worker writes, so it needs no page JS to appear.
 | `SLOW_MS` / htmx timeout | 2500 / 8000 | `connection.js` |
 | Warm-up list | Today, Table, own player page, last 3 confirmed matches (max 6) | `offline.warm_urls` |
 | Warm-up rate | once per 30 min per partition; skip copies < 10 min old | `WARM_INTERVAL_MS`, `WARM_SKIP_FRESH_MS` |
+| Back-online probe | `HEAD /healthz`, 2xx only, 5 s timeout, every 30 s while visible (was a `HEAD` of the manifest until KAN-109 shipped `/healthz`: a 503 now correctly reads as "not back") | `snapshot_mode.js` `PROBE_URL` |
 
 All timings are the starting values from the tickets. **They have not been
 tuned on a real device yet**; record the tuned values here after T12.8 §5.
@@ -104,5 +105,4 @@ production measurement is still to do after rollout.
   `NAV_TIMEOUT_MS`; log out and in as someone else; leave the PWA closed for a
   day and reopen it offline (iOS eviction). Also decide whether the "Slow
   connection" hint is noise.
-- No `/healthz` yet (KAN-109): the back-online probe is a `HEAD` of the
-  manifest. Switch to `/healthz` when it exists.
+

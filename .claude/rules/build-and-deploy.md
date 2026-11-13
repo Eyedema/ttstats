@@ -89,7 +89,8 @@ paths:
   pytest (`test_live_longpoll.py`, `test_middleware.py`), the held long-poll by
   the two-phone e2e on runserver's unbounded threads.
 - **CI/CD** (`.github/workflows/main.yml`): tests with coverage on push/PR; SSH
-  deploy on master. `.py` changes gate tests, frontend extensions gate the asset
+  deploy on master via `deploy/deploy.sh` (health, smoke test, rollback:
+  `ops.md`). `.py` changes gate tests, frontend extensions gate the asset
   build. `npm run test:js` (`node --test tests/js/*.test.mjs`, no deps) runs
   in the test job whenever either changed. The e2e job is gated on
   `e2e_needed` (frontend, or `.py` outside `tests/`/`conftest.py`) and split

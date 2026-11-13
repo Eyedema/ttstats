@@ -66,3 +66,6 @@ ttstats/staticfiles_e2e/
 ttstats/staticfiles_perf/
 ttstats/perf.sqlite3
 perf-report.md
+
+# deploy/deploy.sh state (KAN-113): the last image that passed a deploy
+deploy/.last-good-image

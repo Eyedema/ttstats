@@ -134,7 +134,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           # Ensure pytest and plugins are installed if not in requirements.txt
-          pip install pytest pytest-django pytest-cov
+          pip install pytest pytest-django pytest-cov pyyaml
 
       - name: Run tests with pytest
         if: needs.changes.outputs.py_changed == 'true'
@@ -403,19 +403,14 @@ jobs:
           # GITHUB_TOKEN is what lets the VPS pull from GHCR without a
           # long-lived deploy key or making the package public.
           envs: WEB_IMAGE,GHCR_TOKEN,GHCR_USER,SENTRY_RELEASE
+          # Everything after the pull is deploy/deploy.sh (KAN-113), so the
+          # deploy can be run and tested by hand on the box. `git pull` first
+          # so the script that runs is this commit's.
           script: |
             set -e
             cd ${{ secrets.WORK_DIR }}
             git pull
-            echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
-            export WEB_IMAGE SENTRY_RELEASE
-            docker compose -f compose.prod.yml pull web
-            docker compose -f compose.prod.yml up -d
-            docker compose -f compose.prod.yml exec -T web python manage.py migrate
-            docker compose -f compose.prod.yml exec -T web python manage.py collectstatic --noinput
-            docker logout ghcr.io
-            # Keep the box from filling up with superseded images.
-            docker image prune -f
+            GHCR_USER="$GHCR_USER" GHCR_TOKEN="$GHCR_TOKEN" bash deploy/deploy.sh "$WEB_IMAGE" "$SENTRY_RELEASE"
 
       - name: Deployment status
         run: echo "✅ Deployment to VPS completed successfully!"
