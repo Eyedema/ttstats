@@ -11,6 +11,9 @@ paths:
 Host cron runs one dispatcher daily at 03:15 UTC:
 `manage.py run_scheduled_jobs [--job NAME] [--dry-run] [--list]`. The crontab
 is committed in `deploy/cron/ttstats.cron`. Install steps are in its README.
+The nightly run (not `--job`, not `--dry-run`) checks in to the Sentry cron
+monitor `scheduled-jobs`; any job not ending SUCCESS makes it an error
+(`observability.md`). Changing the schedule means changing both.
 
 - **Not Celery.** The VPS has 3.7 GB of RAM, and push.py deliberately runs
   without a broker. A broker and workers cost too much for once-a-day jobs.
