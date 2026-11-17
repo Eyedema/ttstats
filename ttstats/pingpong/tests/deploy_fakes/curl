@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+"""A fake `curl` for deploy/deploy.sh's smoke test (KAN-116).
+
+Answers from the fake docker's state (FAKE_DOCKER_STATE): the "site" is
+whatever image `web` runs. /healthz reports that image's tag as its release
+unless the image is listed in `healthy` as False (then 503). A path listed in
+`broken_pages[image]` answers 500. Supports the flags deploy.sh uses: -f, -s,
+-S, -o FILE, -w FORMAT, --max-time N, -H HEADER.
+"""
+import json
+import os
+import sys
+from urllib.parse import urlparse
+
+with open(os.environ["FAKE_DOCKER_STATE"]) as fh:
+    state = json.load(fh)
+
+args = sys.argv[1:]
+fail_on_error = False
+out_file = None
+write_out = None
+url = None
+i = 0
+while i < len(args):
+    a = args[i]
+    if a in ("-o", "-w", "--max-time", "-H"):
+        if a == "-o":
+            out_file = args[i + 1]
+        elif a == "-w":
+            write_out = args[i + 1]
+        i += 2
+        continue
+    if a.startswith("-") and not a.startswith("--"):
+        fail_on_error = fail_on_error or "f" in a
+    elif not a.startswith("-"):
+        url = a
+    i += 1
+
+state.setdefault("curls", []).append(url)
+with open(os.environ["FAKE_DOCKER_STATE"], "w") as fh:
+    json.dump(state, fh)
+
+image = state.get("running", "")
+path = urlparse(url).path
+healthy = bool(image) and state.get("healthy", {}).get(image, True)
+
+if not image:
+    sys.exit(7)  # couldn't connect
+if path == "/healthz":
+    status = 200 if healthy else 503
+    body = json.dumps({"status": "ok" if healthy else "error",
+                       "release": image.rsplit(":", 1)[-1], "checks": {}})
+elif path in state.get("broken_pages", {}).get(image, []):
+    status, body = 500, "<h1>Server Error</h1>"
+else:
+    status, body = 200, "<html></html>"
+
+if out_file is None:
+    sys.stdout.write(body)
+if write_out:
+    sys.stdout.write(write_out.replace("%{http_code}", str(status)))
+if fail_on_error and status >= 400:
+    sys.exit(22)

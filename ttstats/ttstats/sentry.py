@@ -37,6 +37,8 @@ third-party issue tracker is a token that leaked.
 import logging
 import os
 import re
+import time
+from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
 
@@ -94,19 +96,40 @@ def _env_float(name, default):
 WARM_ENVIRON_KEY = "HTTP_X_TTSTATS_WARM"
 WARM_SAMPLE_FACTOR = 0.1
 
-UNTRACED_PATHS = frozenset({"/healthz", "/healthz/"})
+UNTRACED_PATHS = frozenset({"/healthz", "/healthz/", "/sw.js", "/manifest.webmanifest"})
+# WhiteNoise serves these inside the WSGI app, so each is a transaction.
+UNTRACED_PREFIXES = ("/static/",)
+
+# The live scoring writes (KAN-111): the critical path, and few. Traced at
+# SENTRY_LIVE_TRACES_SAMPLE_RATE (default 1.0 while tracing is on at all).
+# /live/state/ is not here: a held long-poll (wait=1) lasts up to 20 s by
+# design and is never traced; an instant read gets the base rate.
+_LIVE_WRITE_RE = re.compile(r"^/pingpong/matches/\d+/live/[a-z-]+/")
+_LIVE_STATE_RE = re.compile(r"^/pingpong/matches/\d+/live/state/")
 
 
-def make_traces_sampler(base_rate, warm_rate):
-    """A `traces_sampler`: `warm_rate` for warm-up requests, else `base_rate`."""
+def make_traces_sampler(base_rate, warm_rate, live_rate=None):
+    """A `traces_sampler`.
+
+    0 for probes and static files; `live_rate` for live scoring writes; 0 for
+    a held long-poll; `warm_rate` for warm-up requests; else `base_rate`.
+    """
+    if live_rate is None:
+        live_rate = base_rate
 
     def traces_sampler(sampling_context):
         try:
             environ = sampling_context.get("wsgi_environ") or {}
-            # Probes, not visits (KAN-109): Docker every 10 s, the uptime
-            # monitor, the offline back-online check.
-            if environ.get("PATH_INFO") in UNTRACED_PATHS:
+            path = environ.get("PATH_INFO") or ""
+            # Probes and files, not visits (KAN-109/111): Docker, the uptime
+            # monitor, the offline back-online check, WhiteNoise.
+            if path in UNTRACED_PATHS or path.startswith(UNTRACED_PREFIXES):
                 return 0
+            if _LIVE_STATE_RE.match(path):
+                if "wait=1" in (environ.get("QUERY_STRING") or ""):
+                    return 0
+            elif _LIVE_WRITE_RE.match(path):
+                return live_rate
             if environ.get(WARM_ENVIRON_KEY) == "1":
                 return warm_rate
         except Exception:  # pragma: no cover - defensive; telemetry never raises
@@ -225,6 +248,7 @@ def init_sentry(environment="production", release=None):
         return False
 
     traces_rate = _env_float("SENTRY_TRACES_SAMPLE_RATE", 0.0)
+    live_rate = _env_float("SENTRY_LIVE_TRACES_SAMPLE_RATE", 1.0 if traces_rate > 0 else 0.0)
     sentry_sdk.init(
         dsn=dsn,
         environment=os.environ.get("SENTRY_ENVIRONMENT", environment),
@@ -252,6 +276,7 @@ def init_sentry(environment="production", release=None):
         traces_sampler=make_traces_sampler(
             traces_rate,
             _env_float("SENTRY_WARM_TRACES_SAMPLE_RATE", traces_rate * WARM_SAMPLE_FACTOR),
+            live_rate=live_rate,
         ),
         ignore_errors=list(IGNORED_ERRORS),
         before_send=before_send,
@@ -304,3 +329,80 @@ class SentryHttpErrorMiddleware:
                 )
         except Exception:  # pragma: no cover - defensive; telemetry never raises
             logger.debug("Failed to report %s to Sentry", response.status_code, exc_info=True)
+
+
+# --- Cron monitors (KAN-111) -------------------------------------------------
+#
+# A missed or failed nightly run must reach a phone, not just journald. Sentry
+# cron monitors alert on a missing check-in as well as an error one, and the
+# config below is upserted on every check-in, so the schedule lives here, in
+# the repo, next to deploy/cron/ttstats.cron. Keep the two in step.
+#
+# The shell scripts (deploy/backup/) check in by URL with curl instead; they
+# run on the host, outside the image.
+
+SCHEDULED_JOBS_MONITOR = "scheduled-jobs"
+SCHEDULED_JOBS_MONITOR_CONFIG = {
+    "schedule": {"type": "crontab", "value": "15 3 * * *"},
+    "timezone": "UTC",
+    # Minutes. Cron fires within seconds; a late start beyond this is "missed".
+    "checkin_margin": 15,
+    # Minutes. The jobs take seconds today; a run still going after this is
+    # stuck (a held lock, a hung query).
+    "max_runtime": 30,
+    "failure_issue_threshold": 1,
+    "recovery_threshold": 1,
+}
+
+
+def _sdk_active():
+    try:
+        import sentry_sdk
+
+        return sentry_sdk.get_client().is_active()
+    except Exception:  # pragma: no cover - defensive; telemetry never raises
+        return False
+
+
+class _CheckIn:
+    """Set `.ok = True` when the run succeeded; anything else is an error."""
+
+    ok = False
+
+
+def _checkin(**kwargs):
+    try:
+        from sentry_sdk.crons import capture_checkin
+
+        return capture_checkin(**kwargs)
+    except Exception:  # telemetry never raises
+        logger.debug("Sentry check-in failed", exc_info=True)
+        return None
+
+
+@contextmanager
+def cron_monitor(slug, monitor_config, *, enabled=True):
+    """Wrap a scheduled run in Sentry cron check-ins.
+
+    `in_progress` on entry; on exit `ok` if the body set `checkin.ok = True`,
+    else `error` (an exception is an error and is re-raised). Inert, with no
+    SDK call at all, when Sentry is off (no DSN: dev, CI, tests) or
+    `enabled` is False (hand runs: `--job`, `--dry-run`).
+    """
+    checkin = _CheckIn()
+    if not (enabled and _sdk_active()):
+        yield checkin
+        return
+    started = time.monotonic()
+    check_in_id = _checkin(
+        monitor_slug=slug, status="in_progress", monitor_config=monitor_config
+    )
+    try:
+        yield checkin
+    except BaseException:
+        _checkin(monitor_slug=slug, check_in_id=check_in_id, status="error",
+                 duration=time.monotonic() - started)
+        raise
+    _checkin(monitor_slug=slug, check_in_id=check_in_id,
+             status="ok" if checkin.ok else "error",
+             duration=time.monotonic() - started)

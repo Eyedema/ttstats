@@ -9,6 +9,7 @@ from django.core.management.base import BaseCommand, CommandError
 
 from pingpong import jobs
 from pingpong.models import JobRun
+from ttstats import sentry
 
 
 class Command(BaseCommand):
@@ -44,15 +45,29 @@ class Command(BaseCommand):
         if dry_run:
             self.stdout.write(self.style.WARNING("DRY RUN: nothing will be written"))
 
-        for name in names:
-            result = jobs.run_job(name, dry_run=dry_run)
-            line = f"{name}: {result.status}"
-            if result.summary:
-                line += f" - {result.summary}"
-            if result.status == JobRun.Status.FAILED:
-                last = result.error.strip().splitlines()[-1:] or ['']
-                self.stderr.write(self.style.ERROR(f"{line} - {last[0]}"))
-            elif result.status == JobRun.Status.SKIPPED:
-                self.stdout.write(self.style.WARNING(line))
-            else:
-                self.stdout.write(self.style.SUCCESS(line))
+        # Only the nightly run checks in (KAN-111): a hand `--job X` or a dry
+        # run is not the schedule, and would mark a missed night as fine.
+        # Any job not ending SUCCESS makes the check-in an error: a FAILED
+        # job, or a SKIPPED one (cache unreachable, or an overlapping run).
+        monitored = not options["job"] and not dry_run
+        with sentry.cron_monitor(
+            sentry.SCHEDULED_JOBS_MONITOR,
+            sentry.SCHEDULED_JOBS_MONITOR_CONFIG,
+            enabled=monitored,
+        ) as checkin:
+            results = [self._run(name, dry_run) for name in names]
+            checkin.ok = all(r.status == JobRun.Status.SUCCESS for r in results)
+
+    def _run(self, name, dry_run):
+        result = jobs.run_job(name, dry_run=dry_run)
+        line = f"{name}: {result.status}"
+        if result.summary:
+            line += f" - {result.summary}"
+        if result.status == JobRun.Status.FAILED:
+            last = result.error.strip().splitlines()[-1:] or ['']
+            self.stderr.write(self.style.ERROR(f"{line} - {last[0]}"))
+        elif result.status == JobRun.Status.SKIPPED:
+            self.stdout.write(self.style.WARNING(line))
+        else:
+            self.stdout.write(self.style.SUCCESS(line))
+        return result

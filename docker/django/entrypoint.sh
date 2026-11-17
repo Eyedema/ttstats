@@ -7,18 +7,26 @@ while ! nc -z $DB_HOST ${DB_PORT:-5432}; do
 done
 echo "PostgreSQL started"
 
-echo "Collecting static files..."
-python manage.py collectstatic --noinput
+# Production sets SKIP_BOOT_TASKS=1 (compose.prod.yml): deploy/deploy.sh runs
+# these exactly once, with the new image, BEFORE the swap, while the old
+# container keeps serving (KAN-114). Run here too they would race between two
+# containers and repeat on every restart. Dev and hand runs keep them.
+if [ "${SKIP_BOOT_TASKS:-0}" = "1" ]; then
+  echo "Boot tasks skipped (SKIP_BOOT_TASKS=1): the deploy ran them."
+else
+  echo "Collecting static files..."
+  python manage.py collectstatic --noinput
 
-echo "Making migrations..."
-python manage.py makemigrations --check --dry-run || {
-    echo "⚠️  WARNING: Uncommitted migrations detected!"
-    echo "Migrations should be created in development and committed to git."
-    exit 1
-}
+  echo "Making migrations..."
+  python manage.py makemigrations --check --dry-run || {
+      echo "⚠️  WARNING: Uncommitted migrations detected!"
+      echo "Migrations should be created in development and committed to git."
+      exit 1
+  }
 
-echo "Running migrations..."
-python manage.py migrate --noinput
+  echo "Running migrations..."
+  python manage.py migrate --noinput
+fi
 
 # Threaded workers (KAN-168): a held /live/state/?wait=1 request takes one
 # thread, not one of three processes. Thread-locals stay per request: one
