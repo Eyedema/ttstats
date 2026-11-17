@@ -8,7 +8,7 @@
 # passes the run's own GITHUB_TOKEN); by hand, a prior `docker login` does.
 #
 #   1. read the running web image: the rollback target
-#   2. pull the new image
+#   2. pull the new image; a tagged backup once backups are set up (KAN-107)
 #   3. pre-swap tasks, ONCE, with the new image, while the old container
 #      still serves: makemigrations --check, migrate, collectstatic (KAN-114).
 #      Migrations must therefore be expand/contract: the previous release
@@ -31,7 +31,8 @@
 # Env overrides (tests, by hand): COMPOSE_FILE, DEPLOY_STATE_DIR, PUBLIC_URL,
 # SMOKE_TIMEOUT (s, default 90), SMOKE_INTERVAL (s, default 2),
 # WAIT_TIMEOUT (s, default 180, the healthcheck wait), SWAP_MODE
-# (recreate|rollout), STOP_GRACE (s, default 30, the old container's drain).
+# (recreate|rollout), STOP_GRACE (s, default 30, the old container's drain),
+# DEPLOY_SKIP_BACKUP=1, BACKUP_SCRIPT, BACKUP_ENV_FILE.
 set -euo pipefail
 
 usage() {
@@ -57,6 +58,8 @@ WAIT_TIMEOUT="${WAIT_TIMEOUT:-180}"
 # KAN-115). rollout needs Pangolin's target to be the `ttstats-web` alias.
 SWAP_MODE="${SWAP_MODE:-recreate}"
 STOP_GRACE="${STOP_GRACE:-30}"
+BACKUP_SCRIPT="${BACKUP_SCRIPT:-$REPO_ROOT/deploy/backup/backup.sh}"
+BACKUP_ENV_FILE="${BACKUP_ENV_FILE:-$REPO_ROOT/deploy/backup/backup.env}"
 # Pages a broken release cannot serve: two templates with forms (CSRF,
 # static manifest), the PWA files rendered without a request, the offline page.
 SMOKE_PATHS="/accounts/login/ /pingpong/login/ /manifest.webmanifest /sw.js /offline/"
@@ -221,6 +224,22 @@ export WEB_IMAGE="$IMAGE" SENTRY_RELEASE="$SHA"
 
 log "pull"
 dcp pull web || { log "pull failed; nothing changed"; exit 3; }
+
+# KAN-107: cheap insurance before migrations touch the data (a dump took
+# 0.8 s / 230 KB on 2026-11-17). Only once backups are set up (backup.env);
+# a failure stops the deploy with nothing changed. DEPLOY_SKIP_BACKUP=1 is
+# the escape hatch for an emergency fix while the remote is down.
+if [ "${DEPLOY_SKIP_BACKUP:-0}" = 1 ]; then
+  log "pre-deploy backup skipped (DEPLOY_SKIP_BACKUP=1)"
+elif [ ! -f "$BACKUP_ENV_FILE" ]; then
+  log "pre-deploy backup skipped: no backup.env yet (KAN-117)"
+else
+  log "pre-deploy backup"
+  if ! BACKUP_ENV_FILE="$BACKUP_ENV_FILE" "$BACKUP_SCRIPT" --tag "pre-deploy-${SHA:0:7}"; then
+    log "pre-deploy backup failed; nothing changed (DEPLOY_SKIP_BACKUP=1 to override)"
+    exit 3
+  fi
+fi
 
 log "pre-swap: makemigrations --check, migrate, collectstatic (old container still serving)"
 if ! dcp run --rm --no-deps -T --entrypoint sh web -c \
