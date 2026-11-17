@@ -21,6 +21,8 @@ ttstats/staticfiles/
 .env
 .env.dev.local
 .env.prod
+# Off-host backup config (KAN-118); the committed template is backup.env.example.
+deploy/backup/backup.env
 
 # Frontend build output (produced by `npm run build:css`; the Docker image
 # builds it in the `assets` stage, compose.dev.yml rebuilds it on the fly)

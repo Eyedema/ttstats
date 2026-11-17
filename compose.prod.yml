@@ -38,6 +38,10 @@ services:
       # Empty when compose is run by hand on the box, which just means the
       # issue carries no release -- never an error.
       SENTRY_RELEASE: ${SENTRY_RELEASE:-}
+      # deploy/deploy.sh runs makemigrations --check, migrate and
+      # collectstatic once, before the swap (KAN-114); the entrypoint skips
+      # them. A hand `up` after a pull must run deploy.sh, not rely on boot.
+      SKIP_BOOT_TASKS: "1"
     volumes:
       - static_volume:/app/static
     # KAN-109. GET /healthz from inside the container: plain HTTP to
@@ -59,8 +63,14 @@ services:
       - db
       - redis
     networks:
-      - pingpong_network
-      - pangolin
+      pingpong_network:
+      pangolin:
+        # The name Pangolin's target should use (KAN-115). A rollout runs a
+        # second web container beside the first, and container names
+        # alternate (ttstats-web-1, -2), so only an alias is stable. Not the
+        # bare service name `web`: other stacks share this network.
+        aliases:
+          - ttstats-web
 
 volumes:
   pgdata:

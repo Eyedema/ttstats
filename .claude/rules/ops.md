@@ -8,6 +8,7 @@ paths:
   - "ttstats/pingpong/tests/test_healthz.py"
   - "ttstats/pingpong/tests/test_deploy_config.py"
   - "ttstats/pingpong/tests/test_deploy_script.py"
+  - "ttstats/pingpong/tests/test_backup_scripts.py"
 ---
 
 # Operations: health, deploys, backups (KAN-106)
@@ -42,3 +43,39 @@ Why each piece is shaped as it is: `docs/decisions/kan-106-reliability.md`.
 - **Every compose call pins `WEB_IMAGE` and `SENTRY_RELEASE`**; never a bare
   `dcp up -d web` (falls back to `:latest`).
 - **Never run jobs from the deploy** (`jobs.md`): the SSH step has a timeout.
+- **Migrate and collectstatic run once, before the swap** (KAN-114), with the
+  new image in a one-off `compose run --entrypoint sh` while the old container
+  serves; `makemigrations --check` gates it (exit 3: nothing swapped).
+  Prod web sets `SKIP_BOOT_TASKS=1`, so the entrypoint skips them.
+- **Migrations are expand/contract.** The previous release runs against the
+  new schema until the swap, and again after a rollback (which never reverts
+  migrations). Add nullable/defaulted columns and new tables in one release;
+  drop or rename only in a later one, after nothing reads the old shape.
+- **collectstatic is additive**: `static_volume` keeps old hashed files, so the
+  old container keeps its assets. Never `--clear` it in a deploy.
+- **Smoke test, then rollback** (KAN-116): `up --wait` on the healthcheck,
+  then the public `/healthz` must report the new `release` and the smoke pages
+  must answer 200 within `SMOKE_TIMEOUT`. Else the previous image goes back
+  (same checks), Sentry gets a message naming both SHAs, and the script exits
+  1 (red workflow). Exit 4 = the rollback failed too: look now.
+
+
+## Backups (KAN-107/108)
+
+- `deploy/backup/backup.sh` (nightly 02:45 UTC, before the 03:15 jobs) and
+  `restore_drill.sh` (monthly) run from **host cron**, not the job runner:
+  `pg_dump` exists only in the `db` container. Setup: `deploy/backup/README.md`.
+- **Encrypted before it leaves the box** (age, to every recipient), plaintext
+  only in the `mktemp -d` dir removed by `trap`. **The main private key is
+  never on the VPS**; the drill decrypts with a second, drill-only recipient.
+- **Upload to `.partial`, then `moveto`**: a half upload never carries a
+  backup's name. Retention (7 daily, 4 weekly, 6 monthly, 10 adhoc) runs only
+  after every upload succeeded and goes by the timestamp in the name, never
+  mtime; only `ttstats-YYYYmmdd-HHMM[-tag].dump.age` names are ever deleted.
+- **Restores come from a dump, never `migrate`** (migration 0010 cannot apply
+  to an empty Postgres, KAN-75). The drill restores into a throwaway
+  `postgres:16` (512 MB, no network) and compares counts with prod, read-only.
+- Both check in to Sentry by URL (`SENTRY_CRON_URL_*`); a check-in failure
+  never fails the backup. The cron pipe to `logger` loses the exit status, so
+  Sentry is where a failed night shows.
+- Tests: `test_backup_scripts.py` with stand-ins for docker, age, rclone, curl.

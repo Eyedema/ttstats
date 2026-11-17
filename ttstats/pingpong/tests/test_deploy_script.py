@@ -142,13 +142,176 @@ class TestHappyPath:
         assert "previous: none" in result.stdout
 
 
-class TestFailures:
-    @pytest.mark.parametrize("step", ["pull", "up", "login"])
-    def test_a_failed_step_fails_the_deploy_and_keeps_last_good(self, tmp_path, step):
-        box = Box(tmp_path, fail=[step])
+class TestOneMigrate:
+    """KAN-114: makemigrations --check, migrate and collectstatic run once,
+    with the new image, before the swap."""
+
+    def test_pre_swap_tasks_run_once_before_up(self, tmp_path):
+        box = Box(tmp_path)
+        assert box.run(NEW, "new222").returncode == 0
+        verbs = box.verbs()
+
+        assert verbs.count("compose run") == 1
+        assert verbs.index("compose pull") < verbs.index("compose run") < verbs.index("compose up")
+        run = next(c for c in box.state["calls"] if "run" in c["argv"])
+        command = " ".join(run["argv"])
+        assert command.count("migrate --noinput") == 1
+        assert "makemigrations --check --dry-run &&" in command
+        assert "collectstatic --noinput" in command
+        assert run["web_image"] == NEW
+        # Never via the entrypoint (it would exec gunicorn), never with deps.
+        assert "--entrypoint" in run["argv"] and "--no-deps" in run["argv"]
+
+    def test_nothing_migrates_after_the_swap(self, tmp_path):
+        box = Box(tmp_path)
+        box.run(NEW, "new222")
+        assert not any("migrate" in " ".join(e) for e in box.state.get("execs", []))
+
+    def test_a_failed_pre_swap_task_never_swaps(self, tmp_path):
+        box = Box(tmp_path, fail=["run"])
         (box.state_dir / ".last-good-image").write_text(OLD + "\n")
 
-        result = box.run(NEW, "new222", GHCR_USER="bot", GHCR_TOKEN="t0ken")
+        result = box.run(NEW, "new222")
 
-        assert result.returncode != 0
+        assert result.returncode == 3
+        assert "compose up" not in box.verbs()
+        assert box.state["running"] == OLD
         assert box.last_good == OLD
+
+    def test_up_waits_for_the_healthcheck(self, tmp_path):
+        box = Box(tmp_path)
+        box.run(NEW, "new222")
+        up = next(c for c in box.state["calls"] if "up" in c["argv"] and "web" in c["argv"])
+        assert "--wait" in up["argv"]
+
+    def test_db_and_redis_come_up_without_touching_web(self, tmp_path):
+        box = Box(tmp_path)
+        box.run(NEW, "new222")
+        first_up = next(c for c in box.state["calls"] if "up" in c["argv"])
+        assert first_up["argv"][-2:] == ["db", "redis"]
+        assert "--no-deps" in first_up["argv"]
+
+
+class TestSmokeAndRollback:
+    """KAN-116: the public /healthz must report the new release and the
+    smoke pages must answer, or the previous image goes back."""
+
+    def test_smoke_checks_release_then_pages(self, tmp_path):
+        box = Box(tmp_path)
+        result = box.run(NEW, "new222", PUBLIC_URL="https://tt.example")
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        curls = box.state["curls"]
+        assert curls[0] == "https://tt.example/healthz"
+        for path in ("/accounts/login/", "/pingpong/login/", "/sw.js"):
+            assert f"https://tt.example{path}" in curls
+
+    def _assert_rolled_back(self, box, result):
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert box.state["running"] == OLD
+        last_up = [c for c in box.state["calls"] if "up" in c["argv"]][-1]
+        assert last_up["web_image"] == OLD
+        assert last_up["release"] == "old111"
+        assert box.last_good is None or box.last_good == OLD
+        assert "rolled back" in result.stdout
+        # Reported from inside the container that is serving again.
+        assert any("python" in e for e in box.state.get("execs", []))
+
+    def test_unhealthy_new_container_rolls_back(self, tmp_path):
+        box = Box(tmp_path, healthy={NEW: False})
+        self._assert_rolled_back(box, box.run(NEW, "new222", SMOKE_TIMEOUT="0"))
+
+    def test_broken_page_rolls_back(self, tmp_path):
+        box = Box(tmp_path, broken_pages={NEW: ["/pingpong/login/"]})
+        result = box.run(NEW, "new222")
+        self._assert_rolled_back(box, result)
+        assert "/pingpong/login/ answered 500" in result.stdout
+
+    def test_wrong_release_on_healthz_rolls_back(self, tmp_path):
+        """The proxy still reaching the old container counts as a failure."""
+        box = Box(tmp_path)
+        # The image is tagged differently from the SHA we were asked to ship.
+        result = box.run(NEW, "not-this-sha", SMOKE_TIMEOUT="0")
+        self._assert_rolled_back(box, result)
+
+    def test_failed_rollback_is_exit_4(self, tmp_path):
+        box = Box(tmp_path, healthy={NEW: False, OLD: False})
+        result = box.run(NEW, "new222", SMOKE_TIMEOUT="0")
+        assert result.returncode == 4
+        assert "ROLLBACK FAILED" in result.stdout
+
+    def test_nothing_to_roll_back_to_is_exit_4(self, tmp_path):
+        box = Box(tmp_path, running="", healthy={NEW: False})
+        result = box.run(NEW, "new222", SMOKE_TIMEOUT="0")
+        assert result.returncode == 4
+
+    def test_previous_image_falls_back_to_last_good(self, tmp_path):
+        box = Box(tmp_path, running="", healthy={NEW: False})
+        (box.state_dir / ".last-good-image").write_text(OLD + "\n")
+        result = box.run(NEW, "new222", SMOKE_TIMEOUT="0")
+        assert result.returncode == 1
+        assert box.state["running"] == OLD
+
+    def test_a_sentry_failure_does_not_change_the_outcome(self, tmp_path):
+        box = Box(tmp_path, healthy={NEW: False}, fail=["exec"])
+        result = box.run(NEW, "new222", SMOKE_TIMEOUT="0")
+        assert result.returncode == 1
+
+
+class TestFailures:
+    def test_failed_pull_is_exit_3_and_changes_nothing(self, tmp_path):
+        box = Box(tmp_path, fail=["pull"])
+        (box.state_dir / ".last-good-image").write_text(OLD + "\n")
+        result = box.run(NEW, "new222")
+        assert result.returncode == 3
+        assert "compose up" not in box.verbs()
+        assert box.last_good == OLD
+
+    def test_failed_login_fails_before_pulling(self, tmp_path):
+        box = Box(tmp_path, fail=["login"])
+        result = box.run(NEW, "new222", GHCR_USER="bot", GHCR_TOKEN="t0ken")
+        assert result.returncode != 0
+        assert "compose pull" not in box.verbs()
+
+
+class TestRollout:
+    """KAN-115: SWAP_MODE=rollout starts the new container beside the old one
+    and stops the old one only once the new one is healthy."""
+
+    def test_new_container_healthy_then_old_stopped(self, tmp_path):
+        box = Box(tmp_path)
+        result = box.run(NEW, "new222", SWAP_MODE="rollout")
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert [c["image"] for c in box.state["containers"]] == [NEW]
+        verbs = box.verbs()
+        scale_up = next(i for i, c in enumerate(box.state["calls"])
+                        if "--scale" in c["argv"])
+        assert "--no-recreate" in box.state["calls"][scale_up]["argv"]
+        assert box.state["calls"][scale_up]["web_image"] == NEW
+        # The old container is stopped (drained) only after the new is healthy.
+        assert verbs.index("stop") > scale_up
+        stop = next(c for c in box.state["calls"] if c["argv"][0] == "stop")
+        assert stop["argv"][1:3] == ["-t", "30"] and stop["argv"][-1] == "c0"
+
+    def test_unhealthy_new_container_is_removed_and_old_never_touched(self, tmp_path):
+        box = Box(tmp_path, healthy={NEW: False})
+        result = box.run(NEW, "new222", SWAP_MODE="rollout", SMOKE_TIMEOUT="0")
+
+        assert "c0" not in box.state.get("removed", [])
+        assert [c["image"] for c in box.state["containers"]] == [OLD]
+        # Then the rollback finds the old image already serving and keeps it.
+        assert result.returncode == 1, result.stdout + result.stderr
+
+    def test_smoke_failure_after_rollout_rolls_back_the_same_way(self, tmp_path):
+        box = Box(tmp_path, broken_pages={NEW: ["/sw.js"]})
+        result = box.run(NEW, "new222", SWAP_MODE="rollout")
+
+        assert result.returncode == 1
+        assert [c["image"] for c in box.state["containers"]] == [OLD]
+        assert box.state["containers"][0]["id"] != "c0"  # a fresh old-image container
+
+    def test_default_mode_is_recreate(self, tmp_path):
+        box = Box(tmp_path)
+        box.run(NEW, "new222")
+        assert not any("--scale" in c["argv"] for c in box.state["calls"])

@@ -1,6 +1,7 @@
 ---
 paths:
   - "ttstats/ttstats/sentry.py"
+  - "ttstats/pingpong/tests/test_sentry_monitoring.py"
   - "ttstats/ttstats/server_timing.py"
   - "ttstats/pingpong/observability.py"
   - "ttstats/ttstats/settings/prod.py"
@@ -58,8 +59,15 @@ Init runs in `settings/prod.py` at **import time**, to catch boot failures.
 - **Traces go through `make_traces_sampler`**: `SENTRY_TRACES_SAMPLE_RATE`,
   except the worker's warm-up fetches (`X-TTStats-Warm: 1`, KAN-136), sampled
   at a tenth of it (`SENTRY_WARM_TRACES_SAMPLE_RATE` overrides): they are not
-  visits. Their errors are reported as usual. `/healthz` (`UNTRACED_PATHS`)
-  is never traced: probes, not visits (`ops.md`).
+  visits. Their errors are reported as usual. Never traced: `/healthz`,
+  `/sw.js`, the manifest, `/static/` (`UNTRACED_*`) and a held long-poll
+  (`live/state/?wait=1`, 20 s by design). Live writes (`live/<op>/`) get
+  `SENTRY_LIVE_TRACES_SAMPLE_RATE` (default 1.0 while tracing is on, else 0).
+- **Cron monitors** (KAN-111): `sentry.cron_monitor(slug, config)` sends
+  `in_progress`, then `ok`/`error`; inert without an active client, never
+  raises. Config is upserted from code, so the schedule in
+  `SCHEDULED_JOBS_MONITOR_CONFIG` must match `deploy/cron/ttstats.cron`.
+  Host scripts (backup, drill) check in by URL with curl instead.
 - **No browser SDK.** Adding one needs `connect-src` in `prod.py` and `PROD_CSP`.
 
 ## Server-Timing on every rendered response
