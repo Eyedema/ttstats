@@ -67,3 +67,26 @@ owner's phone. Rules that follow from it live in `.claude/rules/ops.md`.
   guaranteed signal.
 - The first deploy of KAN-114/116 rolls back to an image without `/healthz`
   only if it fails; that is why KAN-109 + KAN-113 shipped one deploy earlier.
+
+## Backups (KAN-107, KAN-117, KAN-118) and the drill (KAN-108)
+
+- **Host cron, not the job runner**: the image has no `pg_dump`; the `db`
+  container has the matching 16.x. 02:45 UTC, before the 03:15 jobs, so a
+  bad nightly job is always preceded by a backup.
+- **Remote: Cloudflare R2** (owner, 2026-11-17), over B2: 10 GB free, no
+  egress fees for a restore, S3 API so rclone's `s3` backend with
+  `provider = Cloudflare`. The token is scoped to the one bucket with object
+  read/write only, hence `no_check_bucket = true`.
+- **age, two recipients.** The main private key lives only in the owner's
+  password manager, never on the VPS: whoever takes the box gets nothing
+  from the bucket that the database on the box would not already give them.
+  The drill decrypts with a second, drill-only key kept on the VPS, so the
+  monthly drill needs no human; a leaked drill key is no worse than the
+  live database next to it.
+- **Retention by count of names, not dates or mtimes**: no BSD/GNU `date`
+  arithmetic, and a run of failed nights keeps older backups longer rather
+  than expiring them. Only names matching the backup pattern are deleted.
+- **The drill restores a dump into a throwaway Postgres; never `migrate`**
+  (KAN-75: 0010 cannot apply to an empty Postgres). It compares the latest
+  *pingpong* migration with prod's, row counts >= 99%, and the newest daily
+  object's age (fails over 50 h); a quiet week of no matches only warns.

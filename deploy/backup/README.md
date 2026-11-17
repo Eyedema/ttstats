@@ -68,7 +68,7 @@ with defaults, is in [`backup.env.example`](backup.env.example). The essentials:
 
 | Variable | Meaning |
 |---|---|
-| `BACKUP_REMOTE` | rclone remote + path, e.g. `b2:<bucket>/ttstats` |
+| `BACKUP_REMOTE` | rclone remote + path, here `r2:ttstats-backups/ttstats` |
 | `BACKUP_AGE_RECIPIENTS` / `BACKUP_AGE_RECIPIENTS_FILE` | age public keys (main + drill) |
 | `BACKUP_RCLONE_CONFIG` | rclone config file (optional) |
 | `SENTRY_CRON_URL_BACKUP` / `SENTRY_CRON_URL_DRILL` | check-in URLs without `?status=` (optional) |
@@ -109,48 +109,70 @@ migration 0010 can't apply to one (KAN-75).
 
 ## KAN-117 setup checklist (manual, once)
 
-The remote and where the main private key lives are **not decided yet**;
-`<...>` marks each choice.
+Decided 2026-11-17: the remote is **Cloudflare R2**; the main private key
+lives **only in the owner's password manager**.
 
-- [ ] Install the tools on the VPS: `apt install age rclone` (check
-      `age --version` >= 1.1, `rclone version`).
-- [ ] **Main key** — on a machine that is *not* the VPS:
-      `age-keygen -o ttstats-backup-main.agekey`. Store the private key in
-      `<password manager / offline location>`, and a second copy in
-      `<second location>`. Note the public key (`age1...`). The main private
-      key must never be copied to the VPS.
-- [ ] **Drill key** — on the VPS:
-      `install -d -m 700 /root/.config/ttstats && age-keygen -o /root/.config/ttstats/drill.agekey && chmod 600 /root/.config/ttstats/drill.agekey`.
-      Note its public key. (It can decrypt backups, so it is as sensitive as
-      the data already on the box, and no more.)
-- [ ] **Remote** — create `<bucket>` at `<provider>` with an application key
-      scoped to that bucket, ideally without delete rights beyond what the
-      retention needs (or enable the provider's object lock / lifecycle as a
-      second line). `rclone config` → remote `<name>`; test with
-      `rclone lsd <name>:<bucket>`.
-- [ ] `cp deploy/backup/backup.env.example deploy/backup/backup.env && chmod 600 deploy/backup/backup.env`
-      and fill in `BACKUP_REMOTE`, `BACKUP_AGE_RECIPIENTS` (main + drill
-      public keys), `BACKUP_DRILL_IDENTITY`.
-- [ ] Sentry → Crons: create monitors `ttstats-backup` (daily, 02:45 UTC,
-      margin 30 min, max runtime 30 min) and `ttstats-restore-drill`
-      (monthly, 2nd at 04:30 UTC). Put their check-in URLs in `backup.env`.
-- [ ] `deploy/backup/backup.sh --dry-run` → `dry run OK`.
-- [ ] `deploy/backup/backup.sh` → `backup OK`; `rclone ls <remote>` shows it.
-- [ ] `deploy/backup/restore_drill.sh` → `drill OK`.
-- [ ] **Decrypt one with the main key off the VPS** (below) and `pg_restore --list` it.
-      A backup nobody can decrypt is not a backup.
+**Owner, in the Cloudflare dashboard** (no secrets leave it except by the
+paste in step 3):
+
+- [ ] R2 > Create bucket `ttstats-backups`, location hint Western Europe,
+      private (no public access, no custom domain).
+- [ ] R2 > Manage API tokens > Create API token: permission **Object Read &
+      Write**, **Apply to specific buckets only: `ttstats-backups`**, no TTL.
+      Note the Access Key ID, Secret Access Key and the S3 endpoint
+      `https://<ACCOUNT_ID>.r2.cloudflarestorage.com` (shown once).
+- [ ] **Main key**, on the Mac, not the VPS: `age-keygen -o main.agekey`.
+      Paste the whole file into the password manager as a secure note
+      ("TTStats backup key"), copy the `# public key: age1...` line, then
+      `rm main.agekey`. The private half never goes to the VPS.
+
+**On the VPS** (announced command by command):
+
+- [ ] `apt install -y age rclone` (`age --version` >= 1.1).
+- [ ] **Drill key**: `install -d -m 700 /root/.config/ttstats && age-keygen -o /root/.config/ttstats/drill.agekey && chmod 600 /root/.config/ttstats/drill.agekey`.
+      It can decrypt backups, so it is as sensitive as the database already
+      on the box, and no more.
+- [ ] `/root/.config/rclone/rclone.conf` (`chmod 600`):
+
+      [r2]
+      type = s3
+      provider = Cloudflare
+      access_key_id = <ACCESS_KEY_ID>
+      secret_access_key = <SECRET_ACCESS_KEY>
+      endpoint = https://<ACCOUNT_ID>.r2.cloudflarestorage.com
+      acl = private
+      # The token is scoped to one bucket and cannot create or list buckets.
+      no_check_bucket = true
+
+      Test: `rclone lsf r2:ttstats-backups` (empty, exit 0).
+- [ ] `cp deploy/backup/backup.env.example deploy/backup/backup.env && chmod 600 deploy/backup/backup.env`;
+      set `BACKUP_REMOTE=r2:ttstats-backups/ttstats`,
+      `BACKUP_AGE_RECIPIENTS` = main + drill public keys,
+      `BACKUP_DRILL_IDENTITY=/root/.config/ttstats/drill.agekey`.
+- [ ] Sentry check-in URLs into `backup.env`: `SENTRY_CRON_URL_BACKUP` and
+      `SENTRY_CRON_URL_DRILL`, i.e.
+      `https://<ingest-host>/api/<project-id>/cron/<slug>/<public-key>/` with
+      slugs `ttstats-backup` and `ttstats-restore-drill` (host, project id and
+      key come from the project's DSN). The monitors need no clicking: each
+      run's first check-in upserts its config (schedule, UTC, margin, max
+      runtime) from the script, `MONITOR_*` in the scripts.
+- [ ] `deploy/backup/backup.sh --dry-run` -> `dry run OK`.
+- [ ] `deploy/backup/backup.sh` -> `backup OK`; `rclone ls r2:ttstats-backups/ttstats` shows it.
+- [ ] `deploy/backup/restore_drill.sh` -> `drill OK`.
+- [ ] **Decrypt one with the main key, off the VPS** (below) and
+      `pg_restore --list` it. A backup nobody can decrypt is not a backup.
 - [ ] Uncomment the two lines in `deploy/cron/ttstats.cron` and re-install the
       crontab (`deploy/cron/README.md`).
 - [ ] After the first night: `journalctl -t ttstats-backup --since yesterday`,
-      the Sentry monitor is green, record it on KAN-118.
+      the Sentry monitor is green; record it on KAN-118.
 
 ## By hand
 
 List and fetch:
 
 ```sh
-rclone lsl <remote>:<bucket>/ttstats/daily/
-rclone copyto <remote>:<bucket>/ttstats/daily/ttstats-YYYYmmdd-HHMM.dump.age ./x.dump.age
+rclone lsl r2:ttstats-backups/ttstats/daily/
+rclone copyto r2:ttstats-backups/ttstats/daily/ttstats-YYYYmmdd-HHMM.dump.age ./x.dump.age
 ```
 
 Decrypt and inspect (any machine with the main key, or the VPS with the drill key):

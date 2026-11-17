@@ -91,6 +91,11 @@ DRILL_MAX_MATCH_AGE_DAYS=${DRILL_MAX_MATCH_AGE_DAYS:-2}
 DRILL_MAX_DUMP_AGE_HOURS=${DRILL_MAX_DUMP_AGE_HOURS:-50}
 DRILL_TABLES=${DRILL_TABLES:-"pingpong_match pingpong_pointevent pingpong_playerrating auth_user"}
 SENTRY_CRON_URL_DRILL=${SENTRY_CRON_URL_DRILL:-}
+# Sentry cron monitor, upserted on each run's first check-in. Keep in step
+# with deploy/cron/ttstats.cron (minutes for margin and max runtime).
+MONITOR_SCHEDULE=${MONITOR_SCHEDULE:-30 4 2 * *}
+MONITOR_MARGIN=${MONITOR_MARGIN:-60}
+MONITOR_MAX_RUNTIME=${MONITOR_MAX_RUNTIME:-30}
 if [ -n "${BACKUP_RCLONE_CONFIG:-}" ]; then
     export RCLONE_CONFIG=$BACKUP_RCLONE_CONFIG
 fi
@@ -104,10 +109,17 @@ CONTAINER=""
 WARNINGS=0
 
 checkin() {
-    local status=$1 url=$SENTRY_CRON_URL_DRILL sep='?'
+    local status=$1 url=$SENTRY_CRON_URL_DRILL sep='?' body='{}'
     [ -n "$url" ] || return 0
     case "$url" in *\?*) sep='&' ;; esac
-    if curl -fsS --max-time 10 --retry 2 -o /dev/null "${url}${sep}status=${status}" 2>/dev/null; then
+    # The first check-in of a run upserts the monitor (KAN-111): its schedule
+    # lives here, next to deploy/cron/ttstats.cron, not in Sentry's UI.
+    if [ "$status" = in_progress ]; then
+        body="{\"monitor_config\": {\"schedule\": {\"type\": \"crontab\", \"value\": \"$MONITOR_SCHEDULE\"}, \"timezone\": \"UTC\", \"checkin_margin\": $MONITOR_MARGIN, \"max_runtime\": $MONITOR_MAX_RUNTIME, \"failure_issue_threshold\": 1, \"recovery_threshold\": 1}}"
+    fi
+    if curl -fsS --max-time 10 --retry 2 -o /dev/null -X POST \
+        -H 'Content-Type: application/json' --data "$body" \
+        "${url}${sep}status=${status}" 2>/dev/null; then
         log "check-in: $status"
     else
         log "WARNING: Sentry check-in '$status' failed (ignored)"
