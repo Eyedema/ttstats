@@ -79,7 +79,7 @@ paths:
 - **Never a bare `dcp up -d web` on the VPS**: `compose.prod.yml` defaults
   `WEB_IMAGE` to the stale `:latest` (the deploy job sets it to the SHA), so a
   restart for an env change silently swaps in old code. Pin the running image:
-  `docs/glicko2-cutover.md` "Restarting web".
+  `docs/runbooks/disaster-recovery.md` "Restarting web".
 - **Never ASGI while tenancy is a `threading.local`**: sync code from two
   requests can share an executor thread there. Path out:
   `docs/decisions/kan-148-shared-scoring.md`.

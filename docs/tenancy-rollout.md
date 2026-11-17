@@ -55,6 +55,10 @@ alias dweb='docker compose -f compose.prod.yml exec -T web python manage.py'
 
 ### Snapshot procedure
 
+> **Superseded (KAN-112).** Take a backup with `bash deploy/backup/backup.sh --tag before-<what>`
+> and restore with `docs/runbooks/disaster-recovery.md` (sections 3-4). The
+> snippets below are this cutover's record.
+
 Take one before **step 3** and before **step 7**. Both are the steps where a
 mistake is not fixable by reversing a migration.
 

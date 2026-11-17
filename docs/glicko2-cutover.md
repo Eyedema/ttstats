@@ -32,6 +32,10 @@ alias dweb='docker compose -f compose.prod.yml exec -T web python manage.py'
 
 ## Backup and restore
 
+> **Superseded (KAN-112).** Take a backup with `bash deploy/backup/backup.sh --tag before-<what>`
+> and restore with `docs/runbooks/disaster-recovery.md` (sections 3-4). The
+> snippets below are this cutover's record.
+
 Take a snapshot at the start of phase 1, and again immediately before any step
 you cannot undo by a flag. Same procedure as `docs/tenancy-rollout.md`:
 
@@ -57,6 +61,9 @@ gunzip -c ~/ttstats-YYYYmmdd-HHMM.sql.gz \
 ```
 
 ## Restarting web
+
+> Current version: `docs/runbooks/disaster-recovery.md` "Restarting web"
+> (adds `--no-deps`, so db and redis, which share `env_file`, are not recreated).
 
 **Never a bare `dcp up -d web`.** `compose.prod.yml` takes the image from
 `WEB_IMAGE` (default `ghcr.io/eyedema/ttstats-web:latest`) and the Sentry

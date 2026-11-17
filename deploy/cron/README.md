@@ -36,6 +36,10 @@ timeout that has already failed deploys, and a job must not extend it.
 
    `crontab FILE` replaces the user's crontab; if `crontab.bak` had other
    entries, merge them into one file first.
+   The one other entry on the VPS today, `0 2 * * * /root/scripts/backup-db.sh`,
+   is broken (it points at `/var/www/ttstats` and writes empty files) and is
+   meant to go once `backup.sh` runs: don't merge it back
+   (`docs/runbooks/disaster-recovery.md`, "Legacy").
 
 ## Verify
 

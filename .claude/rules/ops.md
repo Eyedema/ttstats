@@ -14,6 +14,7 @@ paths:
 # Operations: health, deploys, backups (KAN-106)
 
 Why each piece is shaped as it is: `docs/decisions/kan-106-reliability.md`.
+Procedures (lost VPS, rollback, table restore, pinned restart): `docs/runbooks/disaster-recovery.md`.
 
 ## `/healthz` (KAN-109)
 
@@ -43,6 +44,9 @@ Why each piece is shaped as it is: `docs/decisions/kan-106-reliability.md`.
 - **Every compose call pins `WEB_IMAGE` and `SENTRY_RELEASE`**; never a bare
   `dcp up -d web` (falls back to `:latest`).
 - **Never run jobs from the deploy** (`jobs.md`): the SSH step has a timeout.
+- **A tagged backup precedes every migrate** once `deploy/backup/backup.env`
+  exists (`--tag pre-deploy-<sha7>`, ~1 s); its failure stops the deploy
+  with nothing changed. `DEPLOY_SKIP_BACKUP=1` only for an emergency.
 - **Migrate and collectstatic run once, before the swap** (KAN-114), with the
   new image in a one-off `compose run --entrypoint sh` while the old container
   serves; `makemigrations --check` gates it (exit 3: nothing swapped).
