@@ -14,6 +14,7 @@ paths:
 # Operations: health, deploys, backups (KAN-106)
 
 Why each piece is shaped as it is: `docs/decisions/kan-106-reliability.md`.
+Procedures (lost VPS, rollback, table restore, pinned restart): `docs/runbooks/disaster-recovery.md`.
 
 ## `/healthz` (KAN-109)
 
