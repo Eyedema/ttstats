@@ -186,6 +186,11 @@ FAKE_CURL = _fake(
     r"""
     eval "url=\${$#}"
     echo "$url" >>"$S/checkins.log"
+    prev=""
+    for a in "$@"; do
+        [ "$prev" = "--data" ] && printf '%s\n' "$a" >>"$S/checkin_bodies.log"
+        prev=$a
+    done
     fails curl && exit 22
     exit 0
     """,
@@ -747,3 +752,34 @@ class TestScriptHygiene:
 
     def test_real_env_file_is_gitignored(self):
         assert "deploy/backup/backup.env" in (REPO / ".gitignore").read_text().split()
+
+
+class TestMonitorUpsert:
+    """KAN-111: the first check-in of a run carries the monitor's config, so
+    the Sentry monitors are created and kept in step from the repo."""
+
+    def _bodies(self, env):
+        import json as _json
+        log = env.state / "checkin_bodies.log"
+        return [_json.loads(line) for line in log.read_text().splitlines()]
+
+    def test_backup_in_progress_carries_the_schedule(self, env):
+        r = env.backup()
+        assert r.returncode == 0, r.stdout + r.stderr
+        bodies = self._bodies(env)
+        config = bodies[0]["monitor_config"]
+        assert config["schedule"] == {"type": "crontab", "value": "45 2 * * *"}
+        assert config["timezone"] == "UTC"
+        assert bodies[-1] == {}
+        # Same schedule as the crontab line.
+        cron = (REPO / "deploy" / "cron" / "ttstats.cron").read_text()
+        assert "45  2  *   *   *    /root/ttstats/deploy/backup/backup.sh" in cron
+
+    def test_drill_in_progress_carries_the_monthly_schedule(self, env):
+        env.backup()
+        r = env.drill()
+        assert r.returncode == 0, r.stdout + r.stderr
+        config = self._bodies(env)[-2]["monitor_config"]
+        assert config["schedule"]["value"] == "30 4 2 * *"
+        cron = (REPO / "deploy" / "cron" / "ttstats.cron").read_text()
+        assert "30  4  2   *   *    /root/ttstats/deploy/backup/restore_drill.sh" in cron

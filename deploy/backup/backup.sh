@@ -104,6 +104,11 @@ BACKUP_KEEP_ADHOC=${BACKUP_KEEP_ADHOC:-10}
 BACKUP_PARTIAL_MAX_AGE=${BACKUP_PARTIAL_MAX_AGE:-24h}
 BACKUP_TMPDIR=${BACKUP_TMPDIR:-${TMPDIR:-/tmp}}
 SENTRY_CRON_URL_BACKUP=${SENTRY_CRON_URL_BACKUP:-}
+# Sentry cron monitor, upserted on each run's first check-in. Keep in step
+# with deploy/cron/ttstats.cron (minutes for margin and max runtime).
+MONITOR_SCHEDULE=${MONITOR_SCHEDULE:-45 2 * * *}
+MONITOR_MARGIN=${MONITOR_MARGIN:-30}
+MONITOR_MAX_RUNTIME=${MONITOR_MAX_RUNTIME:-30}
 if [ -n "${BACKUP_RCLONE_CONFIG:-}" ]; then
     export RCLONE_CONFIG=$BACKUP_RCLONE_CONFIG
 fi
@@ -145,11 +150,18 @@ ENC_NAME="$DUMP_NAME.age"
 # --------------------------------------------------------------- check-ins
 checkin() {
     # Never fails the backup: a Sentry outage must not lose a night's dump.
-    local status=$1 url=$SENTRY_CRON_URL_BACKUP sep='?'
+    local status=$1 url=$SENTRY_CRON_URL_BACKUP sep='?' body='{}'
     [ -n "$url" ] || return 0
     [ "$DRY_RUN" = 1 ] && return 0
     case "$url" in *\?*) sep='&' ;; esac
-    if curl -fsS --max-time 10 --retry 2 -o /dev/null "${url}${sep}status=${status}" 2>/dev/null; then
+    # The first check-in of a run upserts the monitor (KAN-111): its schedule
+    # lives here, next to deploy/cron/ttstats.cron, not in Sentry's UI.
+    if [ "$status" = in_progress ]; then
+        body="{\"monitor_config\": {\"schedule\": {\"type\": \"crontab\", \"value\": \"$MONITOR_SCHEDULE\"}, \"timezone\": \"UTC\", \"checkin_margin\": $MONITOR_MARGIN, \"max_runtime\": $MONITOR_MAX_RUNTIME, \"failure_issue_threshold\": 1, \"recovery_threshold\": 1}}"
+    fi
+    if curl -fsS --max-time 10 --retry 2 -o /dev/null -X POST \
+        -H 'Content-Type: application/json' --data "$body" \
+        "${url}${sep}status=${status}" 2>/dev/null; then
         log "check-in: $status"
     else
         log "WARNING: Sentry check-in '$status' failed (ignored)"

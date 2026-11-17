@@ -149,9 +149,13 @@ paste in step 3):
       set `BACKUP_REMOTE=r2:ttstats-backups/ttstats`,
       `BACKUP_AGE_RECIPIENTS` = main + drill public keys,
       `BACKUP_DRILL_IDENTITY=/root/.config/ttstats/drill.agekey`.
-- [ ] Sentry > Crons: monitors `ttstats-backup` (crontab `45 2 * * *` UTC,
-      margin 30 min, max runtime 30 min) and `ttstats-restore-drill`
-      (`30 4 2 * *` UTC); their check-in URLs into `backup.env`.
+- [ ] Sentry check-in URLs into `backup.env`: `SENTRY_CRON_URL_BACKUP` and
+      `SENTRY_CRON_URL_DRILL`, i.e.
+      `https://<ingest-host>/api/<project-id>/cron/<slug>/<public-key>/` with
+      slugs `ttstats-backup` and `ttstats-restore-drill` (host, project id and
+      key come from the project's DSN). The monitors need no clicking: each
+      run's first check-in upserts its config (schedule, UTC, margin, max
+      runtime) from the script, `MONITOR_*` in the scripts.
 - [ ] `deploy/backup/backup.sh --dry-run` -> `dry run OK`.
 - [ ] `deploy/backup/backup.sh` -> `backup OK`; `rclone ls r2:ttstats-backups/ttstats` shows it.
 - [ ] `deploy/backup/restore_drill.sh` -> `drill OK`.

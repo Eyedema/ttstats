@@ -110,8 +110,10 @@ rollout_to() {
   WEB_IMAGE="$image" SENTRY_RELEASE="$release" \
     dcp up -d --no-deps --no-recreate --scale web=$(( $(printf '%s\n' "$old" | grep -c . || true) + 1 )) web || return 1
   new=""
+  local old_flat
+  old_flat=" $(printf '%s\n' "$old" | tr '\n' ' ') "
   for id in $(dcp ps -q web); do
-    case " $(echo $old) " in *" $id "*) ;; *) new="$id" ;; esac
+    case "$old_flat" in *" $id "*) ;; *) new="$id" ;; esac
   done
   if [ -z "$new" ]; then
     log "rollout: no new container appeared"

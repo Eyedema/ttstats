@@ -315,3 +315,10 @@ class TestRollout:
         box = Box(tmp_path)
         box.run(NEW, "new222")
         assert not any("--scale" in c["argv"] for c in box.state["calls"])
+
+
+@pytest.mark.skipif(shutil.which("shellcheck") is None, reason="needs shellcheck")
+def test_shellcheck_clean():
+    """GitHub's ubuntu runners ship shellcheck, so CI runs this."""
+    result = subprocess.run(["shellcheck", str(SCRIPT)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout
